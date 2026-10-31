@@ -1,17 +1,19 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Larik.Data;
 using Larik.Models;
 using Larik.Services;
 using Microsoft.UI.Xaml;
 
 namespace Larik.ViewModels;
 
-/// <summary>Shell state: spaces (workspaces), their databases and tabs, and the active query session.</summary>
+/// <summary>Shell state: workspaces, their connections/databases and tabs, and the active session.</summary>
 public partial class StudioViewModel : ObservableObject
 {
+    private readonly CancellationTokenSource _lifetime = new();
     private int _queryCounter;
-    private int _databaseCounter = 1;
+    private IReadOnlyList<TableSchema> _schema = [];
 
     public StudioViewModel()
     {
@@ -23,7 +25,7 @@ public partial class StudioViewModel : ObservableObject
 
         Seed();
         SelectSpace(Spaces[0]);
-        ResultMessage = "Run a query with Ctrl+Enter";
+        ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
     }
 
     public ObservableCollection<SpaceViewModel> Spaces { get; } = [];
@@ -56,6 +58,9 @@ public partial class StudioViewModel : ObservableObject
     [ObservableProperty]
     public partial string ResultSummary { get; set; }
 
+    [ObservableProperty]
+    public partial bool IsBusy { get; set; }
+
     public Visibility SidebarVisibility => IsSidebarOpen ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>When the rail is hidden the caption shows its own pane toggle, so the action stays reachable.</summary>
@@ -65,14 +70,13 @@ public partial class StudioViewModel : ObservableObject
 
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 
-    /// <summary>Spaces start disconnected, so this reads Connect until the user connects the workspace.</summary>
-    public string ConnectionActionLabel => ActiveSpace?.Connection.IsConnected == true ? "Disconnect" : "Connect";
+    public IReadOnlyList<SnippetDef> Snippets =>
+        SnippetCatalog.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
 
-    public IReadOnlyList<SnippetDef> Snippets => SnippetCatalog.ForDriver(ActiveSpace?.Driver ?? "mssql");
+    /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
+    public IReadOnlyList<TableSchema> Tables => _schema;
 
-    public IReadOnlyList<TableDef> Tables => MockDatabase.Tables;
-
-    public ResultSet? LastResult { get; private set; }
+    public QueryResult? LastResult { get; private set; }
 
     public event EventHandler? ResultChanged;
 
@@ -80,6 +84,24 @@ public partial class StudioViewModel : ObservableObject
 
     [RelayCommand]
     private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
+
+    [RelayCommand]
+    private async Task ToggleConnectionAsync()
+    {
+        if (ActiveSpace is null || IsBusy)
+        {
+            return;
+        }
+
+        if (ActiveSpace.Connection.IsConnected)
+        {
+            await DisconnectSpaceAsync(ActiveSpace);
+        }
+        else
+        {
+            await ConnectSpaceAsync(ActiveSpace);
+        }
+    }
 
     [RelayCommand]
     private void NewTab()
@@ -107,70 +129,64 @@ public partial class StudioViewModel : ObservableObject
     {
         var index = Spaces.Count;
         var color = StudioColors.Palette[index % StudioColors.Palette.Length];
+        var provider = DatabaseProviderCatalog.Default;
+        var profile = new ConnectionProfile { ProviderId = provider?.Id ?? "mssql" };
+
+        foreach (var setting in provider?.Settings ?? [])
+        {
+            if (setting.DefaultValue is { } value)
+            {
+                profile.Values[setting.Key] = value;
+            }
+        }
+
         var space = new SpaceViewModel(
             Guid.NewGuid().ToString("n"),
             $"Space {index + 1}",
             color,
-            new ConnectionViewModel("mssql", "localhost", "sa", isConnected: false));
+            new ConnectionViewModel(profile.ProviderId, profile));
 
-        var database = new DatabaseViewModel($"database_{++_databaseCounter}");
-        space.Databases.Add(database);
-        space.ActiveDatabase = database;
-
-        var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", database.Name, space, string.Empty);
+        var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty);
         space.Tabs.Add(tab);
         Spaces.Add(space);
         SelectSpace(space);
-        StatusText = "New space — add databases, then wire the driver layer";
+        StatusText = "New workspace — open Connection settings to point it at a server";
     }
 
-    [RelayCommand]
-    private void NewDatabase()
+    /// <summary>Applies provider + profile from the connection dialog, then connects.</summary>
+    public async Task ApplyConnectionSettingsAsync(string providerId, ConnectionProfile profile, bool connect)
     {
         if (ActiveSpace is null)
         {
             return;
         }
 
-        var database = new DatabaseViewModel($"database_{++_databaseCounter}");
-        ActiveSpace.Databases.Add(database);
-        SelectDatabase(database);
-        StatusText = $"{database.Name} added — the space's connection will host it once the driver layer lands";
+        await ActiveSpace.Connection.ReconfigureAsync(providerId, profile);
+        _schema = [];
+        OnPropertyChanged(nameof(Tables));
+        ActiveSpace.UpdateDatabases([]);
+        OnPropertyChanged(nameof(Snippets));
+        StatusText = $"{ActiveSpace.Name} → {ActiveSpace.Connection.ProviderName}";
+
+        if (connect)
+        {
+            await ConnectSpaceAsync(ActiveSpace);
+        }
     }
 
     [RelayCommand]
-    private void ToggleConnection()
+    private async Task RunAsync()
     {
-        if (ActiveSpace is null)
+        if (ActiveTab is null || ActiveSpace is null || IsBusy)
         {
             return;
         }
 
-        var connection = ActiveSpace.Connection;
-        connection.IsConnected = !connection.IsConnected;
-        StatusText = connection.IsConnected
-            ? $"Connected to {ActiveSpace.Name} · {connection.Endpoint}"
-            : $"Disconnected from {ActiveSpace.Name}";
-        OnPropertyChanged(nameof(ConnectionActionLabel));
-    }
-
-    [RelayCommand]
-    private void Run()
-    {
-        if (ActiveTab is null)
+        if (!ActiveSpace.Connection.IsConnected)
         {
-            return;
-        }
-
-        if (ActiveSpace?.Connection.IsConnected != true)
-        {
-            LastResult = new ResultSet
-            {
-                Columns = [],
-                Rows = [],
-                Message = $"Not connected — connect to {ActiveSpace?.Name ?? "this workspace"} to run queries.",
-                IsError = true,
-            };
+            LastResult = QueryResult.Error(
+                $"Not connected — connect to {ActiveSpace.Name} to run queries.",
+                TimeSpan.Zero);
             FinishRun("Disconnected");
             return;
         }
@@ -182,18 +198,31 @@ public partial class StudioViewModel : ObservableObject
 
         if (mutates && !guarded)
         {
-            LastResult = new ResultSet
-            {
-                Columns = [],
-                Rows = [],
-                Message = "Refused: this statement modifies rows without a WHERE clause.",
-                IsError = true,
-            };
-            FinishRun();
+            LastResult = QueryResult.Error(
+                "Refused: this statement modifies rows without a WHERE clause.",
+                TimeSpan.Zero);
+            FinishRun("Error");
             return;
         }
 
-        LastResult = MockDatabase.Execute(sql);
+        IsBusy = true;
+        StatusText = "Running…";
+        try
+        {
+            LastResult = await ActiveSpace.Connection.ExecuteAsync(
+                sql,
+                ActiveSpace.ActiveDatabase?.Name,
+                _lifetime.Token);
+        }
+        catch (Exception ex)
+        {
+            LastResult = QueryResult.Error(ex.Message, TimeSpan.Zero);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
         FinishRun();
     }
 
@@ -217,10 +246,12 @@ public partial class StudioViewModel : ObservableObject
 
         ResultMessage = LastResult.Message;
         ResultSummary = LastResult is { IsError: false, Rows.Count: > 0 }
-            ? $"{LastResult.Rows.Count} rows · {LastResult.ElapsedMs} ms"
+            ? $"{LastResult.Rows.Count} rows · {LastResult.Elapsed.TotalMilliseconds:0} ms"
             : string.Empty;
 
-        StatusText = status ?? (LastResult.IsError ? "Error" : $"{LastResult.Rows.Count} rows returned");
+        StatusText = status ?? (LastResult.IsError
+            ? "Error"
+            : $"{LastResult.Rows.Count} rows returned");
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -233,7 +264,6 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveSpace = space;
         ApplyDatabase(space.LastActiveDatabase ?? space.ActiveDatabase ?? space.Databases.FirstOrDefault());
-        OnPropertyChanged(nameof(ConnectionActionLabel));
 
         Tabs.Clear();
         foreach (var item in space.Tabs)
@@ -242,10 +272,17 @@ public partial class StudioViewModel : ObservableObject
         }
 
         SelectTab(tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault());
+        OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveSpace));
+
+        if (space.Connection.IsConnected)
+        {
+            _ = RefreshSchemaAsync(space);
+        }
     }
 
-    /// <summary>Switches the database the active space queries against.</summary>
-    public void SelectDatabase(DatabaseViewModel database)
+    /// <summary>Switches the database the active space queries against and reloads its schema.</summary>
+    public async Task SelectDatabaseAsync(DatabaseViewModel database)
     {
         ApplyDatabase(database);
 
@@ -255,6 +292,11 @@ public partial class StudioViewModel : ObservableObject
         }
 
         StatusText = $"{database.Name} · {ActiveSpace?.StatusText}";
+
+        if (ActiveSpace is not null)
+        {
+            await RefreshSchemaAsync(ActiveSpace);
+        }
     }
 
     public void SelectTab(TabViewModel? tab)
@@ -319,10 +361,82 @@ public partial class StudioViewModel : ObservableObject
         CaretText = $"Ln {line}, Col {column}";
     }
 
+    private async Task ConnectSpaceAsync(SpaceViewModel space)
+    {
+        IsBusy = true;
+        StatusText = $"Connecting to {space.Name}…";
+
+        try
+        {
+            await space.Connection.ConnectAsync(_lifetime.Token);
+            var databases = await space.Connection.GetDatabasesAsync(_lifetime.Token);
+            space.UpdateDatabases(databases);
+            ApplyDatabase(space.ActiveDatabase);
+
+            if (ActiveTab is not null && space == ActiveSpace)
+            {
+                ActiveTab.Database = space.ActiveDatabase?.Name ?? string.Empty;
+            }
+
+            await RefreshSchemaAsync(space);
+            StatusText = $"Connected · {space.Connection.Endpoint} · {databases.Count} databases";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Connection failed";
+            LastResult = QueryResult.Error(ex.Message, TimeSpan.Zero);
+            ResultMessage = ex.Message;
+            ResultSummary = string.Empty;
+            ResultChanged?.Invoke(this, EventArgs.Empty);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task DisconnectSpaceAsync(SpaceViewModel space)
+    {
+        IsBusy = true;
+        try
+        {
+            await space.Connection.DisconnectAsync(_lifetime.Token);
+            space.UpdateDatabases([]);
+            _schema = [];
+            OnPropertyChanged(nameof(Tables));
+            StatusText = $"Disconnected from {space.Name}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Disconnect failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task RefreshSchemaAsync(SpaceViewModel space)
+    {
+        try
+        {
+            var schema = await space.Connection.GetSchemaAsync(space.ActiveDatabase?.Name, _lifetime.Token);
+            if (space == ActiveSpace)
+            {
+                _schema = schema;
+                OnPropertyChanged(nameof(Tables));
+            }
+        }
+        catch
+        {
+            // Completion degrades to keywords/snippets; the session itself stays usable.
+        }
+    }
+
     /// <summary>Sets the space's active database without touching the active tab.</summary>
     private void ApplyDatabase(DatabaseViewModel? database)
     {
-        if (ActiveSpace is null || database is null)
+        if (ActiveSpace is null)
         {
             return;
         }
@@ -335,53 +449,55 @@ public partial class StudioViewModel : ObservableObject
         ActiveSpace.ActiveDatabase = database;
         ActiveSpace.LastActiveDatabase = database;
 
-        // Snippets are scoped per driver, which the database decides.
+        // Snippets are scoped per dialect, which the connection decides.
         OnPropertyChanged(nameof(Snippets));
     }
 
     private void Seed()
     {
-        var prod = new SpaceViewModel(
-            "space-prod",
-            "Larik Production",
-            StudioColors.Palette[0],
-            new ConnectionViewModel("mssql", "prod-sql-01", "larik_app", isConnected: false));
-        var prodMain = new DatabaseViewModel("larik_prod");
-        prod.Databases.Add(prodMain);
-        prod.Databases.Add(new DatabaseViewModel("larik_reports"));
-        prod.Databases.Add(new DatabaseViewModel("larik_archive"));
-        prod.ActiveDatabase = prodMain;
-        prod.Tabs.Add(new TabViewModel("t1", "Revenue by month", "larik_prod", prod,
-            "SELECT\n    DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1) AS month,\n    SUM(total_amount) AS revenue\nFROM orders\nWHERE status = 'paid'\nGROUP BY DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1)\nORDER BY month DESC;"));
-        prod.Tabs.Add(new TabViewModel("t2", "Slow customers", "larik_prod", prod,
-            "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count ASC;"));
-        prod.Tabs.Add(new TabViewModel("t3", "Scratch", "larik_prod", prod, "SELECT * FROM customers;"));
-
         var staging = new SpaceViewModel(
             "space-staging",
             "Staging",
             StudioColors.Palette[2],
-            new ConnectionViewModel("postgres", "staging-pg", "larik", isConnected: false));
-        var stagingMain = new DatabaseViewModel("larik_staging");
-        staging.Databases.Add(stagingMain);
-        staging.Databases.Add(new DatabaseViewModel("larik_sandbox"));
-        staging.ActiveDatabase = stagingMain;
-        staging.Tabs.Add(new TabViewModel("t4", "Migration check", "larik_staging", staging,
-            "SELECT table_name\nFROM information_schema.tables\nWHERE table_schema = 'public';"));
+            new ConnectionViewModel("demo", DemoProfile("larik_staging,larik_sandbox")));
+        staging.Tabs.Add(new TabViewModel("t1", "Customer totals", "larik_staging", staging,
+            "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count DESC;"));
 
-        var local = new SpaceViewModel(
-            "space-local",
+        var localSql = new SpaceViewModel(
+            "space-local-sql",
+            "Local SQL Server",
+            StudioColors.Palette[0],
+            new ConnectionViewModel("mssql", SqlServerProfile()));
+        localSql.Tabs.Add(new TabViewModel("t2", "Databases", "master", localSql,
+            "SELECT name, state_desc\nFROM sys.databases\nORDER BY name;"));
+
+        var playground = new SpaceViewModel(
+            "space-playground",
             "Local playground",
             StudioColors.Palette[3],
-            new ConnectionViewModel("sqlite", "local file", "-", isConnected: false));
-        var playground = new DatabaseViewModel("playground");
-        local.Databases.Add(playground);
-        local.ActiveDatabase = playground;
-        local.Tabs.Add(new TabViewModel("t5", "Notes", "playground", local,
-            "-- Local SQLite playground\n-- Connect to start querying\nSELECT 1;"));
+            new ConnectionViewModel("demo", DemoProfile("playground")));
+        playground.Tabs.Add(new TabViewModel("t3", "Notes", "playground", playground,
+            "-- Local playground\n-- Connect the workspace, then run this\nSELECT * FROM products;"));
 
-        Spaces.Add(prod);
         Spaces.Add(staging);
-        Spaces.Add(local);
+        Spaces.Add(localSql);
+        Spaces.Add(playground);
+    }
+
+    private static ConnectionProfile DemoProfile(string databases)
+    {
+        var profile = new ConnectionProfile { ProviderId = "demo" };
+        profile.Values["databases"] = databases;
+        return profile;
+    }
+
+    private static ConnectionProfile SqlServerProfile()
+    {
+        var profile = new ConnectionProfile { ProviderId = "mssql" };
+        profile.Values["server"] = @"(localdb)\MSSQLLocalDB";
+        profile.Values["encrypt"] = "false";
+        profile.Values["trustServerCertificate"] = "true";
+        profile.Values["connectTimeout"] = "8";
+        return profile;
     }
 }

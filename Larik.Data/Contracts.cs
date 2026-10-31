@@ -1,0 +1,135 @@
+namespace Larik.Data;
+
+/// <summary>How a provider setting should be rendered when configuring a connection.</summary>
+public enum ProviderSettingKind
+{
+    Text,
+    Password,
+    Number,
+    Boolean,
+}
+
+/// <summary>
+/// A connection field declared by a provider, so the UI can render any provider's
+/// configuration without knowing about it. This is the seam that makes providers pluggable.
+/// </summary>
+public sealed class ProviderSetting
+{
+    public required string Key { get; init; }
+    public required string Label { get; init; }
+    public ProviderSettingKind Kind { get; init; } = ProviderSettingKind.Text;
+    public bool Required { get; init; }
+    public string? DefaultValue { get; init; }
+    public string? Placeholder { get; init; }
+    public string? Hint { get; init; }
+}
+
+/// <summary>The user's saved values for one connection. Passwords stay in memory only.</summary>
+public sealed class ConnectionProfile
+{
+    public required string ProviderId { get; init; }
+
+    public Dictionary<string, string> Values { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public string? Get(string key) => Values.TryGetValue(key, out var value) ? value : null;
+
+    public int GetInt(string key, int fallback) =>
+        int.TryParse(Get(key), out var value) ? value : fallback;
+
+    public bool GetBool(string key, bool fallback) =>
+        bool.TryParse(Get(key), out var value) ? value : fallback;
+
+    public ConnectionProfile Clone()
+    {
+        var clone = new ConnectionProfile { ProviderId = ProviderId };
+        foreach (var pair in Values)
+        {
+            clone.Values[pair.Key] = pair.Value;
+        }
+
+        return clone;
+    }
+}
+
+public enum ConnectionState
+{
+    Disconnected,
+    Connecting,
+    Connected,
+    Faulted,
+}
+
+public sealed class QueryColumn
+{
+    public required string Name { get; init; }
+    public string? DataType { get; init; }
+}
+
+/// <summary>One executed statement: its grid, its message, and how long it took.</summary>
+public sealed class QueryResult
+{
+    public required IReadOnlyList<QueryColumn> Columns { get; init; }
+    public required IReadOnlyList<string?[]> Rows { get; init; }
+    public int RecordsAffected { get; init; }
+    public required string Message { get; init; }
+    public bool IsError { get; init; }
+    public TimeSpan Elapsed { get; init; }
+    public string? Database { get; init; }
+
+    public static QueryResult Error(string message, TimeSpan elapsed, string? database = null) => new()
+    {
+        Columns = [],
+        Rows = [],
+        Message = message,
+        IsError = true,
+        Elapsed = elapsed,
+        Database = database,
+    };
+}
+
+/// <summary>Tables and columns, used to feed completion after a connection opens.</summary>
+public sealed class TableSchema
+{
+    public required string Name { get; init; }
+    public required IReadOnlyList<string> Columns { get; init; }
+}
+
+/// <summary>
+/// A database provider (SQL Server today, PostgreSQL or MongoDB later). Implement this in a
+/// separate assembly and drop it into the Plugins folder — no app changes required.
+/// </summary>
+public interface IDatabaseProvider
+{
+    /// <summary>Stable id stored with the connection, e.g. "mssql".</summary>
+    string Id { get; }
+
+    string DisplayName { get; }
+
+    /// <summary>Dialect id used for snippet/feature scoping ("mssql", "postgres", "mongodb").</summary>
+    string Dialect { get; }
+
+    /// <summary>Fields the configuration UI renders for this provider.</summary>
+    IReadOnlyList<ProviderSetting> Settings { get; }
+
+    IDatabaseConnection CreateConnection(ConnectionProfile profile);
+}
+
+/// <summary>One open connection. A provider owns its own client library and pooling.</summary>
+public interface IDatabaseConnection : IAsyncDisposable
+{
+    ConnectionState State { get; }
+
+    string? ServerVersion { get; }
+
+    /// <summary>Opens (or re-opens) the underlying connection. Throws when the server refuses.</summary>
+    Task OpenAsync(CancellationToken cancellationToken = default);
+
+    Task CloseAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Databases visible on this connection.</summary>
+    Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default);
+
+    Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
+}

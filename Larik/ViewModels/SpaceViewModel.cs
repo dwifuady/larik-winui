@@ -21,12 +21,14 @@ public partial class SpaceViewModel : ObservableObject
         Connection = connection;
 
         // Connection state belongs to the space, so its changes surface as space changes.
-        Connection.PropertyChanged += (_, _) =>
+        Connection.PropertyChanged += (_, args) =>
         {
+            OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(StatusText));
             OnPropertyChanged(nameof(StatusBrush));
             OnPropertyChanged(nameof(ConnectionLine));
             OnPropertyChanged(nameof(Driver));
+            OnPropertyChanged(nameof(ConnectedDatabaseText));
         };
     }
 
@@ -56,7 +58,9 @@ public partial class SpaceViewModel : ObservableObject
 
     public TabViewModel? LastActiveTab { get; set; }
 
-    public string Driver => Connection.Driver;
+    public bool IsConnected => Connection.IsConnected;
+
+    public string Driver => Connection.Dialect;
 
     public string DatabaseCountLabel => Databases.Count == 1 ? "1 database" : $"{Databases.Count} databases";
 
@@ -68,7 +72,34 @@ public partial class SpaceViewModel : ObservableObject
 
     public string ConnectionLine => Connection.StatusLine;
 
-    public string ConnectedDatabaseText => ActiveDatabase?.Name ?? "no database";
+    public string ConnectedDatabaseText => ActiveDatabase?.Name
+        ?? (Connection.IsConnected ? "no database" : "not connected");
 
     public double IsActiveDotVisible => IsActive ? 1 : 0;
+
+    /// <summary>Replaces the database list with what the server reported, keeping the selection by name.</summary>
+    public void UpdateDatabases(IEnumerable<string> names)
+    {
+        var selectedName = ActiveDatabase?.Name;
+        var incoming = names.ToList();
+
+        Databases.Clear();
+        foreach (var name in incoming)
+        {
+            Databases.Add(new DatabaseViewModel(name));
+        }
+
+        ActiveDatabase = Databases.FirstOrDefault(d => string.Equals(d.Name, selectedName, StringComparison.OrdinalIgnoreCase))
+            ?? Databases.FirstOrDefault();
+
+        if (ActiveDatabase is not null)
+        {
+            ActiveDatabase.IsActive = true;
+        }
+
+        LastActiveDatabase = ActiveDatabase;
+        OnPropertyChanged(nameof(DatabaseCountLabel));
+        OnPropertyChanged(nameof(TooltipText));
+        OnPropertyChanged(nameof(ConnectedDatabaseText));
+    }
 }

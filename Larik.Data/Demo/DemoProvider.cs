@@ -1,14 +1,39 @@
-using Larik.Models;
+using System.Diagnostics;
 
-namespace Larik.Services;
+namespace Larik.Data.Demo;
 
 /// <summary>
-/// Stand-in for the real database drivers (tiberius / tokio-postgres / rusqlite).
-/// Gives the shell believable schema + results until the ADO.NET/Npgsql layer lands.
+/// In-memory provider used by the sample workspaces and by UI tests. It is a normal provider:
+/// nothing in the app special-cases it.
 /// </summary>
-public static class MockDatabase
+public sealed class DemoProvider : IDatabaseProvider
 {
-    public static IReadOnlyList<TableDef> Tables { get; } =
+    public const string ProviderId = "demo";
+
+    public string Id => ProviderId;
+
+    public string DisplayName => "Demo (in-memory)";
+
+    public string Dialect => "mssql";
+
+    public IReadOnlyList<ProviderSetting> Settings { get; } =
+    [
+        new()
+        {
+            Key = "databases",
+            Label = "Databases",
+            DefaultValue = "larik_prod,larik_reports",
+            Placeholder = "comma,separated",
+            Hint = "Pretend databases exposed by this connection.",
+        },
+    ];
+
+    public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new DemoConnection(profile);
+}
+
+internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConnection
+{
+    private static readonly TableSchema[] Tables =
     [
         new() { Name = "customers", Columns = ["id", "full_name", "email", "country", "created_at"] },
         new() { Name = "orders", Columns = ["id", "customer_id", "total_amount", "status", "ordered_at"] },
@@ -16,17 +41,40 @@ public static class MockDatabase
         new() { Name = "products", Columns = ["id", "sku", "name", "price", "stock"] },
     ];
 
-    public static IReadOnlyList<string> Words { get; } =
-        Tables.SelectMany(t => t.Columns).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
 
-    public static ResultSet Execute(string sql)
+    public string? ServerVersion => State == ConnectionState.Connected ? "Demo 1.0" : null;
+
+    public async Task OpenAsync(CancellationToken cancellationToken = default)
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Delay(80, cancellationToken);
+        State = ConnectionState.Connected;
+    }
+
+    public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default)
+    {
+        await Task.Delay(60, cancellationToken);
+        var configured = profile.Get("databases") ?? "larik_prod";
+        return configured
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default)
+    {
+        await Task.Delay(40, cancellationToken);
+        return Tables;
+    }
+
+    public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default)
+    {
+        var stopwatch = Stopwatch.StartNew();
         var trimmed = sql.Trim();
 
         if (string.IsNullOrWhiteSpace(trimmed))
         {
-            return new ResultSet { Columns = [], Rows = [], Message = "Nothing to run — the editor is empty." };
+            stopwatch.Stop();
+            return Task.FromResult(QueryResult.Error("Nothing to run — the editor is empty.", stopwatch.Elapsed, database));
         }
 
         var tableName = FindTargetTable(trimmed);
@@ -36,27 +84,37 @@ public static class MockDatabase
 
         if (table is null)
         {
-            return new ResultSet
-            {
-                Columns = [],
-                Rows = [],
-                Message = tableName is null
+            stopwatch.Stop();
+            return Task.FromResult(QueryResult.Error(
+                tableName is null
                     ? "No table in this statement — SELECT ... FROM <table> to see rows."
                     : $"Invalid object name '{tableName}'.",
-                IsError = true,
-                ElapsedMs = stopwatch.ElapsedMilliseconds,
-            };
+                stopwatch.Elapsed,
+                database));
         }
 
-        var rows = GenerateRows(table, 24);
+        var rows = GenerateRows(table, 24).Cast<string?[]>().ToList();
         stopwatch.Stop();
-        return new ResultSet
+        return Task.FromResult(new QueryResult
         {
-            Columns = table.Columns.Select(Headerize).ToArray(),
+            Columns = table.Columns.Select(c => new QueryColumn { Name = Headerize(c) }).ToList(),
             Rows = rows,
             Message = $"{rows.Count} rows",
-            ElapsedMs = stopwatch.ElapsedMilliseconds,
-        };
+            Elapsed = stopwatch.Elapsed,
+            Database = database,
+        });
+    }
+
+    public Task CloseAsync(CancellationToken cancellationToken = default)
+    {
+        State = ConnectionState.Disconnected;
+        return Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        State = ConnectionState.Disconnected;
+        return ValueTask.CompletedTask;
     }
 
     private static string? FindTargetTable(string sql)
@@ -80,7 +138,7 @@ public static class MockDatabase
 
     private static string Headerize(string column) => column.Replace('_', ' ').ToUpperInvariant();
 
-    private static List<string[]> GenerateRows(TableDef table, int count)
+    private static List<string[]> GenerateRows(TableSchema table, int count)
     {
         string[] people = ["Ada Lovelace", "Grace Hopper", "Alan Turing", "Katherine Johnson", "Linus Torvalds", "Radia Perlman", "Barbara Liskov", "Ken Thompson"];
         string[] countries = ["ID", "SG", "US", "DE", "JP", "BR", "NL", "GB"];

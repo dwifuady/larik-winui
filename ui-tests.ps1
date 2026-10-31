@@ -105,9 +105,8 @@ try {
         Assert-True ((Invoke-Ui @('list-windows', '--json')) -join '' -match 'Larik SQL Studio') 'main window not found'
     }
 
-    Test-UI 'sidebar lists the active space tabs' {
-        Assert-True ((Find-Element 'Revenue by month').matchCount -gt 0) 'first tab is not exposed'
-        Assert-True ((Find-Element 'Scratch').matchCount -gt 0) 'third tab is not exposed'
+    Test-UI 'sidebar lists the active workspace tabs' {
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'workspace tab is not exposed'
     }
 
     Test-UI 'a workspace starts disconnected and connects on demand' {
@@ -115,15 +114,10 @@ try {
         Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'workspace did not start disconnected'
         Assert-True ((Find-Element 'Connect').matchCount -gt 0) 'no way to connect'
         Click-Element 'ConnectionToggleButton'
-        Start-Sleep -Milliseconds 800
-        Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'workspace did not connect'
+        Wait-ForText 'Connected' 15
         Assert-True ((Find-Element 'Disconnect').matchCount -gt 0) 'toggle did not offer Disconnect'
-    }
-
-    Test-UI 'switching a tab loads its query into the editor' {
-        Click-Element 'Slow customers'
-        Start-Sleep -Milliseconds 800
-        Assert-True ((Get-EditorText) -match 'orders_count') 'editor did not switch to the other tab'
+        # Databases come from the provider once the connection opens.
+        Wait-ForText 'larik_staging' 10
     }
 
     Test-UI 'typing a snippet trigger opens the suggestion popup' {
@@ -142,7 +136,7 @@ try {
         Assert-True ((Find-Element 'SQL suggestions').matchCount -eq 0) 'popup stayed open after accepting'
     }
 
-    Test-UI 'Ctrl+Enter runs the query and fills the results grid' {
+    Test-UI 'Ctrl+Enter runs the query through the provider' {
         Send-Keys 'customers;' -Literal
         Start-Sleep -Milliseconds 400
         Send-Keys 'ctrl+enter'
@@ -150,30 +144,16 @@ try {
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
     }
 
-    Test-UI 'switching spaces swaps connection, tabs and editor' {
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Staging'
-        Start-Sleep -Milliseconds 900
-        Assert-True ((Find-Element 'PostgreSQL').matchCount -gt 0) 'status bar still shows the old connection'
-        Assert-True ((Find-Element 'Migration check').matchCount -gt 0) 'staging tab missing'
-        Assert-True ((Get-EditorText) -match 'information_schema') 'staging tab content not loaded'
-    }
-
     Test-UI 'switching database updates the rail, status bar and tab' {
         Click-Element 'Select database'
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 600
         Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database list did not open'
         Click-Element 'larik_sandbox'
-        Start-Sleep -Milliseconds 800
-        # The selector row, the tab subtitle and the status line all follow the active database.
+        Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'larik_sandbox').matchCount -ge 2) 'database selection did not propagate'
     }
 
     Test-UI 'connection status belongs to the workspace, not to a database' {
-        # Staging starts disconnected; connect it so a stale 'Disconnected' can only come from a database row.
-        Click-Element 'ConnectionToggleButton'
-        Start-Sleep -Milliseconds 700
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 600
         Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database list did not open'
@@ -182,13 +162,45 @@ try {
         Start-Sleep -Milliseconds 400
     }
 
-    Test-UI 'a workspace can gain another database' {
-        Click-Element 'Select database'
+    Test-UI 'connection settings dialog renders the provider schema' {
+        Click-Element 'Switch workspace'
         Start-Sleep -Milliseconds 500
-        # State-changing click: no retries, the flyout closes as soon as it lands.
-        try { Invoke-Ui @('click', 'NewDatabaseButton') | Out-Null } catch { }
-        Start-Sleep -Milliseconds 800
-        Assert-True ((Find-Element 'database_').matchCount -gt 0) 'new database did not appear in the rail'
+        Click-Element 'Connection settings'
+        Start-Sleep -Milliseconds 1000
+        try {
+            Assert-True ((Find-Element 'Provider').matchCount -gt 0) 'provider picker missing'
+            Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'provider settings not rendered'
+            # Opening the picker proves the catalog listed every loaded provider.
+            Click-Element 'Provider'
+            Start-Sleep -Milliseconds 600
+            Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
+            Send-Keys 'esc'
+            Start-Sleep -Milliseconds 400
+        }
+        finally {
+            Click-Element 'Cancel'
+            Start-Sleep -Milliseconds 700
+        }
+    }
+
+    Test-UI 'switching workspaces swaps connection, tabs and editor' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Local SQL Server'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'status bar still shows the old provider'
+        Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'mssql tab missing'
+        Assert-True ((Get-EditorText) -match 'sys.databases') 'tab content not loaded'
+        Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'new workspace did not start disconnected'
+    }
+
+    Test-UI 'SQL Server provider connects, lists databases and returns rows' {
+        Click-Element 'ConnectionToggleButton'
+        Wait-ForText 'master' 30
+        Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'SQL Server did not report Connected'
+        Click-Element 'RunButton'
+        Wait-ForText 'tempdb' 30
+        Assert-True ((Find-Element 'rows returned').matchCount -gt 0) 'query did not report rows'
     }
 
     Test-UI 'Ctrl+B collapses and restores the sidebar' {

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Larik.Data.SqlServer/Larik.Data.SqlServer.csproj" />
+  <Project Path="Larik.Data/Larik.Data.csproj" />
+  <Project Path="Larik/Larik.csproj" />
+</Solution>

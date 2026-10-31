@@ -1,4 +1,5 @@
 using System.Text;
+using Larik.Data;
 using Larik.Models;
 
 namespace Larik.Services;
@@ -60,7 +61,7 @@ public static class CompletionEngine
         string word,
         string? qualifier,
         IReadOnlyList<SnippetDef> snippets,
-        IReadOnlyList<TableDef> tables,
+        IReadOnlyList<TableSchema> tables,
         string clipboard,
         int max = 8)
     {

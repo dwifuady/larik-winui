@@ -21,8 +21,8 @@ public sealed class SnippetDef
     public string? Description { get; init; }
     public string? Category { get; init; }
 
-    /// <summary>Null means every SQL dialect.</summary>
-    public string[]? Drivers { get; init; }
+    /// <summary>Null means every dialect.</summary>
+    public string[]? Dialects { get; init; }
 }
 
 /// <summary>One row in the completion popup.</summary>
@@ -66,19 +66,4 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Column => 2,
         _ => 3,
     };
-}
-
-public sealed class TableDef
-{
-    public required string Name { get; init; }
-    public required string[] Columns { get; init; }
-}
-
-public sealed class ResultSet
-{
-    public required string[] Columns { get; init; }
-    public required IReadOnlyList<string[]> Rows { get; init; }
-    public required string Message { get; init; }
-    public long ElapsedMs { get; init; }
-    public bool IsError { get; init; }
 }

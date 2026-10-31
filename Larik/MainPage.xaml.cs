@@ -1,3 +1,4 @@
+using Larik.Data;
 using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
@@ -5,6 +6,8 @@ using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -401,20 +404,29 @@ public sealed partial class MainPage : Page
     {
         var flyout = new MenuFlyout();
 
-        // The connection belongs to the active workspace, so its action lives with the workspace menu.
+        // The connection belongs to the active workspace, so its actions live with the workspace menu.
         var toggle = new MenuFlyoutItem
         {
-            Text = ViewModel.ConnectionActionLabel,
+            Text = ViewModel.ActiveSpace?.Connection.ConnectionActionLabel ?? "Connect",
             Command = ViewModel.ToggleConnectionCommand,
         };
         flyout.Items.Add(toggle);
+
+        var settings = new MenuFlyoutItem
+        {
+            Text = "Connection settings…",
+            Icon = new FontIcon { Glyph = "\uE713" },
+        };
+        settings.Click += async (_, _) => await ShowConnectionDialogAsync();
+        flyout.Items.Add(settings);
+
         flyout.Items.Add(new MenuFlyoutSeparator());
 
         foreach (var space in ViewModel.Spaces)
         {
             var item = new RadioMenuFlyoutItem
             {
-                Text = $"{space.Name} ({space.DatabaseCountLabel})",
+                Text = $"{space.Name} ({space.Connection.ProviderName})",
                 GroupName = "workspace",
                 IsChecked = space.IsActive,
             };
@@ -436,21 +448,232 @@ public sealed partial class MainPage : Page
         flyout.ShowAt(SpaceSwitcherButton, new Point(0, 40));
     }
 
-    private void DatabaseList_ItemClick(object sender, ItemClickEventArgs e)
+    private async void DatabaseList_ItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is not DatabaseViewModel database)
         {
             return;
         }
 
-        ViewModel.SelectDatabase(database);
+        await ViewModel.SelectDatabaseAsync(database);
         DatabaseSelectorButton.Flyout?.Hide();
     }
 
-    private void NewDatabase_Click(object sender, RoutedEventArgs e)
+    private async void ConnectionSettings_Click(object sender, RoutedEventArgs e)
     {
-        ViewModel.NewDatabaseCommand.Execute(null);
         DatabaseSelectorButton.Flyout?.Hide();
+        await ShowConnectionDialogAsync();
+    }
+
+    // ---------------------------------------------------------------- connection settings
+
+    /// <summary>
+    /// Renders whatever fields the selected provider declares, so adding a provider needs no
+    /// dialog changes: the schema comes from <see cref="IDatabaseProvider.Settings"/>.
+    /// </summary>
+    private async Task ShowConnectionDialogAsync()
+    {
+        if (ViewModel.ActiveSpace is null)
+        {
+            return;
+        }
+
+        var space = ViewModel.ActiveSpace;
+        var connection = space.Connection;
+        var providers = DatabaseProviderCatalog.Providers;
+        if (providers.Count == 0)
+        {
+            return;
+        }
+
+        var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var dangerBrush = StudioColors.Danger;
+        var successBrush = StudioColors.Success;
+
+        var providerBox = new ComboBox
+        {
+            ItemsSource = providers.Select(p => p.DisplayName).ToList(),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        AutomationProperties.SetName(providerBox, "Provider");
+
+        var current = providers.FirstOrDefault(p => p.Id == connection.ProviderId) ?? providers[0];
+        providerBox.SelectedIndex = providers.ToList().IndexOf(current);
+
+        var fields = new StackPanel { Spacing = 10 };
+        var inputs = new Dictionary<string, FrameworkElement>(StringComparer.OrdinalIgnoreCase);
+        var status = new TextBlock
+        {
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = mutedBrush,
+        };
+
+        IDatabaseProvider SelectedProvider() => providers[Math.Max(0, providerBox.SelectedIndex)];
+
+        void RebuildFields()
+        {
+            fields.Children.Clear();
+            inputs.Clear();
+
+            foreach (var setting in SelectedProvider().Settings)
+            {
+                var value = connection.Profile.Get(setting.Key)
+                    ?? setting.DefaultValue
+                    ?? (setting.Kind == ProviderSettingKind.Boolean ? "false" : string.Empty);
+
+                FrameworkElement input = setting.Kind switch
+                {
+                    ProviderSettingKind.Password => new PasswordBox { Password = value },
+                    ProviderSettingKind.Boolean => new ToggleSwitch
+                    {
+                        IsOn = bool.TryParse(value, out var on) && on,
+                        OnContent = "On",
+                        OffContent = "Off",
+                    },
+                    ProviderSettingKind.Number => new NumberBox
+                    {
+                        Value = double.TryParse(value, out var number) ? number : double.NaN,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden,
+                    },
+                    _ => new TextBox { Text = value, PlaceholderText = setting.Placeholder ?? string.Empty },
+                };
+
+                AutomationProperties.SetName(input, setting.Label);
+                inputs[setting.Key] = input;
+
+                var label = new TextBlock { Text = setting.Label, FontSize = 11 };
+                var group = new StackPanel { Spacing = 4 };
+                group.Children.Add(label);
+                group.Children.Add(input);
+
+                if (setting.Hint is { Length: > 0 } hint)
+                {
+                    group.Children.Add(new TextBlock
+                    {
+                        Text = hint,
+                        FontSize = 10,
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = mutedBrush,
+                    });
+                }
+
+                fields.Children.Add(group);
+            }
+        }
+
+        string ReadValue(ProviderSetting setting) => inputs[setting.Key] switch
+        {
+            PasswordBox password => password.Password,
+            ToggleSwitch toggle => toggle.IsOn ? "true" : "false",
+            NumberBox number => double.IsNaN(number.Value) ? string.Empty : number.Value.ToString("0"),
+            TextBox text => text.Text,
+            _ => string.Empty,
+        };
+
+        ConnectionProfile BuildProfile()
+        {
+            var provider = SelectedProvider();
+            var profile = new ConnectionProfile { ProviderId = provider.Id };
+            foreach (var setting in provider.Settings)
+            {
+                profile.Values[setting.Key] = ReadValue(setting);
+            }
+
+            return profile;
+        }
+
+        var content = new StackPanel { Spacing = 12, MinWidth = 360 };
+        content.Children.Add(new TextBlock { Text = "Provider", FontSize = 11 });
+        content.Children.Add(providerBox);
+        content.Children.Add(fields);
+        content.Children.Add(status);
+
+        if (DatabaseProviderCatalog.LoadErrors.Count > 0)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "Provider load problems: " + string.Join("; ", DatabaseProviderCatalog.LoadErrors),
+                FontSize = 10,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = dangerBrush,
+            });
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "Connection",
+            XamlRoot = XamlRoot,
+            Content = content,
+            DefaultButton = ContentDialogButton.Primary,
+            PrimaryButtonText = "Save & connect",
+            SecondaryButtonText = "Test",
+            CloseButtonText = "Cancel",
+        };
+
+        providerBox.SelectionChanged += (_, _) =>
+        {
+            status.Text = string.Empty;
+            RebuildFields();
+        };
+
+        dialog.SecondaryButtonClick += async (_, args) =>
+        {
+            args.Cancel = true;
+            status.Foreground = mutedBrush;
+            status.Text = "Testing…";
+
+            IDatabaseConnection? probe = null;
+            try
+            {
+                probe = SelectedProvider().CreateConnection(BuildProfile());
+                await probe.OpenAsync();
+                var databases = await probe.GetDatabasesAsync();
+                status.Foreground = successBrush;
+                status.Text = $"Connected · {databases.Count} databases";
+            }
+            catch (Exception ex)
+            {
+                status.Foreground = dangerBrush;
+                status.Text = ex.Message;
+            }
+            finally
+            {
+                if (probe is not null)
+                {
+                    await probe.DisposeAsync();
+                }
+            }
+        };
+
+        dialog.PrimaryButtonClick += async (_, args) =>
+        {
+            var provider = SelectedProvider();
+            var missing = provider.Settings
+                .Where(s => s.Required)
+                .FirstOrDefault(s => string.IsNullOrWhiteSpace(ReadValue(s)));
+
+            if (missing is not null)
+            {
+                args.Cancel = true;
+                status.Foreground = dangerBrush;
+                status.Text = $"{missing.Label} is required.";
+                return;
+            }
+
+            var deferral = args.GetDeferral();
+            try
+            {
+                await ViewModel.ApplyConnectionSettingsAsync(provider.Id, BuildProfile(), connect: true);
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        };
+
+        RebuildFields();
+        await dialog.ShowAsync();
     }
 
     // ---------------------------------------------------------------- splitter
@@ -503,7 +726,7 @@ public sealed partial class MainPage : Page
             return;
         }
 
-        if (result.Columns.Length == 0 || result.Rows.Count == 0)
+        if (result.Columns.Count == 0 || result.Rows.Count == 0)
         {
             ResultsHost.Children.Add(new TextBlock
             {
@@ -522,9 +745,9 @@ public sealed partial class MainPage : Page
         var primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
 
         var columns = result.Columns;
-        for (var c = 0; c < columns.Length; c++)
+        for (var c = 0; c < columns.Count; c++)
         {
-            var numeric = result.Rows.All(r => double.TryParse(r[c], out _));
+            var numeric = result.Rows.All(r => IsNumeric(r[c]));
             ResultsHost.ColumnDefinitions.Add(new ColumnDefinition
             {
                 Width = new GridLength(c == 0 ? 72 : 176),
@@ -535,7 +758,7 @@ public sealed partial class MainPage : Page
 
             var header = new TextBlock
             {
-                Text = columns[c],
+                Text = columns[c].Name,
                 FontSize = 10,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 CharacterSpacing = 80,
@@ -554,16 +777,18 @@ public sealed partial class MainPage : Page
         {
             ResultsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            for (var c = 0; c < columns.Length; c++)
+            for (var c = 0; c < columns.Count; c++)
             {
-                var numeric = columns.Length > 0 && result.Rows.All(row => double.TryParse(row[c], out _));
+                var numeric = columns.Count > 0 && result.Rows.All(row => IsNumeric(row[c]));
                 var cell = new TextBlock
                 {
-                    Text = result.Rows[r][c],
+                    Text = result.Rows[r][c] ?? "NULL",
                     FontFamily = (FontFamily)Application.Current.Resources["StudioMonoFont"],
                     FontSize = 12,
                     Padding = new Thickness(12, 5, 12, 5),
-                    Foreground = c == 0 ? secondaryBrush : primaryBrush,
+                    Foreground = result.Rows[r][c] is null
+                        ? mutedBrush
+                        : c == 0 ? secondaryBrush : primaryBrush,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     HorizontalAlignment = numeric ? HorizontalAlignment.Right : HorizontalAlignment.Left,
                 };
@@ -583,10 +808,13 @@ public sealed partial class MainPage : Page
             VerticalAlignment = VerticalAlignment.Bottom,
         };
         Grid.SetColumn(rule, 0);
-        Grid.SetColumnSpan(rule, columns.Length);
+        Grid.SetColumnSpan(rule, columns.Count);
         Grid.SetRow(rule, 0);
         ResultsHost.Children.Add(rule);
     }
+
+    private static bool IsNumeric(string? value) =>
+        value is not null && double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _);
 
     // ---------------------------------------------------------------- accelerators
 

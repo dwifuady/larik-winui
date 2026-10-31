@@ -1,24 +1,29 @@
-# Larik — WinUI 3 port (UI vertical slice)
+# Larik — WinUI 3 port
 
-A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app.
-This first slice is about the part of the product the web stack gives away for free and WinUI does not:
+A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app,
+now talking to **real databases through pluggable providers**:
 **Arc-style vertical tabs, workspaces that group databases, and snippet completion that expands on Tab.**
 
 ```
 C:\dev\larik-winui\
-├── Larik/                  # WinUI 3 app (C#, net10.0-windows10.0.26100.0, WinUI 3 / WASDK 2.6)
+├── Larik.slnx                    # solution (app + provider assemblies)
+├── Larik.Data/                   # provider contracts + catalog + Demo provider (net10.0)
+│   ├── Contracts.cs              # IDatabaseProvider, IDatabaseConnection, QueryResult, settings schema
+│   ├── DatabaseProviderCatalog.cs# discovers providers from assemblies + Plugins folders
+│   └── Demo/DemoProvider.cs      # in-memory provider (sample workspaces + UI tests)
+├── Larik.Data.SqlServer/         # SQL Server provider on Microsoft.Data.SqlClient
+├── Larik/                        # WinUI 3 app (net10.0-windows10.0.26100.0, WASDK 2.6)
 │   ├── Themes/StudioTheme.xaml   # DESIGN.md tokens as Light/Dark/HighContrast brushes
-│   ├── Models/StudioModels.cs    # Snippet, CompletionItem, TableDef, ResultSet
+│   ├── Models/StudioModels.cs    # Snippet, CompletionItem
 │   ├── Services/
 │   │   ├── SnippetCatalog.cs     # built-in snippets ported 1:1 from src-tauri/src/storage/snippets.rs
 │   │   ├── CompletionEngine.cs   # trigger matching, ${cursor}/${1:placeholder} expansion, alias.column
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
-│   │   ├── MockDatabase.cs       # stand-in for tiberius/postgres/rusqlite
 │   │   └── StudioColors.cs       # space palette + active-tab tint
-│   ├── ViewModels/               # Studio / Space / Database / Tab (CommunityToolkit.Mvvm, partial properties)
+│   ├── ViewModels/               # Studio / Space / Connection / Database / Tab
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
-│   └── MainPage.xaml(.cs)        # shell layout + caret-anchored completion popup + results grid
-└── ui-tests.ps1            # runnable UI Automation checks for the flows above
+│   └── MainPage.xaml(.cs)        # shell, caret-anchored completion popup, results grid, connection dialog
+└── ui-tests.ps1                  # UI Automation checks (incl. a real SQL Server round trip)
 ```
 
 ## Run
@@ -36,10 +41,42 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 ```
 
 The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
-Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs and fills the grid,
-workspace switching swaps databases + tabs + editor, a workspace starts disconnected until the
-status-bar action connects it, the database picker repoints the rail, status bar and tab subtitle, adding a database works, Ctrl+B collapses/restores the sidebar, and a
-`DELETE`/`UPDATE` without `WHERE` is refused.
+Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
+workspace switching swaps connection + tabs + editor, a workspace starts disconnected until the
+status-bar action connects it, the database picker repoints the rail/status bar/tab subtitle, the
+connection dialog renders the provider's declared fields, and a real **SQL Server** workspace is
+connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
+or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
+
+## Providers: adding a database
+
+A provider is any assembly that implements `Larik.Data.IDatabaseProvider`:
+
+```csharp
+public sealed class PostgresProvider : IDatabaseProvider
+{
+    public string Id => "postgres";                    // stored with the connection
+    public string DisplayName => "PostgreSQL";
+    public string Dialect => "postgres";               // scopes snippets/features
+    public IReadOnlyList<ProviderSetting> Settings => [/* host, port, user, password… */];
+    public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new PgConnection(profile);
+}
+```
+
+The app never references a specific provider. `DatabaseProviderCatalog` finds implementations in
+the app's referenced provider assemblies plus every DLL dropped into:
+
+- `<app dir>\Plugins`
+- `%LOCALAPPDATA%\Larik\Plugins` (where user-installed plugins belong; the MSIX install folder is read-only)
+
+The connection dialog builds its form from `ProviderSetting` (text/password/number/boolean), so a
+new provider gets a working configuration UI with no app changes. Providers are trusted code:
+only drop DLLs you have built or reviewed. Load failures are reported in the dialog instead of
+crashing the app.
+
+Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
+`sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
+`Larik.Data.Demo` (in-memory, used by the sample workspaces).
 
 ## What works in this slice
 
@@ -50,9 +87,12 @@ status-bar action connects it, the database picker repoints the rail, status bar
   chip shows the workspace name and its connection state (dot **and** `Connected`/`Disconnected`) —
   **spaces start disconnected**. Connect from the chip's status bar action or the workspace menu;
   running a query while disconnected is refused with an explicit message. The row beneath the strip
-  is a database picker for the active connection (names only, check on the active one). Switching
-  database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle and the
-  snippet dialect; each space remembers its last database.
+  is a database picker for the active connection, filled from the provider once connected. Switching
+  database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle, the
+  snippet dialect and the completion schema.
+- **Real execution**: connect opens the provider connection, `Run`/Ctrl+Enter executes there and the
+  grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
+  the provider with timing.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect`; Up/Down to move, **Tab or Enter accepts**, Esc dismisses. Expansion
   honours `${cursor}`, `${1:placeholder}` (left selected), repeat markers, and `alias.` column
@@ -71,8 +111,9 @@ status-bar action connects it, the database picker repoints the rail, status bar
 | Gap | Why / next step |
 |---|---|
 | **No syntax highlighting** | `RichEditBox` is plain text here. Next: format ranges on a debounce (`ITextCharacterFormat`), or host Monaco in WebView2 and keep the native shell. |
-| No persistence | Spaces, databases and tabs are seeded in `StudioViewModel.Seed()`. Next: SQLite (`Microsoft.Data.Sqlite`) with the same shape as `src-tauri/src/storage`. |
-| Mock connections | `MockDatabase` returns deterministic rows and ignores which database is selected. Next: `Microsoft.Data.SqlClient` / `Npgsql` behind a `IDatabaseDriver` opened once per space connection, with the active database passed as the initial catalog. |
+| No persistence | Workspaces, connections and tabs are seeded in `StudioViewModel.Seed()`; edited profiles and passwords live in memory only. Next: SQLite with DPAPI-protected secrets, same shape as `src-tauri/src/storage`. |
+| Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
+| No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Results grid not virtualized | Fine for a slice; for large result sets move to `ItemsRepeater` with a shared row template. |
 | No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |

@@ -38,7 +38,7 @@
     package has not yet been restored.
   -->
   <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
-    <ProjectCapability Include="Msix"/>
+    <ProjectCapability Include="Msix" />
   </ItemGroup>
 
   <!--
@@ -54,6 +54,10 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="*" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Larik.Data\Larik.Data.csproj" />
+    <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
   </ItemGroup>
 
   <!--

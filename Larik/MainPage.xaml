@@ -125,6 +125,7 @@
                     Margin="8,0,8,4"
                     Padding="8,7"
                     AutomationProperties.Name="Select database"
+                    IsEnabled="{x:Bind ViewModel.ActiveSpace.IsConnected, Mode=OneWay}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch"
                     Style="{StaticResource StudioIconButtonStyle}"
@@ -182,17 +183,17 @@
                                 </ListView>
 
                                 <Button
-                                    x:Name="NewDatabaseButton"
+                                    x:Name="ConnectionSettingsButton"
                                     Margin="0,2,0,0"
                                     Padding="10,7"
                                     HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Left"
-                                    AutomationProperties.Name="New database"
-                                    Click="NewDatabase_Click"
+                                    AutomationProperties.Name="Connection settings"
+                                    Click="ConnectionSettings_Click"
                                     Style="{StaticResource StudioIconButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <FontIcon FontSize="11" Glyph="&#xE710;" />
-                                        <TextBlock FontSize="12" Text="New database" />
+                                        <FontIcon FontSize="11" Glyph="&#xE713;" />
+                                        <TextBlock FontSize="12" Text="Connection settings…" />
                                     </StackPanel>
                                 </Button>
                             </StackPanel>
@@ -556,7 +557,7 @@
                     <Button
                         x:Name="ConnectionToggleButton"
                         Padding="8,1"
-                        AutomationProperties.Name="{x:Bind ViewModel.ConnectionActionLabel, Mode=OneWay}"
+                        AutomationProperties.Name="{x:Bind ViewModel.ActiveSpace.Connection.ConnectionActionLabel, Mode=OneWay}"
                         Command="{x:Bind ViewModel.ToggleConnectionCommand}"
                         Style="{StaticResource StudioIconButtonStyle}"
                         ToolTipService.ToolTip="Connect or disconnect this workspace">
@@ -564,7 +565,7 @@
                             FontSize="10"
                             FontWeight="SemiBold"
                             Foreground="{ThemeResource StudioAccentBrush}"
-                            Text="{x:Bind ViewModel.ConnectionActionLabel, Mode=OneWay}" />
+                            Text="{x:Bind ViewModel.ActiveSpace.Connection.ConnectionActionLabel, Mode=OneWay}" />
                     </Button>
                 </StackPanel>
 
