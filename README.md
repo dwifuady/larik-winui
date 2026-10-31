@@ -37,8 +37,8 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 
 The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs and fills the grid,
-workspace switching swaps databases + tabs + editor, the database picker repoints the rail, status
-bar and tab subtitle, adding a database works, Ctrl+B collapses/restores the sidebar, and a
+workspace switching swaps databases + tabs + editor, a workspace starts disconnected until the
+status-bar action connects it, the database picker repoints the rail, status bar and tab subtitle, adding a database works, Ctrl+B collapses/restores the sidebar, and a
 `DELETE`/`UPDATE` without `WHERE` is refused.
 
 ## What works in this slice
@@ -46,10 +46,11 @@ bar and tab subtitle, adding a database works, Ctrl+B collapses/restores the sid
 - **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
   database subtitle revealed on hover/active, close button, Ctrl+T for a new query.
 - **Workspaces, connections and databases**: one space owns exactly one connection; that
-  connection exposes several databases. The rail's top strip carries the workspace switcher
-  (colour dot, name, menu of workspaces with their database counts), and the row beneath it is a
-  database picker for the active connection. Connection status (dot **and** text) is shown once per
-  space — in the picker row, the toolbar badge and the status bar — never per database. Switching
+  connection exposes several databases. The rail's top strip carries the workspace switcher, whose
+  chip shows the workspace name and its connection state (dot **and** `Connected`/`Disconnected`) —
+  **spaces start disconnected**. Connect from the chip's status bar action or the workspace menu;
+  running a query while disconnected is refused with an explicit message. The row beneath the strip
+  is a database picker for the active connection (names only, check on the active one). Switching
   database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle and the
   snippet dialect; each space remembers its last database.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via

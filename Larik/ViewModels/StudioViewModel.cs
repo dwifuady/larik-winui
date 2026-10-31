@@ -65,6 +65,9 @@ public partial class StudioViewModel : ObservableObject
 
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 
+    /// <summary>Spaces start disconnected, so this reads Connect until the user connects the workspace.</summary>
+    public string ConnectionActionLabel => ActiveSpace?.Connection.IsConnected == true ? "Disconnect" : "Connect";
+
     public IReadOnlyList<SnippetDef> Snippets => SnippetCatalog.ForDriver(ActiveSpace?.Driver ?? "mssql");
 
     public IReadOnlyList<TableDef> Tables => MockDatabase.Tables;
@@ -136,10 +139,39 @@ public partial class StudioViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ToggleConnection()
+    {
+        if (ActiveSpace is null)
+        {
+            return;
+        }
+
+        var connection = ActiveSpace.Connection;
+        connection.IsConnected = !connection.IsConnected;
+        StatusText = connection.IsConnected
+            ? $"Connected to {ActiveSpace.Name} · {connection.Endpoint}"
+            : $"Disconnected from {ActiveSpace.Name}";
+        OnPropertyChanged(nameof(ConnectionActionLabel));
+    }
+
+    [RelayCommand]
     private void Run()
     {
         if (ActiveTab is null)
         {
+            return;
+        }
+
+        if (ActiveSpace?.Connection.IsConnected != true)
+        {
+            LastResult = new ResultSet
+            {
+                Columns = [],
+                Rows = [],
+                Message = $"Not connected — connect to {ActiveSpace?.Name ?? "this workspace"} to run queries.",
+                IsError = true,
+            };
+            FinishRun("Disconnected");
             return;
         }
 
@@ -176,7 +208,7 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    private void FinishRun()
+    private void FinishRun(string? status = null)
     {
         if (LastResult is null)
         {
@@ -188,7 +220,7 @@ public partial class StudioViewModel : ObservableObject
             ? $"{LastResult.Rows.Count} rows · {LastResult.ElapsedMs} ms"
             : string.Empty;
 
-        StatusText = LastResult.IsError ? "Error" : $"{LastResult.Rows.Count} rows returned";
+        StatusText = status ?? (LastResult.IsError ? "Error" : $"{LastResult.Rows.Count} rows returned");
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -201,6 +233,7 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveSpace = space;
         ApplyDatabase(space.LastActiveDatabase ?? space.ActiveDatabase ?? space.Databases.FirstOrDefault());
+        OnPropertyChanged(nameof(ConnectionActionLabel));
 
         Tabs.Clear();
         foreach (var item in space.Tabs)
@@ -312,7 +345,7 @@ public partial class StudioViewModel : ObservableObject
             "space-prod",
             "Larik Production",
             StudioColors.Palette[0],
-            new ConnectionViewModel("mssql", "prod-sql-01", "larik_app", isConnected: true));
+            new ConnectionViewModel("mssql", "prod-sql-01", "larik_app", isConnected: false));
         var prodMain = new DatabaseViewModel("larik_prod");
         prod.Databases.Add(prodMain);
         prod.Databases.Add(new DatabaseViewModel("larik_reports"));
@@ -328,7 +361,7 @@ public partial class StudioViewModel : ObservableObject
             "space-staging",
             "Staging",
             StudioColors.Palette[2],
-            new ConnectionViewModel("postgres", "staging-pg", "larik", isConnected: true));
+            new ConnectionViewModel("postgres", "staging-pg", "larik", isConnected: false));
         var stagingMain = new DatabaseViewModel("larik_staging");
         staging.Databases.Add(stagingMain);
         staging.Databases.Add(new DatabaseViewModel("larik_sandbox"));

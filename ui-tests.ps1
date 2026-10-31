@@ -110,6 +110,16 @@ try {
         Assert-True ((Find-Element 'Scratch').matchCount -gt 0) 'third tab is not exposed'
     }
 
+    Test-UI 'a workspace starts disconnected and connects on demand' {
+        # Fresh start: the connection belongs to the workspace and is off until asked for.
+        Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'workspace did not start disconnected'
+        Assert-True ((Find-Element 'Connect').matchCount -gt 0) 'no way to connect'
+        Click-Element 'ConnectionToggleButton'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'workspace did not connect'
+        Assert-True ((Find-Element 'Disconnect').matchCount -gt 0) 'toggle did not offer Disconnect'
+    }
+
     Test-UI 'switching a tab loads its query into the editor' {
         Click-Element 'Slow customers'
         Start-Sleep -Milliseconds 800
@@ -161,10 +171,12 @@ try {
     }
 
     Test-UI 'connection status belongs to the workspace, not to a database' {
+        # Staging starts disconnected; connect it so a stale 'Disconnected' can only come from a database row.
+        Click-Element 'ConnectionToggleButton'
+        Start-Sleep -Milliseconds 700
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 600
         Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database list did not open'
-        # Staging's connection is connected, so no database row may claim it is disconnected.
         Assert-True ((Find-Element 'Disconnected').matchCount -eq 0) 'a database carried its own connection status'
         Send-Keys 'esc'
         Start-Sleep -Milliseconds 400

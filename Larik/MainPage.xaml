@@ -63,7 +63,7 @@
                     <Button
                         x:Name="SpaceSwitcherButton"
                         Grid.Column="1"
-                        Height="32"
+                        Height="38"
                         Padding="8,0"
                         VerticalAlignment="Center"
                         AutomationProperties.Name="Switch workspace"
@@ -84,14 +84,29 @@
                                 VerticalAlignment="Center"
                                 Fill="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}" />
 
-                            <TextBlock
+                            <!--  Name and the workspace's connection state  -->
+                            <StackPanel
                                 Grid.Column="1"
                                 VerticalAlignment="Center"
-                                FontSize="12"
-                                FontWeight="SemiBold"
-                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.Name, Mode=OneWay}"
-                                TextTrimming="CharacterEllipsis" />
+                                Spacing="-1">
+                                <TextBlock
+                                    FontSize="12"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                    Text="{x:Bind ViewModel.ActiveSpace.Name, Mode=OneWay}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <Ellipse
+                                        Width="5"
+                                        Height="5"
+                                        VerticalAlignment="Center"
+                                        Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
+                                    <TextBlock
+                                        FontSize="9"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="{x:Bind ViewModel.ActiveSpace.StatusText, Mode=OneWay}" />
+                                </StackPanel>
+                            </StackPanel>
 
                             <FontIcon
                                 Grid.Column="2"
@@ -203,26 +218,14 @@
                                 Text="DB" />
                         </Border>
 
-                        <StackPanel Grid.Column="1" Spacing="1">
-                            <TextBlock
-                                FontSize="12"
-                                FontWeight="SemiBold"
-                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.ConnectedDatabaseText, Mode=OneWay}"
-                                TextTrimming="CharacterEllipsis" />
-                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                <Ellipse
-                                    Width="5"
-                                    Height="5"
-                                    VerticalAlignment="Center"
-                                    Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
-                                <TextBlock
-                                    FontSize="10"
-                                    Foreground="{ThemeResource StudioTextMutedBrush}"
-                                    Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
-                                    TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                        </StackPanel>
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            Text="{x:Bind ViewModel.ActiveSpace.ConnectedDatabaseText, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
 
                         <FontIcon
                             Grid.Column="2"
@@ -550,6 +553,19 @@
                         FontSize="10"
                         Foreground="{ThemeResource StudioTextSecondaryBrush}"
                         Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}" />
+                    <Button
+                        x:Name="ConnectionToggleButton"
+                        Padding="8,1"
+                        AutomationProperties.Name="{x:Bind ViewModel.ConnectionActionLabel, Mode=OneWay}"
+                        Command="{x:Bind ViewModel.ToggleConnectionCommand}"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Connect or disconnect this workspace">
+                        <TextBlock
+                            FontSize="10"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioAccentBrush}"
+                            Text="{x:Bind ViewModel.ConnectionActionLabel, Mode=OneWay}" />
+                    </Button>
                 </StackPanel>
 
                 <StackPanel

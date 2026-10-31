@@ -401,6 +401,15 @@ public sealed partial class MainPage : Page
     {
         var flyout = new MenuFlyout();
 
+        // The connection belongs to the active workspace, so its action lives with the workspace menu.
+        var toggle = new MenuFlyoutItem
+        {
+            Text = ViewModel.ConnectionActionLabel,
+            Command = ViewModel.ToggleConnectionCommand,
+        };
+        flyout.Items.Add(toggle);
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
         foreach (var space in ViewModel.Spaces)
         {
             var item = new RadioMenuFlyoutItem
@@ -424,7 +433,7 @@ public sealed partial class MainPage : Page
         newSpace.Click += (_, _) => ViewModel.NewSpaceCommand.Execute(null);
         flyout.Items.Add(newSpace);
 
-        flyout.ShowAt(SpaceSwitcherButton, new Point(0, 34));
+        flyout.ShowAt(SpaceSwitcherButton, new Point(0, 40));
     }
 
     private void DatabaseList_ItemClick(object sender, ItemClickEventArgs e)
