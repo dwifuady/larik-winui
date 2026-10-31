@@ -7,10 +7,11 @@ using Microsoft.UI.Xaml;
 
 namespace Larik.ViewModels;
 
-/// <summary>Shell state: spaces, their tabs, and the active query session.</summary>
+/// <summary>Shell state: spaces (workspaces), their databases and tabs, and the active query session.</summary>
 public partial class StudioViewModel : ObservableObject
 {
     private int _queryCounter;
+    private int _databaseCounter = 1;
 
     public StudioViewModel()
     {
@@ -88,7 +89,7 @@ public partial class StudioViewModel : ObservableObject
         var tab = new TabViewModel(
             Guid.NewGuid().ToString("n"),
             $"Query {++_queryCounter}",
-            ActiveSpace.Database,
+            ActiveSpace.ActiveDatabase?.Name ?? string.Empty,
             ActiveSpace,
             string.Empty);
 
@@ -103,21 +104,37 @@ public partial class StudioViewModel : ObservableObject
     {
         var index = Spaces.Count;
         var color = StudioColors.Palette[index % StudioColors.Palette.Length];
-        var space = new SpaceViewModel(
-            Guid.NewGuid().ToString("n"),
-            $"Space {index + 1}",
-            color,
-            "mssql",
-            "localhost",
-            "untitled",
-            "sa",
-            isConnected: false);
+        var space = new SpaceViewModel(Guid.NewGuid().ToString("n"), $"Space {index + 1}", color);
 
-        var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", space.Database, space, string.Empty);
+        var database = new DatabaseViewModel($"database_{++_databaseCounter}", "mssql", "localhost", isConnected: false);
+        space.Databases.Add(database);
+        space.ActiveDatabase = database;
+
+        var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", database.Name, space, string.Empty);
         space.Tabs.Add(tab);
         Spaces.Add(space);
         SelectSpace(space);
-        StatusText = "New space — configure the connection when the driver layer lands";
+        StatusText = "New space — add databases, then wire the driver layer";
+    }
+
+    [RelayCommand]
+    private void NewDatabase()
+    {
+        if (ActiveSpace is null)
+        {
+            return;
+        }
+
+        var source = ActiveSpace.ActiveDatabase;
+        var database = new DatabaseViewModel(
+            $"database_{++_databaseCounter}",
+            source?.Driver ?? "mssql",
+            source?.Host ?? "localhost",
+            isConnected: false);
+
+        ActiveSpace.Databases.Add(database);
+        SelectDatabase(database);
+        StatusText = $"{database.Name} added — configure the connection when the driver layer lands";
     }
 
     [RelayCommand]
@@ -185,6 +202,7 @@ public partial class StudioViewModel : ObservableObject
         }
 
         ActiveSpace = space;
+        ApplyDatabase(space.LastActiveDatabase ?? space.ActiveDatabase ?? space.Databases.FirstOrDefault());
 
         Tabs.Clear();
         foreach (var item in space.Tabs)
@@ -193,6 +211,19 @@ public partial class StudioViewModel : ObservableObject
         }
 
         SelectTab(tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault());
+    }
+
+    /// <summary>Switches the database the active space queries against.</summary>
+    public void SelectDatabase(DatabaseViewModel database)
+    {
+        ApplyDatabase(database);
+
+        if (ActiveTab is not null)
+        {
+            ActiveTab.Database = database.Name;
+        }
+
+        StatusText = $"{database.Name} · {database.StatusText}";
     }
 
     public void SelectTab(TabViewModel? tab)
@@ -228,7 +259,13 @@ public partial class StudioViewModel : ObservableObject
 
         if (space.Tabs.Count == 0)
         {
-            var replacement = new TabViewModel(Guid.NewGuid().ToString("n"), $"Query {++_queryCounter}", space.Database, space, string.Empty);
+            var replacement = new TabViewModel(
+                Guid.NewGuid().ToString("n"),
+                $"Query {++_queryCounter}",
+                space.ActiveDatabase?.Name ?? string.Empty,
+                space,
+                string.Empty);
+
             space.Tabs.Add(replacement);
             Tabs.Add(replacement);
             SelectTab(replacement);
@@ -251,21 +288,53 @@ public partial class StudioViewModel : ObservableObject
         CaretText = $"Ln {line}, Col {column}";
     }
 
+    /// <summary>Sets the space's active database without touching the active tab.</summary>
+    private void ApplyDatabase(DatabaseViewModel? database)
+    {
+        if (ActiveSpace is null || database is null)
+        {
+            return;
+        }
+
+        foreach (var candidate in ActiveSpace.Databases)
+        {
+            candidate.IsActive = candidate == database;
+        }
+
+        ActiveSpace.ActiveDatabase = database;
+        ActiveSpace.LastActiveDatabase = database;
+
+        // Snippets are scoped per driver, which the database decides.
+        OnPropertyChanged(nameof(Snippets));
+    }
+
     private void Seed()
     {
-        var prod = new SpaceViewModel("space-prod", "Larik Production", StudioColors.Palette[0], "mssql", "prod-sql-01", "larik_prod", "larik_app", isConnected: true);
+        var prod = new SpaceViewModel("space-prod", "Larik Production", StudioColors.Palette[0]);
+        var prodMain = new DatabaseViewModel("larik_prod", "mssql", "prod-sql-01", isConnected: true);
+        prod.Databases.Add(prodMain);
+        prod.Databases.Add(new DatabaseViewModel("larik_reports", "mssql", "prod-sql-01", isConnected: true));
+        prod.Databases.Add(new DatabaseViewModel("larik_archive", "mssql", "prod-sql-02", isConnected: false));
+        prod.ActiveDatabase = prodMain;
         prod.Tabs.Add(new TabViewModel("t1", "Revenue by month", "larik_prod", prod,
             "SELECT\n    DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1) AS month,\n    SUM(total_amount) AS revenue\nFROM orders\nWHERE status = 'paid'\nGROUP BY DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1)\nORDER BY month DESC;"));
         prod.Tabs.Add(new TabViewModel("t2", "Slow customers", "larik_prod", prod,
             "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count ASC;"));
         prod.Tabs.Add(new TabViewModel("t3", "Scratch", "larik_prod", prod, "SELECT * FROM customers;"));
 
-        var staging = new SpaceViewModel("space-staging", "Staging", StudioColors.Palette[2], "postgres", "staging-pg", "larik_staging", "larik", isConnected: true);
+        var staging = new SpaceViewModel("space-staging", "Staging", StudioColors.Palette[2]);
+        var stagingMain = new DatabaseViewModel("larik_staging", "postgres", "staging-pg", isConnected: true);
+        staging.Databases.Add(stagingMain);
+        staging.Databases.Add(new DatabaseViewModel("larik_sandbox", "postgres", "staging-pg", isConnected: false));
+        staging.ActiveDatabase = stagingMain;
         staging.Tabs.Add(new TabViewModel("t4", "Migration check", "larik_staging", staging,
             "SELECT table_name\nFROM information_schema.tables\nWHERE table_schema = 'public';"));
 
-        var local = new SpaceViewModel("space-local", "Local playground", StudioColors.Palette[3], "sqlite", "local file", "playground.db", "-", isConnected: false);
-        local.Tabs.Add(new TabViewModel("t5", "Notes", null, local,
+        var local = new SpaceViewModel("space-local", "Local playground", StudioColors.Palette[3]);
+        var playground = new DatabaseViewModel("playground", "sqlite", "local file", isConnected: false);
+        local.Databases.Add(playground);
+        local.ActiveDatabase = playground;
+        local.Tabs.Add(new TabViewModel("t5", "Notes", "playground", local,
             "-- Local SQLite playground\n-- Connect to start querying\nSELECT 1;"));
 
         Spaces.Add(prod);

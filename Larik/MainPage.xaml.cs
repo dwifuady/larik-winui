@@ -397,24 +397,17 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void SpaceDot_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: SpaceViewModel space })
-        {
-            ViewModel.SelectSpace(space);
-        }
-    }
-
-    private void SpaceHeader_Click(object sender, RoutedEventArgs e)
+    private void SpaceSwitcher_Click(object sender, RoutedEventArgs e)
     {
         var flyout = new MenuFlyout();
 
         foreach (var space in ViewModel.Spaces)
         {
-            var item = new MenuFlyoutItem
+            var item = new RadioMenuFlyoutItem
             {
-                Text = space.Name,
-                Icon = new FontIcon { Glyph = "\uE8B7", Foreground = space.AccentBrush },
+                Text = $"{space.Name} ({space.DatabaseCountLabel})",
+                GroupName = "workspace",
+                IsChecked = space.IsActive,
             };
 
             item.Click += (_, _) => ViewModel.SelectSpace(space);
@@ -425,13 +418,30 @@ public sealed partial class MainPage : Page
 
         var newSpace = new MenuFlyoutItem
         {
-            Text = "New space",
+            Text = "New workspace",
             Icon = new FontIcon { Glyph = "\uE710" },
         };
         newSpace.Click += (_, _) => ViewModel.NewSpaceCommand.Execute(null);
         flyout.Items.Add(newSpace);
 
-        flyout.ShowAt(SpaceHeaderButton, new Point(12, 48));
+        flyout.ShowAt(SpaceSwitcherButton, new Point(0, 34));
+    }
+
+    private void DatabaseList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not DatabaseViewModel database)
+        {
+            return;
+        }
+
+        ViewModel.SelectDatabase(database);
+        DatabaseSelectorButton.Flyout?.Hide();
+    }
+
+    private void NewDatabase_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.NewDatabaseCommand.Execute(null);
+        DatabaseSelectorButton.Flyout?.Hide();
     }
 
     // ---------------------------------------------------------------- splitter

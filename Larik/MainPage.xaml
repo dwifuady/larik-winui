@@ -39,11 +39,15 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <!--  Pane header: caption-height strip so the rail runs to the window edge  -->
-                <Grid Grid.Row="0" Padding="8,0">
+                <Grid Grid.Row="0" Padding="8,0" ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
                     <Button
                         Width="36"
                         Height="32"
@@ -54,61 +58,211 @@
                         ToolTipService.ToolTip="Toggle sidebar (Ctrl+B)">
                         <FontIcon FontSize="14" Glyph="&#xE700;" />
                     </Button>
-                </Grid>
 
-                <!--  Active space / connection header  -->
-                <Button
-                    x:Name="SpaceHeaderButton"
-                    Grid.Row="1"
-                    Margin="8,0,8,4"
-                    Padding="10,8"
-                    AutomationProperties.Name="Switch space"
-                    Click="SpaceHeader_Click"
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Stretch"
-                    Style="{StaticResource StudioIconButtonStyle}"
-                    ToolTipService.ToolTip="Switch space">
-                    <Grid ColumnSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <!--  Workspace switcher, beside the pane toggle  -->
+                    <Button
+                        x:Name="SpaceSwitcherButton"
+                        Grid.Column="1"
+                        Height="32"
+                        Padding="8,0"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Switch workspace"
+                        Click="SpaceSwitcher_Click"
+                        HorizontalContentAlignment="Stretch"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.TooltipText, Mode=OneWay}">
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
 
-                        <Border
-                            Width="12"
-                            Height="12"
-                            VerticalAlignment="Top"
-                            Margin="0,3,0,0"
-                            Background="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}"
-                            CornerRadius="6" />
+                            <Ellipse
+                                Width="10"
+                                Height="10"
+                                VerticalAlignment="Center"
+                                Fill="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}" />
 
-                        <StackPanel Grid.Column="1" Spacing="2">
                             <TextBlock
-                                FontSize="13"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontSize="12"
                                 FontWeight="SemiBold"
                                 Foreground="{ThemeResource StudioTextPrimaryBrush}"
                                 Text="{x:Bind ViewModel.ActiveSpace.Name, Mode=OneWay}"
                                 TextTrimming="CharacterEllipsis" />
-                            <StackPanel Orientation="Horizontal" Spacing="5">
-                                <Ellipse
-                                    Width="6"
-                                    Height="6"
-                                    VerticalAlignment="Center"
-                                    Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
+
+                            <FontIcon
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                FontSize="8"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Glyph="&#xE70D;" />
+                        </Grid>
+                    </Button>
+                </Grid>
+
+                <!--  Database selector: the space's connection context  -->
+                <Button
+                    x:Name="DatabaseSelectorButton"
+                    Grid.Row="1"
+                    Margin="8,0,8,4"
+                    Padding="8,7"
+                    AutomationProperties.Name="Select database"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Switch database">
+                    <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedLeft" ShouldConstrainToRootBounds="True">
+                            <StackPanel MinWidth="288" Spacing="2">
                                 <TextBlock
+                                    Margin="10,6,10,4"
+                                    CharacterSpacing="120"
                                     FontSize="10"
+                                    FontWeight="SemiBold"
                                     Foreground="{ThemeResource StudioTextMutedBrush}"
-                                    Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
-                                    TextTrimming="CharacterEllipsis" />
+                                    Text="DATABASES" />
+
+                                <ListView
+                                    x:Name="DatabaseList"
+                                    MaxHeight="300"
+                                    Padding="0"
+                                    AutomationProperties.Name="Databases"
+                                    IsItemClickEnabled="True"
+                                    ItemClick="DatabaseList_ItemClick"
+                                    ItemsSource="{x:Bind ViewModel.ActiveSpace.Databases, Mode=OneWay}"
+                                    SelectionMode="None">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:DatabaseViewModel">
+                                            <Grid
+                                                Height="46"
+                                                Padding="10,0"
+                                                AutomationProperties.Name="{x:Bind Name}"
+                                                ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel VerticalAlignment="Center" Spacing="1">
+                                                    <TextBlock
+                                                        FontSize="12"
+                                                        FontWeight="{x:Bind NameWeight, Mode=OneWay}"
+                                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                                        Text="{x:Bind Name}"
+                                                        TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock
+                                                        FontSize="10"
+                                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                                        Text="{x:Bind Summary}" />
+                                                </StackPanel>
+
+                                                <StackPanel
+                                                    Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    Orientation="Horizontal"
+                                                    Spacing="4">
+                                                    <Ellipse
+                                                        Width="6"
+                                                        Height="6"
+                                                        VerticalAlignment="Center"
+                                                        Fill="{x:Bind StatusBrush}" />
+                                                    <TextBlock
+                                                        FontSize="10"
+                                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                                        Text="{x:Bind StatusText}" />
+                                                </StackPanel>
+
+                                                <FontIcon
+                                                    Grid.Column="2"
+                                                    VerticalAlignment="Center"
+                                                    FontSize="11"
+                                                    Foreground="{ThemeResource StudioAccentBrush}"
+                                                    Glyph="&#xE73E;"
+                                                    Visibility="{x:Bind CheckVisibility, Mode=OneWay}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+
+                                <Button
+                                    x:Name="NewDatabaseButton"
+                                    Margin="0,2,0,0"
+                                    Padding="10,7"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Left"
+                                    AutomationProperties.Name="New database"
+                                    Click="NewDatabase_Click"
+                                    Style="{StaticResource StudioIconButtonStyle}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon FontSize="11" Glyph="&#xE710;" />
+                                        <TextBlock FontSize="12" Text="New database" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border
+                            Padding="4,1"
+                            VerticalAlignment="Center"
+                            Background="{ThemeResource HairlineSubtleBrush}"
+                            CornerRadius="3">
+                            <TextBlock
+                                CharacterSpacing="60"
+                                FontSize="8"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Text="DB" />
+                        </Border>
+
+                        <StackPanel Grid.Column="1" Spacing="1">
+                            <TextBlock
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                Text="{x:Bind ViewModel.ActiveSpace.ConnectedDatabaseText, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <StackPanel
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="4">
+                            <Ellipse
+                                Width="6"
+                                Height="6"
+                                VerticalAlignment="Center"
+                                Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
+                            <TextBlock
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="{x:Bind ViewModel.ActiveSpace.StatusText, Mode=OneWay}" />
                         </StackPanel>
 
                         <FontIcon
-                            Grid.Column="2"
-                            FontSize="10"
+                            Grid.Column="3"
+                            VerticalAlignment="Center"
+                            FontSize="8"
                             Foreground="{ThemeResource StudioTextMutedBrush}"
                             Glyph="&#xE70D;" />
+
                     </Grid>
                 </Button>
 
@@ -200,58 +354,6 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
-
-                <!--  Space switcher footer  -->
-                <Grid
-                    Grid.Row="4"
-                    Padding="12,8,8,10"
-                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                    BorderThickness="0,1,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Spaces}" VerticalAlignment="Center">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" Spacing="2" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:SpaceViewModel">
-                                <Button
-                                    Padding="3"
-                                    AutomationProperties.Name="{x:Bind Name, Mode=OneWay}"
-                                    Click="SpaceDot_Click"
-                                    Style="{StaticResource StudioIconButtonStyle}"
-                                    ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}">
-                                    <Grid Width="22" Height="22">
-                                        <Ellipse
-                                            Width="14"
-                                            Height="14"
-                                            Fill="{x:Bind AccentBrush}" />
-                                        <Ellipse
-                                            Width="22"
-                                            Height="22"
-                                            Opacity="{x:Bind IsActiveDotVisible, Mode=OneWay}"
-                                            Stroke="{x:Bind AccentBrush}"
-                                            StrokeThickness="1.5" />
-                                    </Grid>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Button
-                        Grid.Column="1"
-                        AutomationProperties.Name="New space"
-                        Command="{x:Bind ViewModel.NewSpaceCommand}"
-                        Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="New space">
-                        <FontIcon FontSize="11" Glyph="&#xE710;" />
-                    </Button>
-                </Grid>
             </Grid>
         </Border>
 

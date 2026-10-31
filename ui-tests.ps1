@@ -141,6 +141,8 @@ try {
     }
 
     Test-UI 'switching spaces swaps connection, tabs and editor' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
         Click-Element 'Staging'
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'PostgreSQL').matchCount -gt 0) 'status bar still shows the old connection'
@@ -148,13 +150,32 @@ try {
         Assert-True ((Get-EditorText) -match 'information_schema') 'staging tab content not loaded'
     }
 
+    Test-UI 'switching database updates the rail, status bar and tab' {
+        Click-Element 'Select database'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database list did not open'
+        Click-Element 'larik_sandbox'
+        Start-Sleep -Milliseconds 800
+        # The selector row, the tab subtitle and the status line all follow the active database.
+        Assert-True ((Find-Element 'larik_sandbox').matchCount -ge 2) 'database selection did not propagate'
+    }
+
+    Test-UI 'a workspace can gain another database' {
+        Click-Element 'Select database'
+        Start-Sleep -Milliseconds 500
+        # State-changing click: no retries, the flyout closes as soon as it lands.
+        try { Invoke-Ui @('click', 'NewDatabaseButton') | Out-Null } catch { }
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'database_').matchCount -gt 0) 'new database did not appear in the rail'
+    }
+
     Test-UI 'Ctrl+B collapses and restores the sidebar' {
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700
-        Assert-True ((Find-Element 'SpaceHeaderButton').matchCount -eq 0) 'sidebar did not collapse'
+        Assert-True ((Find-Element 'DatabaseSelectorButton').matchCount -eq 0) 'sidebar did not collapse'
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700
-        Assert-True ((Find-Element 'SpaceHeaderButton').matchCount -gt 0) 'sidebar did not come back'
+        Assert-True ((Find-Element 'DatabaseSelectorButton').matchCount -gt 0) 'sidebar did not come back'
     }
 
     Test-UI 'New query adds a vertical tab' {

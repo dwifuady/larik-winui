@@ -2,7 +2,7 @@
 
 A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app.
 This first slice is about the part of the product the web stack gives away for free and WinUI does not:
-**Arc-style vertical tabs, one space per connection, and snippet completion that expands on Tab.**
+**Arc-style vertical tabs, workspaces that group databases, and snippet completion that expands on Tab.**
 
 ```
 C:\dev\larik-winui\
@@ -15,7 +15,7 @@ C:\dev\larik-winui\
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
 │   │   ├── MockDatabase.cs       # stand-in for tiberius/postgres/rusqlite
 │   │   └── StudioColors.cs       # space palette + active-tab tint
-│   ├── ViewModels/               # Studio / Space / Tab (CommunityToolkit.Mvvm, partial properties)
+│   ├── ViewModels/               # Studio / Space / Database / Tab (CommunityToolkit.Mvvm, partial properties)
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
 │   └── MainPage.xaml(.cs)        # shell layout + caret-anchored completion popup + results grid
 └── ui-tests.ps1            # runnable UI Automation checks for the flows above
@@ -37,15 +37,19 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 
 The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs and fills the grid,
-space switching swaps connection + tabs + editor, Ctrl+B collapses/restores the sidebar, and a
+workspace switching swaps databases + tabs + editor, the database picker repoints the rail, status
+bar and tab subtitle, adding a database works, Ctrl+B collapses/restores the sidebar, and a
 `DELETE`/`UPDATE` without `WHERE` is refused.
 
 ## What works in this slice
 
-- **Vertical tabs** per space, active tab tinted with the space colour (2 px strip + 26 % tint),
+- **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
   database subtitle revealed on hover/active, close button, Ctrl+T for a new query.
-- **Spaces**: 1:1 connection per space, colour dot + connection status (colour *and* text),
-  header flyout to switch spaces, Ctrl+B to collapse the rail.
+- **Workspaces and databases**: the rail's top strip carries the workspace switcher (colour dot,
+  name, menu of workspaces with their database counts); the row beneath it is a database picker
+  for the active workspace, with per-database status (colour *and* text) and a `New database`
+  action. Switching database repoints the rail, the status bar, the toolbar badge and the active
+  tab's subtitle.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect`; Up/Down to move, **Tab or Enter accepts**, Esc dismisses. Expansion
   honours `${cursor}`, `${1:placeholder}` (left selected), repeat markers, and `alias.` column
@@ -64,8 +68,8 @@ space switching swaps connection + tabs + editor, Ctrl+B collapses/restores the 
 | Gap | Why / next step |
 |---|---|
 | **No syntax highlighting** | `RichEditBox` is plain text here. Next: format ranges on a debounce (`ITextCharacterFormat`), or host Monaco in WebView2 and keep the native shell. |
-| No persistence | Spaces/tabs are seeded in `StudioViewModel.Seed()`. Next: SQLite (`Microsoft.Data.Sqlite`) with the same shape as `src-tauri/src/storage`. |
-| Mock connections | `MockDatabase` returns deterministic rows. Next: `Microsoft.Data.SqlClient` / `Npgsql` behind a `IDatabaseDriver`. |
+| No persistence | Spaces, databases and tabs are seeded in `StudioViewModel.Seed()`. Next: SQLite (`Microsoft.Data.Sqlite`) with the same shape as `src-tauri/src/storage`. |
+| Mock connections | `MockDatabase` returns deterministic rows and ignores which database is selected. Next: `Microsoft.Data.SqlClient` / `Npgsql` behind a `IDatabaseDriver` keyed by database. |
 | Results grid not virtualized | Fine for a slice; for large result sets move to `ItemsRepeater` with a shared row template. |
 | No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |

@@ -5,36 +5,23 @@ using Microsoft.UI.Xaml.Media;
 
 namespace Larik.ViewModels;
 
-/// <summary>A space owns exactly one connection (the desktop app's 1:1 model).</summary>
+/// <summary>
+/// A space is a workspace: it groups related databases and owns the tabs opened against them.
+/// The space's active database supplies the connection context shown in the rail and status bar.
+/// </summary>
 public partial class SpaceViewModel : ObservableObject
 {
-    public SpaceViewModel(
-        string id,
-        string name,
-        string colorHex,
-        string driver,
-        string host,
-        string database,
-        string username,
-        bool isConnected)
+    public SpaceViewModel(string id, string name, string colorHex)
     {
         Id = id;
         ColorHex = colorHex;
-        Driver = driver;
-        Host = host;
-        Username = username;
         AccentBrush = StudioColors.Brush(colorHex);
         ActiveTintBrush = StudioColors.Tint(colorHex);
         Name = name;
-        Database = database;
-        IsConnected = isConnected;
     }
 
     public string Id { get; }
     public string ColorHex { get; }
-    public string Driver { get; }
-    public string Host { get; }
-    public string Username { get; }
     public SolidColorBrush AccentBrush { get; }
     public SolidColorBrush ActiveTintBrush { get; }
 
@@ -43,44 +30,42 @@ public partial class SpaceViewModel : ObservableObject
     public partial string Name { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
-    public partial string Database { get; set; }
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StatusText))]
-    [NotifyPropertyChangedFor(nameof(StatusBrush))]
-    [NotifyPropertyChangedFor(nameof(ConnectionLine))]
-    [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
-    public partial bool IsConnected { get; set; }
-
-    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsActiveDotVisible))]
     public partial bool IsActive { get; set; }
 
-    public string DriverLabel => Driver switch
-    {
-        "mssql" => "SQL Server",
-        "postgres" => "PostgreSQL",
-        "sqlite" => "SQLite",
-        _ => Driver,
-    };
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ConnectionLine))]
+    [NotifyPropertyChangedFor(nameof(StatusText))]
+    [NotifyPropertyChangedFor(nameof(StatusBrush))]
+    [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
+    [NotifyPropertyChangedFor(nameof(Driver))]
+    [NotifyPropertyChangedFor(nameof(DatabaseCountLabel))]
+    public partial DatabaseViewModel? ActiveDatabase { get; set; }
 
-    public string StatusText => IsConnected ? "Connected" : "Disconnected";
-
-    public SolidColorBrush StatusBrush => IsConnected ? StudioColors.Success : StudioColors.Warning;
-
-    /// <summary>Status is colour AND text — never colour alone.</summary>
-    public string ConnectionLine => IsConnected
-        ? $"{DriverLabel} · {Host}"
-        : $"{DriverLabel} · {Host} · disconnected";
-
-    public string ConnectedDatabaseText => IsConnected ? Database : "not connected";
-
-    public string TooltipText => $"{Name} — {ConnectionLine}";
-
-    public double IsActiveDotVisible => IsActive ? 1 : 0;
+    public ObservableCollection<DatabaseViewModel> Databases { get; } = [];
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
+    public DatabaseViewModel? LastActiveDatabase { get; set; }
+
     public TabViewModel? LastActiveTab { get; set; }
+
+    public string Driver => ActiveDatabase?.Driver ?? "mssql";
+
+    public string DatabaseCountLabel => Databases.Count == 1 ? "1 database" : $"{Databases.Count} databases";
+
+    public string TooltipText => $"{Name} — {DatabaseCountLabel}";
+
+    public string StatusText => ActiveDatabase?.StatusText ?? "Disconnected";
+
+    public SolidColorBrush StatusBrush => ActiveDatabase?.StatusBrush ?? StudioColors.Warning;
+
+    /// <summary>Status is colour AND text — never colour alone.</summary>
+    public string ConnectionLine => ActiveDatabase is null
+        ? "No database"
+        : $"{ActiveDatabase.DriverLabel} · {ActiveDatabase.Host}";
+
+    public string ConnectedDatabaseText => ActiveDatabase?.Name ?? "no database";
+
+    public double IsActiveDotVisible => IsActive ? 1 : 0;
 }
