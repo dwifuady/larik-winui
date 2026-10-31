@@ -54,6 +54,10 @@ space switching swaps connection + tabs + editor, Ctrl+B collapses/restores the 
   right-aligned, space-coloured rule under the header.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
+- **Native chrome**: the window uses a `MicaBackdrop`; the rail, toolbar and status bar are
+  transparent so they read as one chrome surface with the title bar, and only real content sits on
+  Fluent card brushes (`CardBackgroundFillColorDefaultBrush`). Falls back to the design's solid
+  background when `MicaController.IsSupported()` is false.
 
 ## Deliberate gaps (next iterations)
 
@@ -74,6 +78,9 @@ space switching swaps connection + tabs + editor, Ctrl+B collapses/restores the 
 - `KeyboardAccelerator` on the page does **not** win over `RichEditBox` shortcuts (Ctrl+B is bold),
   so shell shortcuts are handled in `Editor_PreviewKeyDown` and
   `DisabledFormattingAccelerators="All"` keeps rich formatting off.
+- `RichEditBox` paints its own fill from the `TextControlBackground*` theme resources, including a
+  different one while focused, which hides any parent card. Override those plus the
+  `TextControlBorderBrush*` keys to `Transparent` so the card surface shows through.
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - MVVM Toolkit `[ObservableProperty]` on fields warns (MVVMTK0045) under WinRT/AOT; partial
   properties keep the build warning-free and AOT-ready.

@@ -1,6 +1,7 @@
 using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
+using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -42,6 +43,13 @@ public sealed partial class MainPage : Page
     {
         InitializeComponent();
         Loaded += OnLoaded;
+
+        // The shell is drawn on Mica: only real surfaces (cards, popup) paint over it.
+        // Without Mica support the backdrop is blank, so fall back to the design's solid background.
+        if (!MicaController.IsSupported())
+        {
+            Root.Background = (Brush)Application.Current.Resources["StudioBackgroundBrush"];
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

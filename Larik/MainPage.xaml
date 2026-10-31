@@ -9,7 +9,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:Larik.Models"
     xmlns:vm="using:Larik.ViewModels"
-    Background="{ThemeResource StudioBackgroundBrush}"
+    Background="Transparent"
     mc:Ignorable="d">
 
     <Page.KeyboardAccelerators>
@@ -29,8 +29,8 @@
             x:Name="Sidebar"
             Grid.Column="0"
             Width="252"
-            Background="{ThemeResource PanelBackgroundBrush}"
-            BorderBrush="{ThemeResource HairlineBrush}"
+            Background="Transparent"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
             BorderThickness="0,0,1,0"
             Visibility="{x:Bind ViewModel.SidebarVisibility, Mode=OneWay}">
             <Grid>
@@ -190,7 +190,7 @@
                 <Grid
                     Grid.Row="3"
                     Padding="12,8,8,10"
-                    BorderBrush="{ThemeResource HairlineBrush}"
+                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                     BorderThickness="0,1,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -329,8 +329,8 @@
             <Border
                 Grid.Row="1"
                 Margin="12,0,12,0"
-                Background="{ThemeResource ElevatedSurfaceBrush}"
-                BorderBrush="{ThemeResource HairlineSubtleBrush}"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
                 <RichEditBox
@@ -353,7 +353,22 @@
                     SelectionChanged="Editor_SelectionChanged"
                     SelectionHighlightColor="{ThemeResource EditorSelectionBrush}"
                     TextChanged="Editor_TextChanged"
-                    TextWrapping="NoWrap" />
+                    TextWrapping="NoWrap">
+                    <!--
+                        The control template paints its own fill on top of the card, including a
+                        different fill when focused. Let the card surface own the background instead.
+                    -->
+                    <RichEditBox.Resources>
+                        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent" />
+                    </RichEditBox.Resources>
+                </RichEditBox>
             </Border>
 
             <!--  Drag handle between editor and results  -->
@@ -369,7 +384,7 @@
                     Height="1"
                     VerticalAlignment="Center"
                     Margin="12,0"
-                    Background="{ThemeResource HairlineBrush}" />
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
             </controls:DragHandle>
 
             <!--  Results  -->
@@ -405,8 +420,8 @@
 
                 <Border
                     Grid.Row="1"
-                    Background="{ThemeResource PanelBackgroundBrush}"
-                    BorderBrush="{ThemeResource HairlineSubtleBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
                     <ScrollViewer
@@ -424,7 +439,7 @@
             <Grid
                 Grid.Row="4"
                 Padding="16,6,16,6"
-                BorderBrush="{ThemeResource HairlineBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <Ellipse
@@ -463,8 +478,8 @@
             <Border
                 Width="392"
                 MaxHeight="268"
-                Background="{ThemeResource ElevatedSurfaceBrush}"
-                BorderBrush="{ThemeResource HairlineBrush}"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
                 BorderThickness="1"
                 CornerRadius="8">
                 <ListView
