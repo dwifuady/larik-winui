@@ -61,10 +61,16 @@ public sealed partial class MainPage : Page
             ViewModel.ResultChanged += (_, _) => RenderResults();
         }
 
+        // The caption lives inside the content column (the rail runs full height), so the page owns the drag region.
+        App.Window.SetTitleBar(AppTitleBar);
+
         SyncEditorFromActiveTab();
         RenderResults();
         Editor.Focus(FocusState.Programmatic);
     }
+
+    private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) =>
+        ViewModel.ToggleSidebarCommand.Execute(null);
 
     // ---------------------------------------------------------------- editor <-> model
 

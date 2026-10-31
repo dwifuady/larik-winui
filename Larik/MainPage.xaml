@@ -35,17 +35,32 @@
             Visibility="{x:Bind ViewModel.SidebarVisibility, Mode=OneWay}">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="48" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
+                <!--  Pane header: caption-height strip so the rail runs to the window edge  -->
+                <Grid Grid.Row="0" Padding="8,0">
+                    <Button
+                        Width="36"
+                        Height="32"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Toggle sidebar"
+                        Command="{x:Bind ViewModel.ToggleSidebarCommand}"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Toggle sidebar (Ctrl+B)">
+                        <FontIcon FontSize="14" Glyph="&#xE700;" />
+                    </Button>
+                </Grid>
+
                 <!--  Active space / connection header  -->
                 <Button
                     x:Name="SpaceHeaderButton"
-                    Grid.Row="0"
-                    Margin="8,8,8,4"
+                    Grid.Row="1"
+                    Margin="8,0,8,4"
                     Padding="10,8"
                     AutomationProperties.Name="Switch space"
                     Click="SpaceHeader_Click"
@@ -98,7 +113,7 @@
                 </Button>
 
                 <!--  Section header  -->
-                <Grid Grid.Row="1" Margin="18,8,12,2">
+                <Grid Grid.Row="2" Margin="18,8,12,2">
                     <TextBlock
                         VerticalAlignment="Center"
                         CharacterSpacing="120"
@@ -119,7 +134,7 @@
                 <!--  Vertical tab list  -->
                 <ListView
                     x:Name="TabsList"
-                    Grid.Row="2"
+                    Grid.Row="3"
                     Padding="0,0,0,8"
                     AutomationProperties.Name="Query tabs"
                     IsItemClickEnabled="True"
@@ -188,7 +203,7 @@
 
                 <!--  Space switcher footer  -->
                 <Grid
-                    Grid.Row="3"
+                    Grid.Row="4"
                     Padding="12,8,8,10"
                     BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                     BorderThickness="0,1,0,0">
@@ -244,16 +259,30 @@
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition x:Name="EditorRow" Height="2*" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition x:Name="ResultsRow" Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
+            <!--  Caption: drag region for the window, with the system caption buttons at the right  -->
+            <TitleBar
+                x:Name="AppTitleBar"
+                Grid.Row="0"
+                Title="Larik SQL Studio"
+                IsBackButtonVisible="False"
+                IsPaneToggleButtonVisible="{x:Bind ViewModel.IsSidebarCollapsed, Mode=OneWay}"
+                PaneToggleRequested="AppTitleBar_PaneToggleRequested">
+                <TitleBar.IconSource>
+                    <ImageIconSource ImageSource="Assets/AppIcon.ico" />
+                </TitleBar.IconSource>
+            </TitleBar>
+
             <!--  Query toolbar  -->
             <Grid
-                Grid.Row="0"
-                Padding="16,10,12,8"
+                Grid.Row="1"
+                Padding="16,4,12,8"
                 ColumnSpacing="10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -327,7 +356,7 @@
 
             <!--  SQL editor  -->
             <Border
-                Grid.Row="1"
+                Grid.Row="2"
                 Margin="12,0,12,0"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -374,7 +403,7 @@
             <!--  Drag handle between editor and results  -->
             <controls:DragHandle
                 x:Name="Splitter"
-                Grid.Row="2"
+                Grid.Row="3"
                 Height="10"
                 Background="Transparent"
                 PointerMoved="Splitter_PointerMoved"
@@ -388,7 +417,7 @@
             </controls:DragHandle>
 
             <!--  Results  -->
-            <Grid Grid.Row="3" Margin="12,0,12,0" RowSpacing="6">
+            <Grid Grid.Row="4" Margin="12,0,12,0" RowSpacing="6">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
@@ -437,7 +466,7 @@
 
             <!--  Status bar  -->
             <Grid
-                Grid.Row="4"
+                Grid.Row="5"
                 Padding="16,6,16,6"
                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">

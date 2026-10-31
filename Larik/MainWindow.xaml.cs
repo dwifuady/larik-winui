@@ -19,13 +19,9 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(AppTitleBar);
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
         RootFrame.Navigate(typeof(MainPage));
-
-        AppTitleBar.PaneToggleRequested += (_, _) =>
-            (RootFrame.Content as MainPage)?.ViewModel.ToggleSidebarCommand.Execute(null);
 
         ResizeForDesktop(1360, 860);
     }

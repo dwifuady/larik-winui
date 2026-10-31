@@ -12,29 +12,6 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <TitleBar
-            x:Name="AppTitleBar"
-            Title="Larik SQL Studio"
-            IsPaneToggleButtonVisible="True">
-            <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
-            </TitleBar.IconSource>
-            <TitleBar.LeftHeader>
-                <TextBlock
-                    Margin="4,0,0,0"
-                    VerticalAlignment="Center"
-                    FontSize="11"
-                    Foreground="{ThemeResource StudioTextMutedBrush}"
-                    Text="spaces · tabs · snippets" />
-            </TitleBar.LeftHeader>
-        </TitleBar>
-
-        <Frame x:Name="RootFrame" Grid.Row="1" />
-    </Grid>
+    <!--  The page owns the whole window: the rail runs to the top edge and the caption lives inside the content column.  -->
+    <Frame x:Name="RootFrame" />
 </Window>
