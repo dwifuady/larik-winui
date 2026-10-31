@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Larik (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Larik (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

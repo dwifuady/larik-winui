@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Larik design tokens, ported from DESIGN.md (dark + light + high contrast).
+    Brushes are named by purpose, never by hue.
+-->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ResourceDictionary.ThemeDictionaries>
+
+        <ResourceDictionary x:Key="Dark">
+            <SolidColorBrush x:Key="StudioBackgroundBrush" Color="#161618" />
+            <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#1C1C1E" />
+            <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="#232326" />
+            <SolidColorBrush x:Key="HairlineBrush" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="HairlineSubtleBrush" Color="#0AFFFFFF" />
+            <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="#F5F5F7" />
+            <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="#B8FFFFFF" />
+            <SolidColorBrush x:Key="StudioTextMutedBrush" Color="#66FFFFFF" />
+            <SolidColorBrush x:Key="StudioAccentBrush" Color="#6366F1" />
+            <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="#818CF8" />
+            <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#336366F1" />
+            <SolidColorBrush x:Key="StudioSuccessBrush" Color="#22C55E" />
+            <SolidColorBrush x:Key="StudioWarningBrush" Color="#F59E0B" />
+            <SolidColorBrush x:Key="StudioDangerBrush" Color="#EF4444" />
+            <SolidColorBrush x:Key="EditorSelectionBrush" Color="#406366F1" />
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="StudioBackgroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F8F8F8" />
+            <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="#F0F0F0" />
+            <SolidColorBrush x:Key="HairlineBrush" Color="#1F000000" />
+            <SolidColorBrush x:Key="HairlineSubtleBrush" Color="#0F000000" />
+            <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="#1A1A1A" />
+            <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="#B3000000" />
+            <SolidColorBrush x:Key="StudioTextMutedBrush" Color="#73000000" />
+            <SolidColorBrush x:Key="StudioAccentBrush" Color="#5B5FC7" />
+            <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="#4F53B5" />
+            <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#265B5FC7" />
+            <SolidColorBrush x:Key="StudioSuccessBrush" Color="#15803D" />
+            <SolidColorBrush x:Key="StudioWarningBrush" Color="#B45309" />
+            <SolidColorBrush x:Key="StudioDangerBrush" Color="#DC2626" />
+            <SolidColorBrush x:Key="EditorSelectionBrush" Color="#405B5FC7" />
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="StudioBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="PanelBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="HairlineBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="HairlineSubtleBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioTextMutedBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="StudioSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioWarningBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioDangerBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="EditorSelectionBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+
+    <FontFamily x:Key="StudioMonoFont">Cascadia Mono, Consolas, Courier New</FontFamily>
+
+    <!-- Compact, chrome-minimal icon button (sidebar footer, toolbar) -->
+    <Style x:Key="StudioIconButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="6" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="Foreground" Value="{ThemeResource StudioTextSecondaryBrush}" />
+    </Style>
+
+    <!-- Vertical tab row: no padding, content stretches edge to edge -->
+    <Style x:Key="StudioTabItemStyle" TargetType="ListViewItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="4,0,4,0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+
+</ResourceDictionary>
