@@ -104,9 +104,13 @@ public partial class StudioViewModel : ObservableObject
     {
         var index = Spaces.Count;
         var color = StudioColors.Palette[index % StudioColors.Palette.Length];
-        var space = new SpaceViewModel(Guid.NewGuid().ToString("n"), $"Space {index + 1}", color);
+        var space = new SpaceViewModel(
+            Guid.NewGuid().ToString("n"),
+            $"Space {index + 1}",
+            color,
+            new ConnectionViewModel("mssql", "localhost", "sa", isConnected: false));
 
-        var database = new DatabaseViewModel($"database_{++_databaseCounter}", "mssql", "localhost", isConnected: false);
+        var database = new DatabaseViewModel($"database_{++_databaseCounter}");
         space.Databases.Add(database);
         space.ActiveDatabase = database;
 
@@ -125,16 +129,10 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        var source = ActiveSpace.ActiveDatabase;
-        var database = new DatabaseViewModel(
-            $"database_{++_databaseCounter}",
-            source?.Driver ?? "mssql",
-            source?.Host ?? "localhost",
-            isConnected: false);
-
+        var database = new DatabaseViewModel($"database_{++_databaseCounter}");
         ActiveSpace.Databases.Add(database);
         SelectDatabase(database);
-        StatusText = $"{database.Name} added — configure the connection when the driver layer lands";
+        StatusText = $"{database.Name} added — the space's connection will host it once the driver layer lands";
     }
 
     [RelayCommand]
@@ -223,7 +221,7 @@ public partial class StudioViewModel : ObservableObject
             ActiveTab.Database = database.Name;
         }
 
-        StatusText = $"{database.Name} · {database.StatusText}";
+        StatusText = $"{database.Name} · {ActiveSpace?.StatusText}";
     }
 
     public void SelectTab(TabViewModel? tab)
@@ -310,11 +308,15 @@ public partial class StudioViewModel : ObservableObject
 
     private void Seed()
     {
-        var prod = new SpaceViewModel("space-prod", "Larik Production", StudioColors.Palette[0]);
-        var prodMain = new DatabaseViewModel("larik_prod", "mssql", "prod-sql-01", isConnected: true);
+        var prod = new SpaceViewModel(
+            "space-prod",
+            "Larik Production",
+            StudioColors.Palette[0],
+            new ConnectionViewModel("mssql", "prod-sql-01", "larik_app", isConnected: true));
+        var prodMain = new DatabaseViewModel("larik_prod");
         prod.Databases.Add(prodMain);
-        prod.Databases.Add(new DatabaseViewModel("larik_reports", "mssql", "prod-sql-01", isConnected: true));
-        prod.Databases.Add(new DatabaseViewModel("larik_archive", "mssql", "prod-sql-02", isConnected: false));
+        prod.Databases.Add(new DatabaseViewModel("larik_reports"));
+        prod.Databases.Add(new DatabaseViewModel("larik_archive"));
         prod.ActiveDatabase = prodMain;
         prod.Tabs.Add(new TabViewModel("t1", "Revenue by month", "larik_prod", prod,
             "SELECT\n    DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1) AS month,\n    SUM(total_amount) AS revenue\nFROM orders\nWHERE status = 'paid'\nGROUP BY DATEFROMPARTS(YEAR(ordered_at), MONTH(ordered_at), 1)\nORDER BY month DESC;"));
@@ -322,16 +324,24 @@ public partial class StudioViewModel : ObservableObject
             "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count ASC;"));
         prod.Tabs.Add(new TabViewModel("t3", "Scratch", "larik_prod", prod, "SELECT * FROM customers;"));
 
-        var staging = new SpaceViewModel("space-staging", "Staging", StudioColors.Palette[2]);
-        var stagingMain = new DatabaseViewModel("larik_staging", "postgres", "staging-pg", isConnected: true);
+        var staging = new SpaceViewModel(
+            "space-staging",
+            "Staging",
+            StudioColors.Palette[2],
+            new ConnectionViewModel("postgres", "staging-pg", "larik", isConnected: true));
+        var stagingMain = new DatabaseViewModel("larik_staging");
         staging.Databases.Add(stagingMain);
-        staging.Databases.Add(new DatabaseViewModel("larik_sandbox", "postgres", "staging-pg", isConnected: false));
+        staging.Databases.Add(new DatabaseViewModel("larik_sandbox"));
         staging.ActiveDatabase = stagingMain;
         staging.Tabs.Add(new TabViewModel("t4", "Migration check", "larik_staging", staging,
             "SELECT table_name\nFROM information_schema.tables\nWHERE table_schema = 'public';"));
 
-        var local = new SpaceViewModel("space-local", "Local playground", StudioColors.Palette[3]);
-        var playground = new DatabaseViewModel("playground", "sqlite", "local file", isConnected: false);
+        var local = new SpaceViewModel(
+            "space-local",
+            "Local playground",
+            StudioColors.Palette[3],
+            new ConnectionViewModel("sqlite", "local file", "-", isConnected: false));
+        var playground = new DatabaseViewModel("playground");
         local.Databases.Add(playground);
         local.ActiveDatabase = playground;
         local.Tabs.Add(new TabViewModel("t5", "Notes", "playground", local,

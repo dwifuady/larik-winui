@@ -137,47 +137,25 @@
                                     <ListView.ItemTemplate>
                                         <DataTemplate x:DataType="vm:DatabaseViewModel">
                                             <Grid
-                                                Height="46"
+                                                Height="40"
                                                 Padding="10,0"
                                                 AutomationProperties.Name="{x:Bind Name}"
                                                 ColumnSpacing="8">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
 
-                                                <StackPanel VerticalAlignment="Center" Spacing="1">
-                                                    <TextBlock
-                                                        FontSize="12"
-                                                        FontWeight="{x:Bind NameWeight, Mode=OneWay}"
-                                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                                        Text="{x:Bind Name}"
-                                                        TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock
-                                                        FontSize="10"
-                                                        Foreground="{ThemeResource StudioTextMutedBrush}"
-                                                        Text="{x:Bind Summary}" />
-                                                </StackPanel>
-
-                                                <StackPanel
-                                                    Grid.Column="1"
+                                                <TextBlock
                                                     VerticalAlignment="Center"
-                                                    Orientation="Horizontal"
-                                                    Spacing="4">
-                                                    <Ellipse
-                                                        Width="6"
-                                                        Height="6"
-                                                        VerticalAlignment="Center"
-                                                        Fill="{x:Bind StatusBrush}" />
-                                                    <TextBlock
-                                                        FontSize="10"
-                                                        Foreground="{ThemeResource StudioTextMutedBrush}"
-                                                        Text="{x:Bind StatusText}" />
-                                                </StackPanel>
+                                                    FontSize="12"
+                                                    FontWeight="{x:Bind NameWeight, Mode=OneWay}"
+                                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                                    Text="{x:Bind Name}"
+                                                    TextTrimming="CharacterEllipsis" />
 
                                                 <FontIcon
-                                                    Grid.Column="2"
+                                                    Grid.Column="1"
                                                     VerticalAlignment="Center"
                                                     FontSize="11"
                                                     Foreground="{ThemeResource StudioAccentBrush}"
@@ -210,7 +188,6 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
                         <Border
@@ -233,31 +210,22 @@
                                 Foreground="{ThemeResource StudioTextPrimaryBrush}"
                                 Text="{x:Bind ViewModel.ActiveSpace.ConnectedDatabaseText, Mode=OneWay}"
                                 TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                FontSize="10"
-                                Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
-                                TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
-
-                        <StackPanel
-                            Grid.Column="2"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal"
-                            Spacing="4">
-                            <Ellipse
-                                Width="6"
-                                Height="6"
-                                VerticalAlignment="Center"
-                                Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
-                            <TextBlock
-                                FontSize="10"
-                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.StatusText, Mode=OneWay}" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Ellipse
+                                    Width="5"
+                                    Height="5"
+                                    VerticalAlignment="Center"
+                                    Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
+                                    TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
                         </StackPanel>
 
                         <FontIcon
-                            Grid.Column="3"
+                            Grid.Column="2"
                             VerticalAlignment="Center"
                             FontSize="8"
                             Foreground="{ThemeResource StudioTextMutedBrush}"

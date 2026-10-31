@@ -160,6 +160,16 @@ try {
         Assert-True ((Find-Element 'larik_sandbox').matchCount -ge 2) 'database selection did not propagate'
     }
 
+    Test-UI 'connection status belongs to the workspace, not to a database' {
+        Click-Element 'Select database'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database list did not open'
+        # Staging's connection is connected, so no database row may claim it is disconnected.
+        Assert-True ((Find-Element 'Disconnected').matchCount -eq 0) 'a database carried its own connection status'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 400
+    }
+
     Test-UI 'a workspace can gain another database' {
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 500

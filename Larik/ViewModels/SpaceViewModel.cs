@@ -6,24 +6,35 @@ using Microsoft.UI.Xaml.Media;
 namespace Larik.ViewModels;
 
 /// <summary>
-/// A space is a workspace: it groups related databases and owns the tabs opened against them.
-/// The space's active database supplies the connection context shown in the rail and status bar.
+/// A space is a workspace with exactly one connection. That connection exposes several databases;
+/// the space's active database supplies the query context shown in the rail, toolbar and status bar.
 /// </summary>
 public partial class SpaceViewModel : ObservableObject
 {
-    public SpaceViewModel(string id, string name, string colorHex)
+    public SpaceViewModel(string id, string name, string colorHex, ConnectionViewModel connection)
     {
         Id = id;
         ColorHex = colorHex;
         AccentBrush = StudioColors.Brush(colorHex);
         ActiveTintBrush = StudioColors.Tint(colorHex);
         Name = name;
+        Connection = connection;
+
+        // Connection state belongs to the space, so its changes surface as space changes.
+        Connection.PropertyChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(StatusText));
+            OnPropertyChanged(nameof(StatusBrush));
+            OnPropertyChanged(nameof(ConnectionLine));
+            OnPropertyChanged(nameof(Driver));
+        };
     }
 
     public string Id { get; }
     public string ColorHex { get; }
     public SolidColorBrush AccentBrush { get; }
     public SolidColorBrush ActiveTintBrush { get; }
+    public ConnectionViewModel Connection { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TooltipText))]
@@ -34,12 +45,7 @@ public partial class SpaceViewModel : ObservableObject
     public partial bool IsActive { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ConnectionLine))]
-    [NotifyPropertyChangedFor(nameof(StatusText))]
-    [NotifyPropertyChangedFor(nameof(StatusBrush))]
     [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
-    [NotifyPropertyChangedFor(nameof(Driver))]
-    [NotifyPropertyChangedFor(nameof(DatabaseCountLabel))]
     public partial DatabaseViewModel? ActiveDatabase { get; set; }
 
     public ObservableCollection<DatabaseViewModel> Databases { get; } = [];
@@ -50,20 +56,17 @@ public partial class SpaceViewModel : ObservableObject
 
     public TabViewModel? LastActiveTab { get; set; }
 
-    public string Driver => ActiveDatabase?.Driver ?? "mssql";
+    public string Driver => Connection.Driver;
 
     public string DatabaseCountLabel => Databases.Count == 1 ? "1 database" : $"{Databases.Count} databases";
 
-    public string TooltipText => $"{Name} — {DatabaseCountLabel}";
+    public string TooltipText => $"{Name} — {Connection.Endpoint} — {DatabaseCountLabel}";
 
-    public string StatusText => ActiveDatabase?.StatusText ?? "Disconnected";
+    public string StatusText => Connection.StatusText;
 
-    public SolidColorBrush StatusBrush => ActiveDatabase?.StatusBrush ?? StudioColors.Warning;
+    public SolidColorBrush StatusBrush => Connection.StatusBrush;
 
-    /// <summary>Status is colour AND text — never colour alone.</summary>
-    public string ConnectionLine => ActiveDatabase is null
-        ? "No database"
-        : $"{ActiveDatabase.DriverLabel} · {ActiveDatabase.Host}";
+    public string ConnectionLine => Connection.StatusLine;
 
     public string ConnectedDatabaseText => ActiveDatabase?.Name ?? "no database";
 
