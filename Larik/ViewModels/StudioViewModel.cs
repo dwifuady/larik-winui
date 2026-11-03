@@ -353,13 +353,8 @@ public partial class StudioViewModel : ObservableObject
         SelectTab(space.Tabs[Math.Clamp(index, 0, space.Tabs.Count - 1)]);
     }
 
-    public void UpdateCaret(string text, int position)
-    {
-        var before = text.Length == 0 ? string.Empty : text[..Math.Clamp(position, 0, text.Length)];
-        var line = before.Count(c => c == '\n') + 1;
-        var column = before.Length - (before.LastIndexOf('\n') + 1) + 1;
-        CaretText = $"Ln {line}, Col {column}";
-    }
+    /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
+    public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
 
     private async Task ConnectSpaceAsync(SpaceViewModel space)
     {

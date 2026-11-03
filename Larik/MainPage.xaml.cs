@@ -1,35 +1,29 @@
 using Larik.Data;
+using Larik.Editor;
 using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
 using Microsoft.UI.Composition.SystemBackdrops;
-using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
-
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
-using Windows.System;
 
 namespace Larik;
 
 /// <summary>
-/// The studio shell. View state lives in <see cref="StudioViewModel"/>; caret geometry,
-/// the snippet popup, and the results grid are view concerns handled here.
+/// The studio shell. View state lives in <see cref="StudioViewModel"/>; the editor is reached only
+/// through <see cref="IEditorSurface"/>; the results grid is a view concern handled here.
 /// </summary>
 public sealed partial class MainPage : Page
 {
-    private const double PopupWidth = 392;
-    private const double PopupMaxHeight = 268;
     private const int MaxRenderedRows = 500;
 
-    private bool _suppressEditorEvents;
     private bool _hooked;
-    private IReadOnlyList<CompletionItem>? _completions;
-    private int _selectedIndex = -1;
+    private readonly StudioCompletionSource _completionSource;
 
     private bool _draggingSplitter;
     private double _splitStartY;
@@ -47,6 +41,8 @@ public sealed partial class MainPage : Page
         InitializeComponent();
         Loaded += OnLoaded;
 
+        _completionSource = new StudioCompletionSource(() => ViewModel.Snippets, () => ViewModel.Tables);
+
         // The shell is drawn on Mica: only real surfaces (cards, popup) paint over it.
         // Without Mica support the backdrop is blank, so fall back to the design's solid background.
         if (!MicaController.IsSupported())
@@ -60,6 +56,13 @@ public sealed partial class MainPage : Page
         if (!_hooked)
         {
             _hooked = true;
+
+            // The shell only ever talks to the surface through the interface.
+            SqlEditor.CompletionSource = _completionSource;
+            SqlEditor.TextChanged += SqlEditor_TextChanged;
+            SqlEditor.CaretChanged += SqlEditor_CaretChanged;
+            SqlEditor.CommandRequested += SqlEditor_CommandRequested;
+
             ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
             ViewModel.ResultChanged += (_, _) => RenderResults();
         }
@@ -69,300 +72,46 @@ public sealed partial class MainPage : Page
 
         SyncEditorFromActiveTab();
         RenderResults();
-        Editor.Focus(FocusState.Programmatic);
+        SqlEditor.FocusEditor();
     }
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) =>
         ViewModel.ToggleSidebarCommand.Execute(null);
 
-    // ---------------------------------------------------------------- editor <-> model
-
-    private string GetEditorText()
-    {
-        Editor.Document.GetText(TextGetOptions.None, out var text);
-        return text.EndsWith('\r') ? text[..^1] : text;
-    }
+    // ---------------------------------------------------------------- editor surface
 
     private void SyncEditorFromActiveTab()
     {
-        _suppressEditorEvents = true;
-        try
-        {
-            Editor.Document.SetText(TextSetOptions.None, ViewModel.ActiveTab?.Content ?? string.Empty);
-            Editor.Document.Selection.SetRange(0, 0);
-        }
-        finally
-        {
-            _suppressEditorEvents = false;
-        }
-
-        HideCompletions();
-        ViewModel.UpdateCaret(GetEditorText(), Editor.Document.Selection.StartPosition);
+        SqlEditor.Text = ViewModel.ActiveTab?.Content ?? string.Empty;
     }
 
-    private void Editor_TextChanged(object sender, RoutedEventArgs e)
+    private void SqlEditor_TextChanged(object? sender, EventArgs e)
     {
-        if (_suppressEditorEvents)
-        {
-            return;
-        }
-
-        var text = GetEditorText();
         if (ViewModel.ActiveTab is not null)
         {
-            ViewModel.ActiveTab.Content = text;
-        }
-
-        ViewModel.UpdateCaret(text, Editor.Document.Selection.StartPosition);
-        UpdateCompletions();
-    }
-
-    private void Editor_SelectionChanged(object sender, RoutedEventArgs e)
-    {
-        if (_suppressEditorEvents)
-        {
-            return;
-        }
-
-        var selection = Editor.Document.Selection;
-        if (selection.StartPosition != selection.EndPosition)
-        {
-            HideCompletions();
-        }
-
-        ViewModel.UpdateCaret(GetEditorText(), selection.StartPosition);
-    }
-
-    private void Editor_LostFocus(object sender, RoutedEventArgs e) => HideCompletions();
-
-    // ---------------------------------------------------------------- completion popup
-
-    private void UpdateCompletions()
-    {
-        if (_suppressEditorEvents || ViewModel.ActiveTab is null)
-        {
-            return;
-        }
-
-        var text = GetEditorText();
-        var caret = Editor.Document.Selection.StartPosition;
-        var (_, word, qualifier) = CompletionEngine.ExtractContext(text, caret);
-
-        if (word.Length == 0)
-        {
-            HideCompletions();
-            return;
-        }
-
-        var items = CompletionEngine.Suggest(
-            word,
-            qualifier,
-            ViewModel.Snippets,
-            ViewModel.Tables,
-            clipboard: string.Empty);
-
-        if (items.Count == 0)
-        {
-            HideCompletions();
-            return;
-        }
-
-        _completions = items;
-        CompletionList.ItemsSource = items;
-        SelectCompletion(0);
-        CompletionPopup.IsOpen = true;
-        PositionCompletions();
-    }
-
-    private void PositionCompletions()
-    {
-        if (XamlRoot?.Content is not FrameworkElement root)
-        {
-            return;
-        }
-
-        Editor.Document.Selection.GetRect(PointOptions.ClientCoordinates, out var caretRect, out _);
-        var origin = Editor
-            .TransformToVisual(root)
-            .TransformPoint(new Point(caretRect.X, caretRect.Y + caretRect.Height + 4));
-
-        CompletionPopup.Child.Measure(new Size(PopupWidth, double.PositiveInfinity));
-        var height = Math.Min(CompletionPopup.Child.DesiredSize.Height, PopupMaxHeight);
-
-        var x = Math.Clamp(origin.X, 8, Math.Max(8, root.ActualWidth - PopupWidth - 8));
-        var y = origin.Y;
-        if (y + height > root.ActualHeight - 8)
-        {
-            y = Math.Max(8, origin.Y - height - caretRect.Height - 8);
-        }
-
-        CompletionPopup.HorizontalOffset = x;
-        CompletionPopup.VerticalOffset = y;
-    }
-
-    private void SelectCompletion(int index)
-    {
-        if (_completions is null || _completions.Count == 0)
-        {
-            return;
-        }
-
-        index = Math.Clamp(index, 0, _completions.Count - 1);
-
-        for (var i = 0; i < _completions.Count; i++)
-        {
-            _completions[i].IsSelected = i == index;
-        }
-
-        _selectedIndex = index;
-        CompletionList.ScrollIntoView(_completions[index]);
-    }
-
-    private void HideCompletions()
-    {
-        CompletionPopup.IsOpen = false;
-        CompletionList.ItemsSource = null;
-        _completions = null;
-        _selectedIndex = -1;
-    }
-
-    private void AcceptCompletion()
-    {
-        if (_completions is null || _selectedIndex < 0)
-        {
-            return;
-        }
-
-        var item = _completions[_selectedIndex];
-        var text = GetEditorText();
-        var caret = Editor.Document.Selection.StartPosition;
-        var (start, _, _) = CompletionEngine.ExtractContext(text, caret);
-
-        _suppressEditorEvents = true;
-        try
-        {
-            var selection = Editor.Document.Selection;
-            selection.SetRange(start, caret);
-            selection.Text = item.InsertText;
-
-            var placeholder = item.Selection;
-            if (placeholder is { } span)
-            {
-                selection.SetRange(start + span.Start, start + span.Start + span.Length);
-            }
-            else
-            {
-                var caretAt = item.CaretOffset >= 0
-                    ? start + item.CaretOffset
-                    : start + item.InsertText.Length;
-                selection.SetRange(caretAt, caretAt);
-            }
-        }
-        finally
-        {
-            _suppressEditorEvents = false;
-        }
-
-        var updated = GetEditorText();
-        if (ViewModel.ActiveTab is not null)
-        {
-            ViewModel.ActiveTab.Content = updated;
-        }
-
-        ViewModel.UpdateCaret(updated, Editor.Document.Selection.StartPosition);
-        HideCompletions();
-        Editor.Focus(FocusState.Programmatic);
-    }
-
-    private void Editor_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        // RichEditBox swallows Ctrl+Enter, so run from here rather than the page accelerator.
-        if (e.Key is VirtualKey.Enter or VirtualKey.F5 && (e.Key == VirtualKey.F5 || IsKeyDown(VirtualKey.Control)))
-        {
-            HideCompletions();
-            ViewModel.RunCommand.Execute(null);
-            e.Handled = true;
-            return;
-        }
-
-        if (CompletionPopup.IsOpen)
-        {
-            switch (e.Key)
-            {
-                case VirtualKey.Tab:
-                case VirtualKey.Enter:
-                    AcceptCompletion();
-                    e.Handled = true;
-                    return;
-                case VirtualKey.Down:
-                    SelectCompletion(_selectedIndex + 1);
-                    e.Handled = true;
-                    return;
-                case VirtualKey.Up:
-                    SelectCompletion(_selectedIndex - 1);
-                    e.Handled = true;
-                    return;
-                case VirtualKey.Escape:
-                    HideCompletions();
-                    e.Handled = true;
-                    return;
-            }
-
-            return;
-        }
-
-        // Shell shortcuts must win over RichEditBox's own handling (Ctrl+B is bold in rich edit).
-        if (IsKeyDown(VirtualKey.Control) && !IsKeyDown(VirtualKey.Shift) && !IsKeyDown(VirtualKey.Menu))
-        {
-            switch (e.Key)
-            {
-                case VirtualKey.B:
-                    ViewModel.ToggleSidebarCommand.Execute(null);
-                    e.Handled = true;
-                    return;
-                case VirtualKey.T:
-                    ViewModel.NewTabCommand.Execute(null);
-                    e.Handled = true;
-                    return;
-            }
-        }
-
-        // Tab keeps focus in the editor and indents; completion accept owns Tab while open.
-        if (e.Key == VirtualKey.Tab)
-        {
-            _suppressEditorEvents = true;
-            try
-            {
-                Editor.Document.Selection.Text = "    ";
-            }
-            finally
-            {
-                _suppressEditorEvents = false;
-            }
-
-            var text = GetEditorText();
-            if (ViewModel.ActiveTab is not null)
-            {
-                ViewModel.ActiveTab.Content = text;
-            }
-
-            ViewModel.UpdateCaret(text, Editor.Document.Selection.StartPosition);
-            e.Handled = true;
+            ViewModel.ActiveTab.Content = SqlEditor.Text;
         }
     }
 
-    private void CompletionList_ItemClick(object sender, ItemClickEventArgs e)
+    private void SqlEditor_CaretChanged(object? sender, EventArgs e)
     {
-        if (e.ClickedItem is not CompletionItem item || _completions is null)
-        {
-            return;
-        }
+        var caret = SqlEditor.Caret;
+        ViewModel.SetCaret(caret.Line, caret.Column);
+    }
 
-        var index = _completions.ToList().IndexOf(item);
-        if (index >= 0)
+    private void SqlEditor_CommandRequested(object? sender, EditorCommandKind command)
+    {
+        switch (command)
         {
-            SelectCompletion(index);
-            AcceptCompletion();
+            case EditorCommandKind.RunQuery:
+                ViewModel.RunCommand.Execute(null);
+                break;
+            case EditorCommandKind.NewTab:
+                ViewModel.NewTabCommand.Execute(null);
+                break;
+            case EditorCommandKind.ToggleSidebar:
+                ViewModel.ToggleSidebarCommand.Execute(null);
+                break;
         }
     }
 
@@ -823,11 +572,6 @@ public sealed partial class MainPage : Page
         ViewModel.RunCommand.Execute(null);
         args.Handled = true;
     }
-
-    private static bool IsKeyDown(VirtualKey key) =>
-        InputKeyboardSource
-            .GetKeyStateForCurrentThread(key)
-            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     private void NewTabAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {

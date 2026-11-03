@@ -21,8 +21,10 @@ C:\dev\larik-winui\
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
 │   │   └── StudioColors.cs       # space palette + active-tab tint
 │   ├── ViewModels/               # Studio / Space / Connection / Database / Tab
+│   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
+│   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
-│   └── MainPage.xaml(.cs)        # shell, caret-anchored completion popup, results grid, connection dialog
+│   └── MainPage.xaml(.cs)        # shell, results grid, connection dialog
 └── ui-tests.ps1                  # UI Automation checks (incl. a real SQL Server round trip)
 ```
 
@@ -101,6 +103,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   right-aligned, space-coloured rule under the header.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
+- **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
+  (text, caret, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`, `FocusEditor`),
+  so the editor can be swapped for a WebView2/Monaco island without changing the rail, tabs,
+  spaces, toolbar or results. `Services/StudioCompletionSource.cs` bridges snippets + schema into
+  whichever surface is mounted.
 - **Native chrome**: the window uses a `MicaBackdrop`; the rail, toolbar and status bar are
   transparent so they read as one chrome surface with the title bar, and only real content sits on
   Fluent card brushes (`CardBackgroundFillColorDefaultBrush`). Falls back to the design's solid
@@ -132,3 +139,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - MVVM Toolkit `[ObservableProperty]` on fields warns (MVVMTK0045) under WinRT/AOT; partial
   properties keep the build warning-free and AOT-ready.
+- `winapp ui` synthetic input only reaches the app while it owns the foreground, and Windows blocks
+  a background process from stealing focus. The test harness presses a synthetic Alt before
+  `SetForegroundWindow` to unlock it; without that, clicks and keys land in whatever window has focus
+  (the IDE), while UIA `invoke`/`get-value` still work — a confusing half-passing suite.

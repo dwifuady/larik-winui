@@ -49,13 +49,16 @@ function Assert-True {
 
 function Get-EditorText { (Get-UiJson @('get-value', 'Editor', '--json')).text }
 
-# winapp ui refuses synthetic input while another window owns the foreground.
+# Synthetic input only reaches the app while it owns the foreground. Windows blocks a background
+# process from stealing focus, so a synthetic Alt press unlocks SetForegroundWindow first.
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class LarikWin32 {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 }
 "@
 
@@ -65,7 +68,12 @@ function Focus-App {
     if (-not $window) { return }
     $handle = [IntPtr]([int64](@($window.hwnd) | Select-Object -First 1))
     [LarikWin32]::ShowWindow($handle, 9) | Out-Null
-    [LarikWin32]::SetForegroundWindow($handle) | Out-Null
+    if ([LarikWin32]::GetForegroundWindow() -ne $handle) {
+        [LarikWin32]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+        [LarikWin32]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 120
+        [LarikWin32]::SetForegroundWindow($handle) | Out-Null
+    }
     Start-Sleep -Milliseconds 400
 }
 function Find-Element {

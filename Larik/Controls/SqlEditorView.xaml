@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Larik.Controls.SqlEditorView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:Larik.Models"
+    mc:Ignorable="d">
+
+    <!--  One implementation of IEditorSurface: RichEditBox + a caret-anchored suggestion popup.  -->
+    <Grid>
+        <Border
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8">
+            <RichEditBox
+                x:Name="Editor"
+                Padding="14,12,14,12"
+                AcceptsReturn="True"
+                AutomationProperties.Name="SQL editor"
+                Background="Transparent"
+                BorderThickness="0"
+                DisabledFormattingAccelerators="All"
+                FontFamily="{StaticResource StudioMonoFont}"
+                FontSize="13"
+                IsSpellCheckEnabled="False"
+                IsTextPredictionEnabled="False"
+                LostFocus="Editor_LostFocus"
+                PlaceholderText="Type SQL — try  sel  then Tab"
+                PreviewKeyDown="Editor_PreviewKeyDown"
+                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                SelectionChanged="Editor_SelectionChanged"
+                SelectionHighlightColor="{ThemeResource EditorSelectionBrush}"
+                TextChanged="Editor_TextChanged"
+                TextWrapping="NoWrap">
+                <!--
+                    The control template paints its own fill on top of the card, including a
+                    different fill when focused. Let the card surface own the background instead.
+                -->
+                <RichEditBox.Resources>
+                    <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent" />
+                </RichEditBox.Resources>
+            </RichEditBox>
+        </Border>
+
+        <!--  Completion popup (caret-anchored)  -->
+        <Popup
+            x:Name="CompletionPopup"
+            IsLightDismissEnabled="False"
+            ShouldConstrainToRootBounds="True">
+            <Border
+                Width="392"
+                MaxHeight="268"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <ListView
+                    x:Name="CompletionList"
+                    Padding="4"
+                    AutomationProperties.Name="SQL suggestions"
+                    IsItemClickEnabled="True"
+                    IsTabStop="False"
+                    ItemClick="CompletionList_ItemClick"
+                    SelectionMode="None"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:CompletionItem">
+                            <Grid
+                                Height="32"
+                                Padding="8,0"
+                                AutomationProperties.HelpText="{x:Bind Detail}"
+                                AutomationProperties.Name="{x:Bind Label}"
+                                Background="{x:Bind HighlightBrush, Mode=OneWay}"
+                                ColumnSpacing="8"
+                                CornerRadius="4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontSize="9"
+                                    FontWeight="SemiBold"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="{x:Bind KindLabel}" />
+
+                                <TextBlock
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource StudioMonoFont}"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                    Text="{x:Bind Label}" />
+
+                                <TextBlock
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    FontSize="10"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="{x:Bind Detail}"
+                                    TextTrimming="CharacterEllipsis" />
+
+                                <TextBlock
+                                    Grid.Column="3"
+                                    VerticalAlignment="Center"
+                                    FontSize="9"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="Tab" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
+        </Popup>
+    </Grid>
+</UserControl>
