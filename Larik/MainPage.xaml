@@ -41,37 +41,20 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!--  Pane header: caption-height strip so the rail runs to the window edge  -->
-                <Grid Grid.Row="0" Padding="8,0" ColumnSpacing="4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-
-                    <Button
-                        Width="36"
-                        Height="32"
-                        VerticalAlignment="Center"
-                        AutomationProperties.Name="Toggle sidebar"
-                        Command="{x:Bind ViewModel.ToggleSidebarCommand}"
-                        Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="Toggle sidebar (Ctrl+B)">
-                        <FontIcon FontSize="14" Glyph="&#xE700;" />
-                    </Button>
-
-                    <!--  Workspace switcher, beside the pane toggle  -->
+                <!--  Workspace switcher: full rail width; the pane toggle now lives in the title bar  -->
+                <Grid Grid.Row="0" Padding="8,0">
                     <Button
                         x:Name="SpaceSwitcherButton"
-                        Grid.Column="1"
                         Height="38"
-                        Padding="8,0"
+                        Padding="10,0"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
                         VerticalAlignment="Center"
                         AutomationProperties.Name="Switch workspace"
                         Click="SpaceSwitcher_Click"
-                        HorizontalContentAlignment="Stretch"
                         Style="{StaticResource StudioIconButtonStyle}"
                         ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.TooltipText, Mode=OneWay}">
-                        <Grid ColumnSpacing="6">
+                        <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -397,7 +380,7 @@
                 Grid.Row="0"
                 Title="Larik SQL Studio"
                 IsBackButtonVisible="False"
-                IsPaneToggleButtonVisible="{x:Bind ViewModel.IsSidebarCollapsed, Mode=OneWay}"
+                IsPaneToggleButtonVisible="True"
                 PaneToggleRequested="AppTitleBar_PaneToggleRequested">
                 <TitleBar.IconSource>
                     <ImageIconSource ImageSource="Assets/AppIcon.ico" />

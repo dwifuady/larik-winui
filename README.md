@@ -99,7 +99,8 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 ## What works in this slice
 
 - **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
-  database subtitle revealed on hover/active, close button, Ctrl+T for a new query.
+  database subtitle revealed on hover/active, close button, Ctrl+T for a new query. The workspace
+  switcher spans the full rail width; the sidebar toggle lives in the title bar (Ctrl+B also works).
 - **Workspaces, connections and databases**: one space owns exactly one connection; that
   connection exposes several databases. The rail's top strip carries the workspace switcher, whose
   chip shows the workspace name and its connection state (dot **and** `Connected`/`Disconnected`) —

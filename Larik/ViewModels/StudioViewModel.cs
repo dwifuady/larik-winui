@@ -54,8 +54,6 @@ public partial class StudioViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SidebarVisibility))]
-    [NotifyPropertyChangedFor(nameof(SidebarToggleGlyph))]
-    [NotifyPropertyChangedFor(nameof(IsSidebarCollapsed))]
     public partial bool IsSidebarOpen { get; set; }
 
     [ObservableProperty]
@@ -81,11 +79,6 @@ public partial class StudioViewModel : ObservableObject
     public partial bool IsBusy { get; set; }
 
     public Visibility SidebarVisibility => IsSidebarOpen ? Visibility.Visible : Visibility.Collapsed;
-
-    /// <summary>When the rail is hidden the caption shows its own pane toggle, so the action stays reachable.</summary>
-    public bool IsSidebarCollapsed => !IsSidebarOpen;
-
-    public string SidebarToggleGlyph => IsSidebarOpen ? "\uE8A0" : "\uE89F";
 
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 

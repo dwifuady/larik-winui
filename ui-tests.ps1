@@ -160,6 +160,12 @@ try {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'workspace tab is not exposed'
     }
 
+    Test-UI 'the workspace switcher spans the rail' {
+        $switcher = @((Find-Element 'Switch workspace').matches)[0]
+        Assert-True ($null -ne $switcher) 'the workspace switcher was not found'
+        Assert-True ($switcher.width -ge 200) "the workspace switcher is only $($switcher.width)px wide"
+    }
+
     Test-UI 'the workspace indicator shows every workspace and switches' {
         Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'indicator does not show the active workspace'
         Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -gt 0) 'indicator does not show every workspace'
