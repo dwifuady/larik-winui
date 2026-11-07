@@ -18,6 +18,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         ProviderId = providerId;
         Profile = profile;
         Provider = DatabaseProviderCatalog.Find(providerId);
+        SecretKeys = CaptureSecretKeys(Provider);
     }
 
     public string ProviderId { get; private set; }
@@ -25,6 +26,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     public ConnectionProfile Profile { get; private set; }
 
     public IDatabaseProvider? Provider { get; private set; }
+
+    /// <summary>Password field keys captured while the provider is loaded; never persisted.</summary>
+    public IReadOnlySet<string> SecretKeys { get; private set; }
 
     public string ProviderName => Provider?.DisplayName ?? ProviderId;
 
@@ -146,6 +150,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         ProviderId = providerId;
         Profile = profile;
         Provider = DatabaseProviderCatalog.Find(providerId);
+        SecretKeys = CaptureSecretKeys(Provider);
 
         OnPropertyChanged(nameof(ProviderId));
         OnPropertyChanged(nameof(Profile));
@@ -164,6 +169,13 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
             _session = null;
         }
     }
+
+    private static IReadOnlySet<string> CaptureSecretKeys(IDatabaseProvider? provider) =>
+        provider?.Settings
+            .Where(setting => setting.Kind == ProviderSettingKind.Password)
+            .Select(setting => setting.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)
+        ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private IDatabaseConnection RequireSession() =>
         _session ?? throw new InvalidOperationException("Not connected — connect the workspace first.");

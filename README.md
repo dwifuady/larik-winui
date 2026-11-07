@@ -20,6 +20,7 @@ C:\dev\larik-winui\
 │   │   ├── CompletionEngine.cs   # clause-aware completion, ${cursor}/${1:placeholder} expansion
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
 │   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, app_state (no passwords)
+│   │   ├── SecretStore.cs        # Windows Credential Manager for provider password fields
 │   │   └── StudioColors.cs       # space palette + active-tab tint
 │   ├── ViewModels/               # Studio / Space / Connection / Database / Tab
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
@@ -163,8 +164,9 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   same model as `src-tauri/src/storage` — so spaces, connection profiles (non-secret settings),
   tabs and their SQL survive a restart. WAL mode, foreign keys with cascade deletes, schema
   versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once. Spaces still
-  start disconnected; provider-declared password fields are never written, so SQL-auth
-  connections re-prompt after a restart. Corrupt state falls back to the seeded spaces.
+  start disconnected. Provider-declared password fields are kept in Windows Credential Manager
+  (never in SQLite), so SQL-auth connections reconnect after a restart without re-entering the
+  password. Corrupt state falls back to the seeded spaces.
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
@@ -196,7 +198,6 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Gap | Why / next step |
 |---|---|
 | **No syntax highlighting** | `RichEditBox` is plain text here. Next: format ranges on a debounce (`ITextCharacterFormat`), or host Monaco in WebView2 and keep the native shell. |
-| **Secrets are memory-only** | Connection profiles persist without provider-declared password fields. Next: Windows Credential Manager (what `keyring` uses in the Tauri app) or DPAPI, instead of keeping them in memory. |
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |

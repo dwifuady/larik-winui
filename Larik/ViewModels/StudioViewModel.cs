@@ -187,6 +187,7 @@ public partial class StudioViewModel : ObservableObject
 
         space.Tabs.Add(new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty));
 
+        PersistSecrets(space);
         TrackSpace(space);
         Spaces.Add(space);
         SelectSpace(space);
@@ -202,7 +203,16 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
+        var previousProvider = ActiveSpace.Connection.Provider;
+        var previousProviderId = ActiveSpace.Connection.ProviderId;
+
         await ActiveSpace.Connection.ReconfigureAsync(providerId, profile);
+        if (!string.Equals(previousProviderId, providerId, StringComparison.OrdinalIgnoreCase))
+        {
+            DeleteSecrets(ActiveSpace, previousProvider);
+        }
+
+        PersistSecrets(ActiveSpace);
         _schemaCache.Clear();
         ClearSchema();
         ActiveSpace.UpdateDatabases([]);
@@ -637,16 +647,54 @@ public partial class StudioViewModel : ObservableObject
     };
 
     /// <summary>The provider's declared secrets never reach the state file.</summary>
-    private static Dictionary<string, string> VisibleProfile(ConnectionViewModel connection)
-    {
-        var secrets = connection.Provider?.Settings
-            .Where(setting => setting.Kind == ProviderSettingKind.Password)
-            .Select(setting => setting.Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
-
-        return connection.Profile.Values
-            .Where(pair => !secrets.Contains(pair.Key))
+    private static Dictionary<string, string> VisibleProfile(ConnectionViewModel connection) =>
+        connection.Profile.Values
+            .Where(pair => !connection.SecretKeys.Contains(pair.Key))
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Fills provider-declared password fields from Windows Credential Manager.</summary>
+    private static void LoadSecrets(SpaceViewModel space)
+    {
+        foreach (var key in space.Connection.SecretKeys)
+        {
+            var secret = SecretStore.Read(SecretStore.Target(space.Id, key));
+            if (!string.IsNullOrEmpty(secret))
+            {
+                space.Connection.Profile.Values[key] = secret;
+            }
+        }
+    }
+
+    /// <summary>Writes provider-declared password fields to Windows Credential Manager, never SQLite.</summary>
+    private static void PersistSecrets(SpaceViewModel space)
+    {
+        foreach (var key in space.Connection.SecretKeys)
+        {
+            var target = SecretStore.Target(space.Id, key);
+            var value = space.Connection.Profile.Get(key);
+
+            if (string.IsNullOrEmpty(value))
+            {
+                SecretStore.Delete(target);
+            }
+            else
+            {
+                SecretStore.Save(target, space.Name, value);
+            }
+        }
+    }
+
+    private static void DeleteSecrets(SpaceViewModel space, IDatabaseProvider? provider)
+    {
+        if (provider is null)
+        {
+            return;
+        }
+
+        foreach (var setting in provider.Settings.Where(setting => setting.Kind == ProviderSettingKind.Password))
+        {
+            SecretStore.Delete(SecretStore.Target(space.Id, setting.Key));
+        }
     }
 
     private void Restore(StudioState state)
@@ -691,6 +739,7 @@ public partial class StudioViewModel : ObservableObject
             }
 
             space.LastActiveTab = space.Tabs.FirstOrDefault(tab => tab.Id == spaceState.ActiveTabId) ?? space.Tabs[0];
+            LoadSecrets(space);
             TrackSpace(space);
             Spaces.Add(space);
         }
@@ -746,6 +795,7 @@ public partial class StudioViewModel : ObservableObject
 
         try
         {
+            LoadSecrets(space);
             await space.Connection.ConnectAsync(_lifetime.Token);
             var databases = await space.Connection.GetDatabasesAsync(_lifetime.Token);
             space.UpdateDatabases(databases);

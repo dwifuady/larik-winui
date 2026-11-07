@@ -30,7 +30,10 @@ public sealed class ProviderSetting
     public bool IsAdvanced { get; init; }
 }
 
-/// <summary>The user's saved values for one connection. Passwords stay in memory only.</summary>
+/// <summary>
+/// The user's saved values for one connection. Provider-declared passwords live in Windows
+/// Credential Manager, not in the SQLite state file.
+/// </summary>
 public sealed class ConnectionProfile
 {
     public required string ProviderId { get; init; }
