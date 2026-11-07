@@ -36,6 +36,7 @@ public sealed record CompletionRequest(
     IReadOnlyList<SnippetDef> Snippets,
     IReadOnlyList<TableSchema> Tables,
     IReadOnlyList<TableReference> References,
+    IReadOnlyList<TableSchema> Ctes,
     IReadOnlyList<string> Variables,
     IReadOnlyList<string> Databases,
     StatementTarget? Target,
@@ -212,7 +213,18 @@ public static partial class CompletionEngine
     public static IReadOnlyList<TableReference> FindTableReferences(
         string text,
         int caret,
-        IReadOnlyList<TableSchema> tables)
+        IReadOnlyList<TableSchema> tables) =>
+        FindTableReferences(text, caret, tables, []);
+
+    /// <summary>
+    /// Top-level FROM/JOIN references (subquery and CTE bodies are skipped); <paramref name="ctes"/>
+    /// shadow real tables, as they do in SQL.
+    /// </summary>
+    public static IReadOnlyList<TableReference> FindTableReferences(
+        string text,
+        int caret,
+        IReadOnlyList<TableSchema> tables,
+        IReadOnlyList<TableSchema> ctes)
     {
         caret = Math.Clamp(caret, 0, text.Length);
         var start = StatementStart(text, caret);
@@ -221,11 +233,17 @@ public static partial class CompletionEngine
             return [];
         }
 
+        var statement = text[start..caret];
         var references = new List<TableReference>();
-        foreach (Match match in TableReferencePattern().Matches(text[start..caret]))
+        foreach (Match match in TableReferencePattern().Matches(statement))
         {
+            if (DepthAt(statement, match.Index) != 0)
+            {
+                continue;
+            }
+
             var name = NormalizeIdentifier(match.Groups["table"].Value);
-            var table = FindTable(name, tables);
+            var table = FindTable(name, ctes) ?? FindTable(name, tables);
 
             string? alias = null;
             if (match.Groups["alias"].Success)
@@ -242,6 +260,129 @@ public static partial class CompletionEngine
         }
 
         return references;
+    }
+
+    /// <summary>
+    /// CTEs defined by the statement under the caret, with their columns: an explicit
+    /// <c>cte (a, b) AS</c> list, the SELECT aliases of the body, or the source table when the
+    /// body selects <c>*</c> from one table.
+    /// </summary>
+    public static IReadOnlyList<TableSchema> FindCtes(string text, int caret, IReadOnlyList<TableSchema> tables)
+    {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var statement = text[StatementStart(text, caret)..caret];
+
+        var with = WithClausePattern().Match(statement);
+        if (!with.Success)
+        {
+            return [];
+        }
+
+        var ctes = new List<TableSchema>();
+        var index = with.Index + with.Length;
+
+        while (true)
+        {
+            while (index < statement.Length && char.IsWhiteSpace(statement[index]))
+            {
+                index++;
+            }
+
+            var nameStart = index;
+            while (index < statement.Length && (char.IsLetterOrDigit(statement[index]) || statement[index] is '_' or '[' or ']' or '$' or '#' or '@'))
+            {
+                index++;
+            }
+
+            var name = NormalizeIdentifier(statement[nameStart..index]);
+            if (name.Length == 0)
+            {
+                break;
+            }
+
+            while (index < statement.Length && char.IsWhiteSpace(statement[index]))
+            {
+                index++;
+            }
+
+            var explicitColumns = new List<string>();
+            if (index < statement.Length && statement[index] == '(')
+            {
+                var close = statement.IndexOf(')', index);
+                if (close < 0)
+                {
+                    break;
+                }
+
+                explicitColumns = statement[(index + 1)..close]
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(NormalizeIdentifier)
+                    .Where(column => column.Length > 0)
+                    .ToList();
+                index = close + 1;
+
+                while (index < statement.Length && char.IsWhiteSpace(statement[index]))
+                {
+                    index++;
+                }
+            }
+
+            if (index + 1 >= statement.Length ||
+                string.Compare(statement, index, "AS", 0, 2, StringComparison.OrdinalIgnoreCase) != 0)
+            {
+                break;
+            }
+
+            index += 2;
+            while (index < statement.Length && char.IsWhiteSpace(statement[index]))
+            {
+                index++;
+            }
+
+            if (index >= statement.Length || statement[index] != '(')
+            {
+                break;
+            }
+
+            var bodyStart = index + 1;
+            var depth = 1;
+            index = bodyStart;
+            while (index < statement.Length && depth > 0)
+            {
+                if (statement[index] == '(')
+                {
+                    depth++;
+                }
+                else if (statement[index] == ')')
+                {
+                    depth--;
+                }
+
+                index++;
+            }
+
+            if (depth != 0)
+            {
+                // The body is still being typed; earlier CTEs are already usable.
+                break;
+            }
+
+            ctes.Add(BuildCte(name, explicitColumns, statement[bodyStart..(index - 1)], tables));
+
+            while (index < statement.Length && char.IsWhiteSpace(statement[index]))
+            {
+                index++;
+            }
+
+            if (index >= statement.Length || statement[index] != ',')
+            {
+                break;
+            }
+
+            index++;
+        }
+
+        return ctes;
     }
 
     /// <summary>
@@ -328,7 +469,7 @@ public static partial class CompletionEngine
         if (request.Qualifier is not null)
         {
             // alias. or table. -> that table's columns, whatever the clause.
-            var table = ResolveQualifier(request.References, request.Qualifier, request.Tables);
+            var table = ResolveQualifier(request.References, request.Qualifier, request.Tables, request.Ctes);
             IReadOnlyList<TableSchema> sources;
             if (table is not null)
             {
@@ -356,6 +497,7 @@ public static partial class CompletionEngine
                 break;
 
             case CompletionScope.Table:
+                AddCtes(results, request.Ctes, needle);
                 AddTables(results, request, needle);
                 break;
 
@@ -369,6 +511,7 @@ public static partial class CompletionEngine
                 AddVariables(results, request.Variables, needle);
                 AddJoinConditions(results, request, needle);
                 AddScopedColumns(results, request, needle);
+                AddCteColumns(results, request, needle);
                 AddFunctions(results, needle);
                 break;
 
@@ -571,6 +714,50 @@ public static partial class CompletionEngine
                 Kind = CompletionKind.Table,
                 InsertText = table.Name,
             });
+        }
+    }
+
+    private static void AddCtes(List<CompletionItem> results, IReadOnlyList<TableSchema> ctes, string needle)
+    {
+        foreach (var cte in ctes.Where(cte => Matches(cte.Name, needle)))
+        {
+            results.Add(new CompletionItem
+            {
+                Label = cte.Name,
+                Detail = $"CTE · {cte.Columns.Count} columns",
+                Kind = CompletionKind.Cte,
+                InsertText = cte.Name,
+                RankSort = 0,
+            });
+        }
+    }
+
+    /// <summary>Columns of CTEs that the statement has not joined yet (e.g. while typing SELECT).</summary>
+    private static void AddCteColumns(List<CompletionItem> results, CompletionRequest request, string needle)
+    {
+        var referenced = new HashSet<string>(
+            request.References
+                .Where(reference => reference.Table is not null)
+                .Select(reference => reference.Table!.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cte in request.Ctes)
+        {
+            if (referenced.Contains(cte.Name))
+            {
+                continue;
+            }
+
+            foreach (var column in cte.Columns.Where(column => Matches(column, needle)))
+            {
+                results.Add(new CompletionItem
+                {
+                    Label = column,
+                    Detail = $"CTE · {cte.Name}.{column}",
+                    Kind = CompletionKind.Column,
+                    InsertText = column,
+                });
+            }
         }
     }
 
@@ -858,13 +1045,173 @@ public static partial class CompletionEngine
     [GeneratedRegex(@"@[A-Za-z_][\w$#@]*")]
     private static partial Regex VariablePattern();
 
+    [GeneratedRegex(@"^\s*WITH\b", RegexOptions.IgnoreCase)]
+    private static partial Regex WithClausePattern();
+
+    [GeneratedRegex(@"^\s*SELECT\s+(?:DISTINCT\s+)?(?:TOP\s+\d+\s+)?", RegexOptions.IgnoreCase)]
+    private static partial Regex SelectListPattern();
+
+    [GeneratedRegex(@"\bAS\s+(?<alias>\[?[\w$#@]+\]?)\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex SelectAliasPattern();
+
+    [GeneratedRegex(@"^\[?[\w$#@]+\]?(?:\s*\.\s*\[?[\w$#@]+\]?)*$")]
+    private static partial Regex SimpleColumnPattern();
+
     private static int StatementStart(string text, int caret) =>
         caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
+
+    /// <summary>Columns a CTE exposes, best effort from its body when no column list is given.</summary>
+    private static TableSchema BuildCte(
+        string name,
+        IReadOnlyList<string> explicitColumns,
+        string body,
+        IReadOnlyList<TableSchema> tables)
+    {
+        if (explicitColumns.Count > 0)
+        {
+            return new TableSchema { Name = name, Columns = explicitColumns };
+        }
+
+        var source = FindTableReferences(body, body.Length, tables)
+            .FirstOrDefault(reference => reference.Table is not null)
+            ?.Table;
+
+        var columns = SelectListColumns(body);
+        return new TableSchema
+        {
+            Name = name,
+            Columns = columns.Count > 0 ? columns : source?.Columns ?? [],
+        };
+    }
+
+    private static IReadOnlyList<string> SelectListColumns(string body)
+    {
+        var select = SelectListPattern().Match(body);
+        if (!select.Success)
+        {
+            return [];
+        }
+
+        var from = TopLevelKeyword(body, "FROM", select.Index + select.Length);
+        if (from < 0)
+        {
+            return [];
+        }
+
+        var columns = new List<string>();
+        foreach (var item in SplitTopLevel(body[(select.Index + select.Length)..from], ','))
+        {
+            var expression = item.Trim();
+            if (expression.Length == 0)
+            {
+                continue;
+            }
+
+            // A wildcard means the real column set is the source table; let the caller use it.
+            if (expression == "*" || expression.EndsWith(".*", StringComparison.Ordinal))
+            {
+                return [];
+            }
+
+            var alias = SelectAliasPattern().Match(expression);
+            if (alias.Success)
+            {
+                columns.Add(NormalizeIdentifier(alias.Groups["alias"].Value));
+                continue;
+            }
+
+            if (SimpleColumnPattern().IsMatch(expression))
+            {
+                columns.Add(NormalizeIdentifier(expression));
+            }
+        }
+
+        return columns;
+    }
+
+    private static IEnumerable<string> SplitTopLevel(string text, char separator)
+    {
+        var depth = 0;
+        var start = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            switch (text[index])
+            {
+                case '(':
+                    depth++;
+                    break;
+                case ')':
+                    depth = Math.Max(0, depth - 1);
+                    break;
+                default:
+                    if (text[index] == separator && depth == 0)
+                    {
+                        yield return text[start..index];
+                        start = index + 1;
+                    }
+
+                    break;
+            }
+        }
+
+        yield return text[start..];
+    }
+
+    private static int TopLevelKeyword(string text, string keyword, int start)
+    {
+        var depth = 0;
+        for (var index = start; index < text.Length; index++)
+        {
+            if (text[index] == '(')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[index] == ')')
+            {
+                depth = Math.Max(0, depth - 1);
+                continue;
+            }
+
+            if (depth != 0 ||
+                (index > 0 && IsWordChar(text[index - 1])) ||
+                index + keyword.Length > text.Length ||
+                string.Compare(text, index, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0 ||
+                (index + keyword.Length < text.Length && IsWordChar(text[index + keyword.Length])))
+            {
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int DepthAt(string text, int index)
+    {
+        var depth = 0;
+        for (var cursor = 0; cursor < index && cursor < text.Length; cursor++)
+        {
+            if (text[cursor] == '(')
+            {
+                depth++;
+            }
+            else if (text[cursor] == ')')
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+        }
+
+        return depth;
+    }
 
     private static TableSchema? ResolveQualifier(
         IReadOnlyList<TableReference> references,
         string qualifier,
-        IReadOnlyList<TableSchema> tables)
+        IReadOnlyList<TableSchema> tables,
+        IReadOnlyList<TableSchema> ctes)
     {
         foreach (var reference in references)
         {
@@ -875,7 +1222,7 @@ public static partial class CompletionEngine
             }
         }
 
-        return FindTable(qualifier, tables);
+        return FindTable(qualifier, ctes) ?? FindTable(qualifier, tables);
     }
 
     private static TableSchema? FindTable(string name, IReadOnlyList<TableSchema> tables) =>

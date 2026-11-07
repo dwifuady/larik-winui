@@ -21,6 +21,7 @@ public sealed class StudioCompletionSource(
         var (_, word, qualifier) = CompletionEngine.ExtractContext(text, caret);
         var (scope, keyword) = CompletionEngine.DetectScope(text, caret);
         var schema = tables();
+        var ctes = CompletionEngine.FindCtes(text, caret, schema);
 
         return CompletionEngine.Suggest(new CompletionRequest(
             word,
@@ -29,7 +30,8 @@ public sealed class StudioCompletionSource(
             keyword,
             snippets(),
             schema,
-            CompletionEngine.FindTableReferences(text, caret, schema),
+            CompletionEngine.FindTableReferences(text, caret, schema, ctes),
+            ctes,
             CompletionEngine.DeclaredVariables(text, caret),
             databases(),
             CompletionEngine.FindTarget(text, caret, schema),

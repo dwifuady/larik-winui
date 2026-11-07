@@ -285,6 +285,27 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'CTE names are suggested after FROM' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'with recent as (select * from orders) select * from rec' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'recent').matchCount -gt 0) 'CTE is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText).EndsWith('from recent')) "CTE was not inserted: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'CTE columns complete through their name' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'with recent as (select * from orders) select * from recent r where r.' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'customer_id').matchCount -gt 0) 'CTE column is not suggested'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
     Test-UI 'switching database updates the rail, status bar and tab' {
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 600

@@ -14,6 +14,7 @@ public enum CompletionKind
     Join,
     Database,
     Variable,
+    Cte,
 }
 
 /// <summary>A SQL snippet: a short trigger that expands to a statement.</summary>
@@ -63,6 +64,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Function => "FN",
         CompletionKind.Database => "DB",
         CompletionKind.Variable => "VAR",
+        CompletionKind.Cte => "CTE",
         _ => "JN",
     };
 
@@ -74,6 +76,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Table => 1,
         CompletionKind.Database => 1,
         CompletionKind.Variable => 1,
+        CompletionKind.Cte => 1,
         CompletionKind.Column => 2,
         CompletionKind.Function => 3,
         _ => 4,
