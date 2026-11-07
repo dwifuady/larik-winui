@@ -35,6 +35,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             Label = "Port",
             Kind = ProviderSettingKind.Number,
             Placeholder = "optional, e.g. 1433",
+            IsAdvanced = true,
         },
         new() { Key = "database", Label = "Initial database", Placeholder = "optional, e.g. master" },
         new() { Key = "user", Label = "User", Placeholder = "leave empty for integrated security" },
@@ -45,6 +46,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             Label = "Encrypt",
             Kind = ProviderSettingKind.Boolean,
             DefaultValue = "true",
+            IsAdvanced = true,
         },
         new()
         {
@@ -53,6 +55,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             Kind = ProviderSettingKind.Boolean,
             DefaultValue = "true",
             Hint = "Needed for local/dev servers with self-signed certificates.",
+            IsAdvanced = true,
         },
         new()
         {
@@ -60,6 +63,7 @@ public sealed class SqlServerProvider : IDatabaseProvider
             Label = "Connect timeout (s)",
             Kind = ProviderSettingKind.Number,
             DefaultValue = "8",
+            IsAdvanced = true,
         },
     ];
 

@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.UI.ViewManagement;
 
@@ -306,7 +307,8 @@ public sealed partial class MainPage : Page
     }
 
     private void SpaceSwitcher_Click(object sender, RoutedEventArgs e)
-    {        var flyout = new MenuFlyout();
+    {
+        var flyout = new MenuFlyout();
 
         // The connection belongs to the active workspace, so its actions live with the workspace menu.
         var toggle = new MenuFlyoutItem
@@ -372,13 +374,7 @@ public sealed partial class MainPage : Page
             Text = "New workspace",
             Icon = new FontIcon { Glyph = "\uE710" },
         };
-        newSpace.Click += async (_, _) =>
-        {
-            ViewModel.NewSpaceCommand.Execute(null);
-
-            // A workspace is only useful once it points at a server, so configure it right away.
-            await ShowConnectionDialogAsync();
-        };
+        newSpace.Click += async (_, _) => await ShowConnectionDialogAsync(creating: true);
         flyout.Items.Add(newSpace);
 
         flyout.ShowAt(SpaceSwitcherButton, new Point(0, 40));
@@ -404,24 +400,25 @@ public sealed partial class MainPage : Page
     // ---------------------------------------------------------------- connection settings
 
     /// <summary>
-    /// Renders whatever fields the selected provider declares, so adding a provider needs no
-    /// dialog changes: the schema comes from <see cref="IDatabaseProvider.Settings"/>.
+    /// The provider-driven connection form. Create mode also collects the workspace name and
+    /// colour, and nothing exists until the user chooses Create &amp; connect: Cancel or closing
+    /// the dialog leaves the workspace list untouched.
     /// </summary>
-    private async Task ShowConnectionDialogAsync()
+    private async Task ShowConnectionDialogAsync(bool creating = false)
     {
-        if (ViewModel.ActiveSpace is null)
+        var space = ViewModel.ActiveSpace;
+        if (!creating && space is null)
         {
             return;
         }
 
-        var space = ViewModel.ActiveSpace;
-        var connection = space.Connection;
         var providers = DatabaseProviderCatalog.Providers;
         if (providers.Count == 0)
         {
             return;
         }
 
+        var connection = creating ? null : space!.Connection;
         var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
         var dangerBrush = StudioColors.Danger;
         var successBrush = StudioColors.Success;
@@ -433,10 +430,12 @@ public sealed partial class MainPage : Page
         };
         AutomationProperties.SetName(providerBox, "Provider");
 
-        var current = providers.FirstOrDefault(p => p.Id == connection.ProviderId) ?? providers[0];
+        var providerId = connection?.ProviderId ?? DatabaseProviderCatalog.Default?.Id;
+        var current = providers.FirstOrDefault(provider => provider.Id == providerId) ?? providers[0];
         providerBox.SelectedIndex = providers.ToList().IndexOf(current);
 
-        var fields = new StackPanel { Spacing = 10 };
+        var primaryFields = new StackPanel { Spacing = 10 };
+        var advancedFields = new StackPanel { Spacing = 10 };
         var inputs = new Dictionary<string, FrameworkElement>(StringComparer.OrdinalIgnoreCase);
         var status = new TextBlock
         {
@@ -445,16 +444,27 @@ public sealed partial class MainPage : Page
             Foreground = mutedBrush,
         };
 
+        // Rare provider fields (port, encryption, timeouts) live one level down instead of
+        // competing with the server and credentials.
+        var advanced = new Expander
+        {
+            Header = "Advanced",
+            IsExpanded = false,
+            Content = advancedFields,
+            Visibility = Visibility.Collapsed,
+        };
+
         IDatabaseProvider SelectedProvider() => providers[Math.Max(0, providerBox.SelectedIndex)];
 
         void RebuildFields()
         {
-            fields.Children.Clear();
+            primaryFields.Children.Clear();
+            advancedFields.Children.Clear();
             inputs.Clear();
 
             foreach (var setting in SelectedProvider().Settings)
             {
-                var value = connection.Profile.Get(setting.Key)
+                var value = connection?.Profile.Get(setting.Key)
                     ?? setting.DefaultValue
                     ?? (setting.Kind == ProviderSettingKind.Boolean ? "false" : string.Empty);
 
@@ -494,8 +504,10 @@ public sealed partial class MainPage : Page
                     });
                 }
 
-                fields.Children.Add(group);
+                (setting.IsAdvanced ? advancedFields : primaryFields).Children.Add(group);
             }
+
+            advanced.Visibility = advancedFields.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         string ReadValue(ProviderSetting setting) => inputs[setting.Key] switch
@@ -523,11 +535,15 @@ public sealed partial class MainPage : Page
         providerGroup.Children.Add(new TextBlock { Text = "Provider", FontSize = 11 });
         providerGroup.Children.Add(providerBox);
 
+        var body = new StackPanel { Spacing = 10 };
+        body.Children.Add(primaryFields);
+        body.Children.Add(advanced);
+
         // The dialog's own scroller does not always engage when the form outgrows the window,
         // so the fields scroll in their own viewport and the status line stays in view.
         var fieldsScroll = new ScrollViewer
         {
-            Content = fields,
+            Content = body,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollMode = ScrollMode.Auto,
@@ -535,18 +551,18 @@ public sealed partial class MainPage : Page
             IsTabStop = false,
         };
 
-        var content = new Grid { MinWidth = 360, RowSpacing = 12 };
-        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var form = new Grid { MinWidth = 360, RowSpacing = 12 };
+        form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        form.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         Grid.SetRow(providerGroup, 0);
         Grid.SetRow(fieldsScroll, 1);
         Grid.SetRow(status, 2);
-        content.Children.Add(providerGroup);
-        content.Children.Add(fieldsScroll);
-        content.Children.Add(status);
+        form.Children.Add(providerGroup);
+        form.Children.Add(fieldsScroll);
+        form.Children.Add(status);
 
         if (DatabaseProviderCatalog.LoadErrors.Count > 0)
         {
@@ -559,19 +575,123 @@ public sealed partial class MainPage : Page
             };
 
             Grid.SetRow(loadErrors, 3);
-            content.Children.Add(loadErrors);
+            form.Children.Add(loadErrors);
+        }
+
+        FrameworkElement content = form;
+        TextBox? nameBox = null;
+        var selectedColour = StudioColors.Palette[ViewModel.Spaces.Count % StudioColors.Palette.Length];
+
+        if (creating)
+        {
+            // The default name and colour are ready to accept; changing them is optional.
+            nameBox = new TextBox
+            {
+                Text = $"Space {ViewModel.Spaces.Count + 1}",
+                PlaceholderText = "Workspace name",
+            };
+            AutomationProperties.SetName(nameBox, "Workspace name");
+
+            var nameGroup = new StackPanel { Spacing = 4 };
+            nameGroup.Children.Add(new TextBlock { Text = "Name", FontSize = 11 });
+            nameGroup.Children.Add(nameBox);
+
+            var rings = new Dictionary<string, Ellipse>(StringComparer.OrdinalIgnoreCase);
+            var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var swatchStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
+            var ringBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+
+            void SelectColour(string hex)
+            {
+                selectedColour = hex;
+                foreach (var ring in rings)
+                {
+                    ring.Value.Visibility = string.Equals(ring.Key, hex, StringComparison.OrdinalIgnoreCase)
+                        ? Visibility.Visible
+                        : Visibility.Collapsed;
+                }
+            }
+
+            for (var index = 0; index < StudioColors.Palette.Length; index++)
+            {
+                var hex = StudioColors.Palette[index];
+                var ring = new Ellipse
+                {
+                    Width = 24,
+                    Height = 24,
+                    Stroke = ringBrush,
+                    StrokeThickness = 1.5,
+                    Visibility = Visibility.Collapsed,
+                };
+
+                var dot = new Ellipse
+                {
+                    Width = 16,
+                    Height = 16,
+                    Fill = StudioColors.Brush(hex),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+
+                var swatchGrid = new Grid { Width = 24, Height = 24 };
+                swatchGrid.Children.Add(ring);
+                swatchGrid.Children.Add(dot);
+
+                var swatch = new Button
+                {
+                    Width = 28,
+                    Height = 28,
+                    Padding = new Thickness(0),
+                    Content = swatchGrid,
+                    Style = swatchStyle,
+                };
+                AutomationProperties.SetName(swatch, $"Colour {StudioColors.PaletteNames[index]}");
+                ToolTipService.SetToolTip(swatch, StudioColors.PaletteNames[index]);
+                swatch.Click += (_, _) => SelectColour(hex);
+
+                rings[hex] = ring;
+                swatches.Children.Add(swatch);
+            }
+
+            SelectColour(selectedColour);
+
+            var colourGroup = new StackPanel { Spacing = 4 };
+            colourGroup.Children.Add(new TextBlock { Text = "Colour", FontSize = 11 });
+            colourGroup.Children.Add(swatches);
+
+            var header = new StackPanel { Spacing = 12 };
+            header.Children.Add(nameGroup);
+            header.Children.Add(colourGroup);
+
+            var root = new Grid { MinWidth = 360, RowSpacing = 16 };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(header, 0);
+            Grid.SetRow(form, 1);
+            root.Children.Add(header);
+            root.Children.Add(form);
+            content = root;
         }
 
         var dialog = new ContentDialog
         {
-            Title = "Connection",
+            Title = creating ? "New workspace" : "Connection",
             XamlRoot = XamlRoot,
             Content = content,
             DefaultButton = ContentDialogButton.Primary,
-            PrimaryButtonText = "Save & connect",
+            PrimaryButtonText = creating ? "Create & connect" : "Save & connect",
             SecondaryButtonText = "Test",
             CloseButtonText = "Cancel",
         };
+
+        if (creating)
+        {
+            dialog.Opened += (_, _) =>
+            {
+                nameBox!.Focus(FocusState.Programmatic);
+                nameBox.SelectAll();
+            };
+        }
 
         providerBox.SelectionChanged += (_, _) =>
         {
@@ -623,6 +743,20 @@ public sealed partial class MainPage : Page
                 args.Cancel = true;
                 status.Foreground = dangerBrush;
                 status.Text = $"{missing.Label} is required.";
+                return;
+            }
+
+            if (creating)
+            {
+                // Nothing exists before this point: cancelling or closing the dialog created nothing.
+                var created = ViewModel.CreateSpace(
+                    nameBox?.Text ?? string.Empty,
+                    selectedColour,
+                    provider.Id,
+                    BuildProfile());
+
+                // The dialog closes on this await; the workspace connects in the background.
+                await ViewModel.ConnectSpaceAsync(created);
                 return;
             }
 

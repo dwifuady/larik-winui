@@ -22,6 +22,12 @@ public sealed class ProviderSetting
     public string? DefaultValue { get; init; }
     public string? Placeholder { get; init; }
     public string? Hint { get; init; }
+
+    /// <summary>
+    /// Rare tuning fields (port, encryption, timeouts) are tucked into the dialog's Advanced
+    /// section instead of competing with the server and credentials.
+    /// </summary>
+    public bool IsAdvanced { get; init; }
 }
 
 /// <summary>The user's saved values for one connection. Passwords stay in memory only.</summary>

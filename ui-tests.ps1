@@ -232,15 +232,27 @@ try {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the swipe did not select the previous workspace'
     }
 
-    Test-UI 'creating a workspace opens its connection settings' {
+    Test-UI 'cancelling a new workspace creates nothing' {
         Click-Element 'Switch workspace'
         Start-Sleep -Milliseconds 500
         Click-Element 'New workspace'
-        Start-Sleep -Milliseconds 1000
-        Assert-True ((Find-Element 'Provider').matchCount -gt 0) 'the connection dialog did not open'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Workspace name').matchCount -gt 0) 'the new workspace dialog did not open'
         Click-Element 'Cancel'
         Start-Sleep -Milliseconds 700
-        Assert-True ((Find-Element 'Workspace Space 4').matchCount -gt 0) 'the new workspace is not in the indicator'
+        Assert-True ((Find-Element 'Workspace Space 4').matchCount -eq 0) 'cancelling still created a workspace'
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the active workspace changed after cancelling'
+    }
+
+    Test-UI 'completing the new workspace dialog creates and connects it' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'New workspace'
+        Start-Sleep -Milliseconds 900
+        Click-Element 'Create & connect'
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'Workspace Space 4').matchCount -gt 0) 'the workspace was not created'
+        Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'the new workspace is not the active one'
         Click-Element 'Workspace Staging'
         Start-Sleep -Milliseconds 700
     }
@@ -427,6 +439,10 @@ try {
             # just in the automation tree below the visible part of the dialog.
             Click-Element 'SQL Server'
             Start-Sleep -Milliseconds 800
+            Assert-True ((Find-Element 'Connect timeout (s)').matchCount -eq 0) 'advanced fields are not collapsed'
+            Click-Element 'Advanced'
+            Start-Sleep -Milliseconds 600
+            Assert-True ((Find-Element 'Connect timeout (s)').matchCount -gt 0) 'advanced fields did not expand'
             Click-Element 'Test'
             $status = $null
             $deadline = (Get-Date).AddSeconds(30)

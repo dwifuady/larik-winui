@@ -136,34 +136,30 @@ public partial class StudioViewModel : ObservableObject
         StatusText = $"New query in {ActiveSpace.Name}";
     }
 
-    [RelayCommand]
-    private void NewSpace()
+    /// <summary>
+    /// Creates a workspace from the create dialog. Nothing is created until the user confirms;
+    /// the caller connects the returned space afterwards.
+    /// </summary>
+    public SpaceViewModel CreateSpace(string name, string colorHex, string providerId, ConnectionProfile profile)
     {
-        var index = Spaces.Count;
-        var color = StudioColors.Palette[index % StudioColors.Palette.Length];
-        var provider = DatabaseProviderCatalog.Default;
-        var profile = new ConnectionProfile { ProviderId = provider?.Id ?? "mssql" };
-
-        foreach (var setting in provider?.Settings ?? [])
-        {
-            if (setting.DefaultValue is { } value)
-            {
-                profile.Values[setting.Key] = value;
-            }
-        }
+        var displayName = string.IsNullOrWhiteSpace(name) ? $"Space {Spaces.Count + 1}" : name.Trim();
+        var color = string.IsNullOrWhiteSpace(colorHex)
+            ? StudioColors.Palette[Spaces.Count % StudioColors.Palette.Length]
+            : colorHex;
 
         var space = new SpaceViewModel(
             Guid.NewGuid().ToString("n"),
-            $"Space {index + 1}",
+            displayName,
             color,
-            new ConnectionViewModel(profile.ProviderId, profile));
+            new ConnectionViewModel(providerId, profile));
 
-        var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty);
-        space.Tabs.Add(tab);
-        Spaces.Add(space);
+        space.Tabs.Add(new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty));
+
         TrackSpace(space);
+        Spaces.Add(space);
         SelectSpace(space);
-        StatusText = "New workspace — open Connection settings to point it at a server";
+        ScheduleSave();
+        return space;
     }
 
     /// <summary>Applies provider + profile from the connection dialog, then connects.</summary>
@@ -557,7 +553,7 @@ public partial class StudioViewModel : ObservableObject
         };
     }
 
-    private async Task ConnectSpaceAsync(SpaceViewModel space)
+    public async Task ConnectSpaceAsync(SpaceViewModel space)
     {
         IsBusy = true;
         StatusText = $"Connecting to {space.Name}…";

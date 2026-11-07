@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 ```
 
 The suite drives the real window over UI Automation: tab switching, the workspace dots switch
-workspaces (click and a horizontal trackpad swipe), creating a workspace opens its connection
+workspaces (click and a horizontal trackpad swipe), new-workspace creation is gated on the create
 dialog, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
 `FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
@@ -92,6 +92,9 @@ foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes`
 `sys.foreign_keys`; the Demo provider declares them). Without key metadata, completion falls back
 to the desktop app's name heuristics.
 
+`ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
+connection dialog's **Advanced** section instead of competing with the server and credentials.
+
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
 `sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
@@ -109,13 +112,15 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   is a database picker for the active connection, filled from the provider once connected. Switching
   database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle, the
   snippet dialect and the completion schema. An Arc-style row of workspace dots at the bottom of the
-  rail shows every workspace with the current one ringed; clicking a dot switches workspace, and
-  creating a workspace opens its connection settings straight away. Each workspace owns a palette
-  colour (dot, tab strip/tint and Run button); change it from the workspace menu's **Workspace
-  colour** submenu. Switching — from the top dropdown, the dots, or a two-finger horizontal trackpad
-  swipe over the rail — slides the query content in from the side the new workspace lives on
-  (left/right matches the dot order), and is skipped when Windows animations are turned off. A swipe
-  moves one workspace per gesture and does not wrap at the ends.
+  rail shows every workspace with the current one ringed; clicking a dot switches workspace.
+  **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
+  under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the workspace
+  list untouched. Each workspace owns a palette colour (dot, tab strip/tint and Run button); change
+  it from the workspace menu's **Workspace colour** submenu. Switching — from the top dropdown, the
+  dots, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
+  the side the new workspace lives on (left/right matches the dot order), and is skipped when
+  Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
+  the ends.
 - **Real execution**: connect opens the provider connection, `Run`/Ctrl+Enter executes there and the
   grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
   the provider with timing.
