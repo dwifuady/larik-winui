@@ -130,15 +130,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
         var text = GetText();
         var caret = Editor.Document.Selection.StartPosition;
-        var (_, word, _) = CompletionEngine.ExtractContext(text, caret);
 
-        if (word.Length == 0)
-        {
-            HideCompletions();
-            return;
-        }
-
-        // The source decides what a word means; the surface only knows geometry.
+        // The source decides what a word means; the surface only knows geometry. An empty word
+        // still completes when the clause calls for a table or column list (e.g. "FROM ").
         var items = CompletionSource.GetCompletions(new CompletionQuery(text, caret));
         if (items.Count == 0)
         {
@@ -155,24 +149,25 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
     private void PositionCompletions()
     {
-        if (XamlRoot?.Content is not FrameworkElement root)
-        {
-            return;
-        }
-
+        // GetRect reports the caret inside the text layout area, but the popup is placed from
+        // this control's origin. Add the editor's position and padding so the popup starts at
+        // the caret and one line below the text.
         Editor.Document.Selection.GetRect(PointOptions.ClientCoordinates, out var caretRect, out _);
-        var origin = Editor
-            .TransformToVisual(root)
-            .TransformPoint(new Point(caretRect.X, caretRect.Y + caretRect.Height + 4));
+        var editorOrigin = Editor.TransformToVisual(this).TransformPoint(new Point(0, 0));
+        var padding = Editor.Padding;
+        var origin = new Point(
+            editorOrigin.X + padding.Left + caretRect.X,
+            editorOrigin.Y + padding.Top + caretRect.Y + caretRect.Height + 6);
 
         CompletionPopup.Child.Measure(new Size(PopupWidth, double.PositiveInfinity));
         var height = Math.Min(CompletionPopup.Child.DesiredSize.Height, PopupMaxHeight);
 
-        var x = Math.Clamp(origin.X, 8, Math.Max(8, root.ActualWidth - PopupWidth - 8));
+        var x = Math.Clamp(origin.X, 8, Math.Max(8, ActualWidth - PopupWidth - 8));
         var y = origin.Y;
-        if (y + height > root.ActualHeight - 8)
+        if (y + height > ActualHeight - 8)
         {
-            y = Math.Max(8, origin.Y - height - caretRect.Height - 8);
+            // No room below the caret: flip above the current line.
+            y = Math.Max(8, origin.Y - height - caretRect.Height - padding.Top - 10);
         }
 
         CompletionPopup.HorizontalOffset = x;

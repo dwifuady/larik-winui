@@ -135,6 +135,11 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'completion popup did not open'
         Assert-True ((Find-Element 'SELECT *').matchCount -gt 0) 'SELECT * snippet not suggested'
+        # The popup must sit under the caret, not offset by the editor's own position.
+        $popup = @((Find-Element 'SQL suggestions').matches)[0]
+        $editor = @((Find-Element 'SQL editor').matches)[0]
+        Assert-True (($popup.y - $editor.y) -lt 60) "popup is not below the first line (popup y=$($popup.y), editor y=$($editor.y))"
+        Assert-True (($popup.x - $editor.x) -lt 100) "popup is not at the caret (popup x=$($popup.x), editor x=$($editor.x))"
     }
 
     Test-UI 'Tab accepts the snippet and leaves the caret at the placeholder' {
@@ -150,6 +155,19 @@ try {
         Send-Keys 'ctrl+enter'
         Wait-ForText 'FULL NAME'
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
+    }
+
+    Test-UI 'FROM suggests every table in the active database' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'table suggestions did not open'
+        foreach ($table in 'customers', 'orders', 'order_items', 'products') {
+            Assert-True ((Find-Element $table).matchCount -gt 0) "table '$table' is not in the suggestions"
+        }
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
     }
 
     Test-UI 'switching database updates the rail, status bar and tab' {
