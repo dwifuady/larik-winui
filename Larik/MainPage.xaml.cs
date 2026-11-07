@@ -250,11 +250,14 @@ public sealed partial class MainPage : Page
     {
         switch (command)
         {
-            case EditorCommandKind.RunQuery:
-                ViewModel.RunCommand.Execute(null);
+            case EditorCommandKind.RunStatement:
+                _ = RunStatementAsync();
+                break;
+            case EditorCommandKind.RunAll:
+                _ = RunAllAsync();
                 break;
             case EditorCommandKind.RunNewResult:
-                ViewModel.RunNewResultCommand.Execute(null);
+                _ = RunStatementAsync(append: true);
                 break;
             case EditorCommandKind.NewTab:
                 ViewModel.NewTabCommand.Execute(null);
@@ -264,6 +267,47 @@ public sealed partial class MainPage : Page
                 break;
         }
     }
+
+    // ---------------------------------------------------------------- running SQL
+
+    /// <summary>
+    /// The shell owns the editor, so it is the one place that knows what "the query" means:
+    /// an explicit selection always wins; otherwise Ctrl+Enter runs the statement under the
+    /// caret (and selects it, so the run is visible), while F5 runs the whole document.
+    /// </summary>
+    private async Task RunFromEditorAsync(bool all, bool append)
+    {
+        var text = SqlEditor.Text;
+        var selection = SqlEditor.Selection;
+
+        string sql;
+        if (!selection.IsEmpty)
+        {
+            sql = text.Substring(selection.Start, selection.Length);
+        }
+        else if (all)
+        {
+            sql = text;
+        }
+        else
+        {
+            var statement = SqlStatementParser.FindStatement(text, SqlEditor.CaretOffset);
+            if (!statement.IsEmpty)
+            {
+                SqlEditor.Select(statement);
+            }
+
+            sql = text.Substring(statement.Start, statement.Length);
+        }
+
+        await ViewModel.RunSqlAsync(sql, append);
+    }
+
+    private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);
+
+    private Task RunAllAsync() => RunFromEditorAsync(all: true, append: false);
+
+    private async void RunButton_Click(object sender, RoutedEventArgs e) => await RunStatementAsync();
 
     // ---------------------------------------------------------------- sidebar
 
@@ -298,6 +342,10 @@ public sealed partial class MainPage : Page
             tab.IsPointerOver = false;
         }
     }
+
+    /// <summary>The ListView already reordered the rail mirror; persist the same order on the space.</summary>
+    private void TabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
+        ViewModel.SyncTabOrder();
 
     /// <summary>The dots at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
     private void WorkspaceIndicator_Click(object sender, RoutedEventArgs e)
@@ -924,30 +972,21 @@ public sealed partial class MainPage : Page
     /// <summary>Keeps the active result tab visible when Ctrl+\ appends beyond the viewport.</summary>
     private void BringActiveResultTabIntoView()
     {
-        if (!ViewModel.HasMultipleResults)
+        if (!ViewModel.HasMultipleResults || ViewModel.ActiveTab?.ActiveResult is not { } active)
         {
             return;
         }
 
         DispatcherQueue.TryEnqueue(() =>
-        {
-            foreach (var button in FindDescendants<Button>(ResultTabsScroller))
-            {
-                if (button.DataContext is ResultSetViewModel { IsActive: true })
-                {
-                    button.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
-                    return;
-                }
-            }
-        });
+            ResultTabsList.ScrollIntoView(active, ScrollIntoViewAlignment.Leading));
     }
 
     private void ResultsGrid_StatusChanged(object? sender, string message) =>
         ViewModel.StatusText = message;
 
-    private void ResultTabSelect_Click(object sender, RoutedEventArgs e)
+    private void ResultTab_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: ResultSetViewModel result })
+        if (e.ClickedItem is ResultSetViewModel result)
         {
             ViewModel.SelectResult(result);
         }
@@ -961,31 +1000,22 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private static IEnumerable<T> FindDescendants<T>(DependencyObject root)
-        where T : DependencyObject
-    {
-        var count = VisualTreeHelper.GetChildrenCount(root);
-        for (var index = 0; index < count; index++)
-        {
-            var child = VisualTreeHelper.GetChild(root, index);
-            if (child is T target)
-            {
-                yield return target;
-            }
-
-            foreach (var nested in FindDescendants<T>(child))
-            {
-                yield return nested;
-            }
-        }
-    }
+    /// <summary>The results ListView owns the gesture; write the new order back to the query tab.</summary>
+    private void ResultTabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
+        ViewModel.SyncResultOrder();
 
     // ---------------------------------------------------------------- accelerators
 
-    private void RunAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private async void RunStatementAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        ViewModel.RunCommand.Execute(null);
         args.Handled = true;
+        await RunStatementAsync();
+    }
+
+    private async void RunAllAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        await RunAllAsync();
     }
 
     private void NewTabAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)

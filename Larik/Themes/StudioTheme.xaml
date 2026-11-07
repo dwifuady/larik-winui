@@ -26,6 +26,12 @@
             <SolidColorBrush x:Key="StudioWarningBrush" Color="#F59E0B" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="#EF4444" />
             <SolidColorBrush x:Key="EditorSelectionBrush" Color="#406366F1" />
+            <SolidColorBrush x:Key="StudioSyntaxKeywordBrush" Color="#C792EA" />
+            <SolidColorBrush x:Key="StudioSyntaxFunctionBrush" Color="#82AAFF" />
+            <SolidColorBrush x:Key="StudioSyntaxStringBrush" Color="#A5D6A7" />
+            <SolidColorBrush x:Key="StudioSyntaxNumberBrush" Color="#F78C6C" />
+            <SolidColorBrush x:Key="StudioSyntaxCommentBrush" Color="#7A8194" />
+            <SolidColorBrush x:Key="StudioSyntaxVariableBrush" Color="#FFCB6B" />
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="Light">
@@ -45,6 +51,12 @@
             <SolidColorBrush x:Key="StudioWarningBrush" Color="#B45309" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="#DC2626" />
             <SolidColorBrush x:Key="EditorSelectionBrush" Color="#405B5FC7" />
+            <SolidColorBrush x:Key="StudioSyntaxKeywordBrush" Color="#7C3AED" />
+            <SolidColorBrush x:Key="StudioSyntaxFunctionBrush" Color="#1D4ED8" />
+            <SolidColorBrush x:Key="StudioSyntaxStringBrush" Color="#047857" />
+            <SolidColorBrush x:Key="StudioSyntaxNumberBrush" Color="#B45309" />
+            <SolidColorBrush x:Key="StudioSyntaxCommentBrush" Color="#6B7280" />
+            <SolidColorBrush x:Key="StudioSyntaxVariableBrush" Color="#92400E" />
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="HighContrast">
@@ -64,6 +76,12 @@
             <SolidColorBrush x:Key="StudioWarningBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="EditorSelectionBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxKeywordBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxFunctionBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxStringBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxNumberBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxCommentBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioSyntaxVariableBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
         </ResourceDictionary>
 
     </ResourceDictionary.ThemeDictionaries>

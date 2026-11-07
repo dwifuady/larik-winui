@@ -226,18 +226,23 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private Task RunAsync() => RunCoreAsync(append: false);
-
-    [RelayCommand]
-    private Task RunNewResultAsync() => RunCoreAsync(append: true);
-
-    private async Task RunCoreAsync(bool append)
+    /// <summary>
+    /// Runs SQL the shell resolved from the editor (a selection, the statement under the caret,
+    /// or the whole document) on the active tab. The tab pins the database and the target result,
+    /// so switching tabs or spaces while the query runs cannot retarget it.
+    /// </summary>
+    public async Task RunSqlAsync(string sql, bool append = false)
     {
         var tab = ActiveTab;
         var space = ActiveSpace;
         if (tab is null || space is null || IsBusy)
         {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            StatusText = "Nothing to run";
             return;
         }
 
@@ -249,7 +254,6 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        var sql = tab.Content;
         var upper = sql.ToUpperInvariant();
         var mutates = upper.Contains("UPDATE ") || upper.Contains("DELETE ") || upper.Contains("TRUNCATE ");
         var guarded = upper.Contains("WHERE");
@@ -266,7 +270,6 @@ public partial class StudioViewModel : ObservableObject
         StatusText = "Running…";
         try
         {
-            // The tab pins the database, so switching tabs while the query runs cannot retarget it.
             // The provider applies the row cap while reading and returns one result per result set.
             var results = await space.Connection.ExecuteBatchAsync(
                 sql,
@@ -592,6 +595,33 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
     public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
+
+    /// <summary>
+    /// The rail's ListView owns the drag gesture and reorders its mirror collection. Write that
+    /// order back to the space (the persisted source of truth) without rebuilding the list.
+    /// </summary>
+    public void SyncTabOrder()
+    {
+        if (ActiveSpace is not { } space)
+        {
+            return;
+        }
+
+        for (var target = 0; target < Tabs.Count; target++)
+        {
+            var tab = Tabs[target];
+            var current = space.Tabs.IndexOf(tab);
+            if (current >= 0 && current != target)
+            {
+                space.Tabs.Move(current, target);
+            }
+        }
+
+        ScheduleSave();
+    }
+
+    /// <summary>The results ListView reordered the mirrored collection; reorder the tab's own set.</summary>
+    public void SyncResultOrder() => ActiveTab?.ApplyResultOrder(Results);
 
     // ---------------------------------------------------------------- persistence
 

@@ -98,6 +98,25 @@ public partial class TabViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Applies a reorder performed by the results strip. The active result stays active; only its
+    /// position (and therefore its "Result N" label) changes.
+    /// </summary>
+    public void ApplyResultOrder(IReadOnlyList<ResultSetViewModel> order)
+    {
+        for (var target = 0; target < order.Count; target++)
+        {
+            var result = order[target];
+            var current = Results.IndexOf(result);
+            if (current >= 0 && current != target)
+            {
+                Results.Move(current, target);
+            }
+        }
+
+        Reindex();
+    }
+
     public void CloseResult(ResultSetViewModel result)
     {
         var index = Results.IndexOf(result);

@@ -5,14 +5,29 @@ namespace Larik.Editor;
 /// <summary>Shell commands an editor surface can raise, so keyboard behaviour is implementation-agnostic.</summary>
 public enum EditorCommandKind
 {
-    RunQuery,
+    /// <summary>Run the statement under the caret (selections win).</summary>
+    RunStatement,
+
+    /// <summary>Run the whole document, or the selection when there is one.</summary>
+    RunAll,
+
+    /// <summary>Run the statement under the caret into a new result tab.</summary>
     RunNewResult,
+
     NewTab,
     ToggleSidebar,
 }
 
 /// <summary>One-based caret position in the document.</summary>
 public readonly record struct EditorCaret(int Line, int Column);
+
+/// <summary>A span in document-text coordinates, used for selections and statement runs.</summary>
+public readonly record struct EditorSpan(int Start, int Length)
+{
+    public int End => Start + Length;
+
+    public bool IsEmpty => Length <= 0;
+}
 
 /// <summary>
 /// The text window the editor is asking about. Implementations pass the document and the caret
@@ -45,6 +60,15 @@ public interface IEditorSurface
     string Text { get; set; }
 
     EditorCaret Caret { get; }
+
+    /// <summary>Zero-based caret offset in <see cref="Text"/> coordinates.</summary>
+    int CaretOffset { get; }
+
+    /// <summary>The current selection span; equal start/end when collapsed.</summary>
+    EditorSpan Selection { get; }
+
+    /// <summary>Selects a span without moving focus (used to show the statement being run).</summary>
+    void Select(EditorSpan span);
 
     /// <summary>Supplies snippets/keywords/schema. The shell swaps this when the space or schema changes.</summary>
     IEditorCompletionSource? CompletionSource { get; set; }

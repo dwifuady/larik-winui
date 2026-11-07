@@ -2,7 +2,8 @@
 
 A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app,
 now talking to **real databases through pluggable providers**:
-**Arc-style vertical tabs, workspaces that group databases, and snippet completion that expands on Tab.**
+**Arc-style vertical tabs, workspaces that group databases, live SQL syntax highlighting, and
+snippet completion that expands on Tab.**
 
 ```
 C:\dev\larik-winui\
@@ -47,7 +48,9 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 The suite drives the real window over UI Automation: tab switching, the workspace dots switch
 workspaces (click and a horizontal trackpad swipe), new-workspace creation is gated on the create
 dialog, `sel` → suggestion popup →
-Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
+Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs only the statement
+under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
+syntax highlighting is applied without breaking Ctrl+Z, query and result tabs drag-reorder,
 `FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
@@ -119,7 +122,8 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 ## What works in this slice
 
 - **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
-  database subtitle revealed on hover/active, close button. Ctrl+T (or the + button) opens a
+  database subtitle revealed on hover/active, close button. **Drag a tab to reorder it**; the new
+  order is written back to the workspace (and survives a restart). Ctrl+T (or the + button) opens a
   **New query** dialog that asks which database the tab belongs to; each tab owns that database and
   its result grid, so switching tabs repoints completion, the database picker and the grid together.
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
@@ -142,9 +146,13 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the side the new workspace lives on (left/right matches the dot order), and is skipped when
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
   the ends.
-- **Real execution**: connect opens the provider connection, `Run`/Ctrl+Enter executes there and the
-  grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
-  the provider with timing.
+- **Real execution**: connect opens the provider connection and the grid renders returned
+  columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from the provider with
+  timing. **Ctrl+Enter runs only the statement under the caret** and leaves it selected, so the
+  run is visible and a second F5 repeats exactly that statement; **F5 runs the whole document**
+  (or just the selection when text is selected). The toolbar Run button follows Ctrl+Enter, and
+  Ctrl+\ runs the current statement into a new result tab. The statement splitter understands
+  strings, quoted identifiers, line/block comments and `GO` batch separators.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
   **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
@@ -170,7 +178,9 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
-  query tab. Each grid is virtualized — a `ListView` realizes only the visible rows and recycles
+  query tab. **Drag a result tab to reorder it** within the query tab; the active result stays
+  active and the remaining tabs renumber. Each grid is virtualized — a `ListView` realizes only
+  the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies the
@@ -181,6 +191,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
   running a query while another tab is active writes to the tab that started it.
+- **Syntax highlighting**: keywords, functions, strings, numbers, variables and comments are
+  coloured live with theme-aware tokens (`StudioSyntax*Brush`, HighContrast falls back to the
+  system text colour). The editor tokenizes on a 140 ms debounce so typing never waits for a
+  repaint. Character formatting is kept out of the undo stack: the surface owns text snapshots, so
+  Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
@@ -197,13 +212,13 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 
 | Gap | Why / next step |
 |---|---|
-| **No syntax highlighting** | `RichEditBox` is plain text here. Next: format ranges on a debounce (`ITextCharacterFormat`), or host Monaco in WebView2 and keep the native shell. |
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |
+| Current-statement splitting is lexical | Semicolons and `GO` delimit statements outside strings, identifiers and comments, so a `CREATE PROCEDURE` body with inner semicolons still splits. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing batch statement stops the server batch | SQL Server executes the batch natively, so the first server error ends the remaining statements. Split-and-execute per statement (as the Tauri drivers do) if every statement must report independently. |
-| No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
+| Folders, pinned tabs, command palette, MCP | Ported later; tab reordering is in place, the remaining organisation features are not. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |
 
 ## WinUI notes worth remembering
@@ -217,6 +232,14 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 - `RichEditBox` paints its own fill from the `TextControlBackground*` theme resources, including a
   different one while focused, which hides any parent card. Override those plus the
   `TextControlBorderBrush*` keys to `Transparent` so the card surface shows through.
+- Programmatic `ITextCharacterFormat` changes are undoable, so a syntax highlighter that recolours
+  after every keystroke would make Ctrl+Z revert colours. `SqlEditorView` disables the control's
+  undo stack and keeps text snapshots itself (coalescing typing, restoring the caret); Ctrl+Z/Y are
+  handled in `PreviewKeyDown`. Formatting also raises delayed `TextChanged` events, so that handler
+  ignores events whose text is unchanged.
+- `ListView.CanReorderItems` reorders the bound `ObservableCollection` but not the model behind a
+  mirror. Both tab strips write the new order back on `DragItemsCompleted` (query tabs to the space,
+  result tabs to the query tab) and reindex the result titles.
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - MVVM Toolkit `[ObservableProperty]` on fields warns (MVVMTK0045) under WinRT/AOT; partial
   properties keep the build warning-free and AOT-ready.

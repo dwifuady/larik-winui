@@ -6,15 +6,17 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Windows.System;
+using Windows.UI;
 
 namespace Larik.Controls;
 
 /// <summary>
-/// The RichEditBox implementation of <see cref="IEditorSurface"/>: plain-text SQL editing plus a
-/// suggestion popup anchored to the real caret (<c>ITextSelection.GetRect</c>), where Tab or Enter
-/// accepts the highlighted snippet.
+/// The RichEditBox implementation of <see cref="IEditorSurface"/>: plain-text SQL editing,
+/// lightweight syntax highlighting, and a suggestion popup anchored to the real caret
+/// (<c>ITextSelection.GetRect</c>), where Tab or Enter accepts the highlighted snippet.
 /// </summary>
 public sealed partial class SqlEditorView : UserControl, IEditorSurface
 {
@@ -23,12 +25,34 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
     private bool _suppressEvents;
     private bool _skipCompletionUpdateOnce;
+    private bool _applyingHighlight;
+    private bool _restoringHistory;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _highlightTimer;
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
+
+    // Character formatting (syntax highlighting) is undoable in RichEdit, which would make
+    // Ctrl+Z reverse colours instead of text. The surface keeps its own text snapshots and
+    // leaves the control's undo stack disabled.
+    private const int MaxUndoEntries = 200;
+    private static readonly TimeSpan UndoCoalesce = TimeSpan.FromMilliseconds(700);
+    private readonly List<UndoEntry> _undo = [];
+    private readonly List<UndoEntry> _redo = [];
+    private string _lastKnownText = string.Empty;
+    private int _editAnchor = -1;
+    private DateTime _lastEditAt = DateTime.MinValue;
+
+    private readonly record struct UndoEntry(string Text, int Caret);
 
     public SqlEditorView()
     {
         InitializeComponent();
+
+        // Own undo: formatting changes must never occupy the undo stack.
+        Editor.Document.UndoLimit = 0;
+
+        // Theme resources change while the app runs; token colours must follow.
+        ActualThemeChanged += (_, _) => ApplyHighlighting();
     }
 
     public event EventHandler? TextChanged;
@@ -47,6 +71,29 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     }
 
     public EditorCaret Caret => ComputeCaret(GetText(), Editor.Document.Selection.StartPosition);
+
+    public int CaretOffset =>
+        Math.Clamp(Editor.Document.Selection.StartPosition, 0, GetText().Length);
+
+    public EditorSpan Selection
+    {
+        get
+        {
+            var selection = Editor.Document.Selection;
+            var length = GetText().Length;
+            var start = Math.Clamp(Math.Min(selection.StartPosition, selection.EndPosition), 0, length);
+            var end = Math.Clamp(Math.Max(selection.StartPosition, selection.EndPosition), start, length);
+            return new EditorSpan(start, end - start);
+        }
+    }
+
+    public void Select(EditorSpan span)
+    {
+        var length = GetText().Length;
+        var start = Math.Clamp(span.Start, 0, length);
+        var end = Math.Clamp(span.End, start, length);
+        Editor.Document.Selection.SetRange(start, end);
+    }
 
     public void FocusEditor() => Editor.Focus(FocusState.Programmatic);
 
@@ -72,21 +119,228 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         HideCompletions();
+        ResetHistory(GetText());
+        ApplyHighlighting();
         RaiseCaretChanged();
     }
 
     private static EditorCaret ComputeCaret(string text, int position)
     {
         var offset = Math.Clamp(position, 0, text.Length);
-        var before = text[..offset];
-        var line = before.Count(c => c == '\n') + 1;
-        var column = before.Length - (before.LastIndexOf('\n') + 1) + 1;
-        return new EditorCaret(line, column);
+        var line = 1;
+        var lineStart = 0;
+
+        for (var index = 0; index < offset; index++)
+        {
+            if (text[index] == '\n' || (text[index] == '\r' && (index + 1 >= offset || text[index + 1] != '\n')))
+            {
+                line++;
+                lineStart = index + 1;
+            }
+        }
+
+        return new EditorCaret(line, offset - lineStart + 1);
     }
 
     private void RaiseCaretChanged() => CaretChanged?.Invoke(this, EventArgs.Empty);
 
     private void RaiseTextChanged() => TextChanged?.Invoke(this, EventArgs.Empty);
+
+    // ---------------------------------------------------------------- syntax highlighting
+
+    /// <summary>
+    /// Re-colouring on every keystroke would fight the caret and the undo stack; wait for a
+    /// pause in typing. The tokenizer is a single pass, so a whole-document repaint stays cheap.
+    /// </summary>
+    private void ScheduleHighlighting()
+    {
+        var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (queue is null)
+        {
+            return;
+        }
+
+        if (_highlightTimer is null)
+        {
+            _highlightTimer = queue.CreateTimer();
+            _highlightTimer.Interval = TimeSpan.FromMilliseconds(140);
+            _highlightTimer.IsRepeating = false;
+            _highlightTimer.Tick += (_, _) => ApplyHighlighting();
+        }
+
+        _highlightTimer.Stop();
+        _highlightTimer.Start();
+    }
+
+    private void ApplyHighlighting()
+    {
+        if (_applyingHighlight || !IsLoaded || Editor.XamlRoot is null)
+        {
+            return;
+        }
+
+        _applyingHighlight = true;
+        var wasSuppressed = _suppressEvents;
+        _suppressEvents = true;
+
+        try
+        {
+            var text = GetText();
+            if (text.Length == 0)
+            {
+                return;
+            }
+
+            var selection = Editor.Document.Selection;
+            var selectionStart = selection.StartPosition;
+            var selectionEnd = selection.EndPosition;
+
+            // Reset the whole story first so a deleted keyword does not leave its colour behind.
+            SetForeground(0, text.Length, TokenColor(null));
+
+            foreach (var token in SqlSyntaxHighlighter.Tokenize(text))
+            {
+                var start = Math.Clamp(token.Start, 0, text.Length);
+                var end = Math.Clamp(token.Start + token.Length, start, text.Length);
+                if (end > start)
+                {
+                    SetForeground(start, end, TokenColor(token.Kind));
+                }
+            }
+
+            selection.SetRange(selectionStart, selectionEnd);
+        }
+        catch (Exception)
+        {
+            // Highlighting is best-effort presentation. A transient RichEdit formatting failure
+            // must never take the whole studio down; the next keystroke retries it.
+        }
+        finally
+        {
+            _suppressEvents = wasSuppressed;
+            _applyingHighlight = false;
+        }
+    }
+
+    private void SetForeground(int start, int end, Color color)
+    {
+        // Follow the documented pattern: mutate the format object, then assign it back.
+        // Setting the ABI property directly has crashed RichEdit in this control.
+        var range = Editor.Document.GetRange(start, end);
+        var format = range.CharacterFormat;
+        format.ForegroundColor = color;
+        range.CharacterFormat = format;
+    }
+
+    private static Color TokenColor(SqlTokenKind? kind) =>
+        ColorOf(kind switch
+        {
+            SqlTokenKind.Comment => "StudioSyntaxCommentBrush",
+            SqlTokenKind.String => "StudioSyntaxStringBrush",
+            SqlTokenKind.Number => "StudioSyntaxNumberBrush",
+            SqlTokenKind.Keyword => "StudioSyntaxKeywordBrush",
+            SqlTokenKind.Function => "StudioSyntaxFunctionBrush",
+            SqlTokenKind.Variable => "StudioSyntaxVariableBrush",
+            _ => "StudioTextPrimaryBrush",
+        });
+
+    private static Color ColorOf(string key) =>
+        Application.Current.Resources.TryGetValue(key, out var value) && value is SolidColorBrush brush
+            ? brush.Color
+            : Color.FromArgb(0xFF, 0xF5, 0xF5, 0xF7);
+
+    // ---------------------------------------------------------------- undo / redo
+
+    private void ResetHistory(string text)
+    {
+        _undo.Clear();
+        _redo.Clear();
+        _lastKnownText = text;
+        _lastEditAt = DateTime.MinValue;
+        _editAnchor = -1;
+    }
+
+    /// <summary>Captures the pre-edit state. Typing within the coalesce window is one entry.</summary>
+    private void BeginEdit()
+    {
+        var now = DateTime.UtcNow;
+        if (_undo.Count == 0 || now - _lastEditAt > UndoCoalesce)
+        {
+            _undo.Add(new UndoEntry(
+                _lastKnownText,
+                _editAnchor >= 0 ? _editAnchor : CurrentCaretOffset()));
+
+            if (_undo.Count > MaxUndoEntries)
+            {
+                _undo.RemoveAt(0);
+            }
+        }
+
+        _redo.Clear();
+        _lastEditAt = now;
+        _editAnchor = -1;
+    }
+
+    private void EndEdit() => _lastKnownText = GetText();
+
+    private void UndoEdit()
+    {
+        if (_undo.Count == 0)
+        {
+            return;
+        }
+
+        var entry = _undo[^1];
+        _undo.RemoveAt(_undo.Count - 1);
+        _redo.Add(new UndoEntry(GetText(), CurrentCaretOffset()));
+        Restore(entry);
+    }
+
+    private void RedoEdit()
+    {
+        if (_redo.Count == 0)
+        {
+            return;
+        }
+
+        var entry = _redo[^1];
+        _redo.RemoveAt(_redo.Count - 1);
+        _undo.Add(new UndoEntry(GetText(), CurrentCaretOffset()));
+        Restore(entry);
+    }
+
+    private void Restore(UndoEntry entry)
+    {
+        _restoringHistory = true;
+        _suppressEvents = true;
+        try
+        {
+            Editor.Document.SetText(TextSetOptions.None, entry.Text);
+            var length = GetText().Length;
+            var caret = Math.Clamp(entry.Caret, 0, length);
+            Editor.Document.Selection.SetRange(caret, caret);
+        }
+        finally
+        {
+            _suppressEvents = false;
+            _restoringHistory = false;
+        }
+
+        _lastKnownText = GetText();
+        _lastEditAt = DateTime.MinValue;
+        _editAnchor = -1;
+
+        HideCompletions();
+        ApplyHighlighting();
+        RaiseTextChanged();
+        RaiseCaretChanged();
+    }
+
+    private int CurrentCaretOffset()
+    {
+        var selection = Editor.Document.Selection;
+        return Math.Clamp(Math.Min(selection.StartPosition, selection.EndPosition), 0, GetText().Length);
+    }
 
     // ---------------------------------------------------------------- editor events
 
@@ -97,8 +351,24 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             return;
         }
 
+        // Character formatting can raise a delayed TextChanged of its own. If the text is
+        // unchanged, this is not a user edit: do not create undo history or reopen the
+        // completion popup at a caret the user did not move.
+        var text = GetText();
+        if (text == _lastKnownText)
+        {
+            return;
+        }
+
+        if (!_restoringHistory)
+        {
+            BeginEdit();
+        }
+
         RaiseTextChanged();
         RaiseCaretChanged();
+        ScheduleHighlighting();
+        EndEdit();
 
         // Inserting a completion can raise a delayed TextChanged after the popup closes. Do not
         // immediately reopen it with the next clause's suggestions; wait for the next real key.
@@ -222,6 +492,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         var caret = Editor.Document.Selection.StartPosition;
         var (start, _, _) = CompletionEngine.ExtractContext(GetText(), caret);
 
+        BeginEdit();
         _suppressEvents = true;
         try
         {
@@ -246,6 +517,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             _suppressEvents = false;
         }
 
+        EndEdit();
         HideCompletions();
         RaiseTextChanged();
         RaiseCaretChanged();
@@ -274,11 +546,24 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         // Any new key means the user is typing again; a pending post-accept guard no longer applies.
         _skipCompletionUpdateOnce = false;
 
+        // Remember where the edit starts, so undo can put the caret back at that point.
+        var selection = Editor.Document.Selection;
+        _editAnchor = Math.Min(selection.StartPosition, selection.EndPosition);
+
         // RichEditBox swallows Ctrl+Enter and owns Ctrl+B/Ctrl+T, so shell commands are raised here.
-        if (e.Key is VirtualKey.Enter or VirtualKey.F5 && (e.Key == VirtualKey.F5 || IsKeyDown(VirtualKey.Control)))
+        // F5 runs the whole query; Ctrl+Enter runs only the statement under the caret.
+        if (e.Key == VirtualKey.F5)
         {
             HideCompletions();
-            CommandRequested?.Invoke(this, EditorCommandKind.RunQuery);
+            CommandRequested?.Invoke(this, EditorCommandKind.RunAll);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == VirtualKey.Enter && IsKeyDown(VirtualKey.Control))
+        {
+            HideCompletions();
+            CommandRequested?.Invoke(this, EditorCommandKind.RunStatement);
             e.Handled = true;
             return;
         }
@@ -303,6 +588,23 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     CommandRequested?.Invoke(this, EditorCommandKind.RunNewResult);
                     e.Handled = true;
                     return;
+            }
+        }
+
+        if (IsKeyDown(VirtualKey.Control) && !IsKeyDown(VirtualKey.Menu))
+        {
+            if (e.Key == VirtualKey.Z && !IsKeyDown(VirtualKey.Shift))
+            {
+                UndoEdit();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == VirtualKey.Y || (e.Key == VirtualKey.Z && IsKeyDown(VirtualKey.Shift)))
+            {
+                RedoEdit();
+                e.Handled = true;
+                return;
             }
         }
 
@@ -335,6 +637,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         // Tab keeps focus in the editor and indents; completion accept owns Tab while open.
         if (e.Key == VirtualKey.Tab)
         {
+            BeginEdit();
             _suppressEvents = true;
             try
             {
@@ -345,6 +648,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                 _suppressEvents = false;
             }
 
+            EndEdit();
             RaiseTextChanged();
             RaiseCaretChanged();
             e.Handled = true;

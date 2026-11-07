@@ -326,6 +326,53 @@ try {
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
     }
 
+    Test-UI 'Ctrl+Enter runs only the statement under the caret' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers; select * from orders;' -Literal
+        Start-Sleep -Milliseconds 300
+        Send-Keys 'ctrl+home'
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'FULL NAME' 20
+        Assert-True ((Find-Element 'TOTAL AMOUNT').matchCount -eq 0) 'Ctrl+Enter ran the whole batch'
+
+        # The statement is selected; F5 must respect that selection and not run the batch.
+        Send-Keys 'f5'
+        Wait-ForText 'FULL NAME' 20
+        Assert-True ((Find-Element 'TOTAL AMOUNT').matchCount -eq 0) 'F5 ignored the selected statement'
+        Assert-True ((Find-Element 'Result 2').matchCount -eq 0) 'F5 with a selection opened a second result'
+
+        # Collapse the selection, then F5 runs the whole editor.
+        Send-Keys 'right'
+        Send-Keys 'f5'
+        Wait-ForText 'Result 2' 20
+        Click-Element 'Result 2'
+        Wait-ForText 'TOTAL AMOUNT' 20
+    }
+
+    Test-UI 'SQL tokens are syntax highlighted' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 1 -- note' -Literal
+        Start-Sleep -Milliseconds 800
+        $editor = Get-UiJson @('get-property', 'SQL editor', '--json')
+        Assert-True ($editor.properties.ForegroundColor -eq 'Mixed') "syntax highlighting was not applied (ForegroundColor=$($editor.properties.ForegroundColor))"
+    }
+
+    Test-UI 'undo still reverses typing under syntax highlighting' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 42' -Literal
+        Start-Sleep -Milliseconds 500
+        Send-Keys 'ctrl+z'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Get-EditorText) -ne 'select 42') 'Ctrl+Z undid highlighting instead of typing'
+
+        Send-Keys 'ctrl+y'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Get-EditorText) -eq 'select 42') 'Ctrl+Y did not redo the typing'
+    }
+
     Test-UI 'FROM suggests every table in the active database' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -664,7 +711,7 @@ try {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
         Send-Keys "select name from sys.databases where database_id = 3; select name from sys.databases where database_id = 4;" -Literal
-        Send-Keys 'ctrl+enter'
+        Send-Keys 'f5'
         Wait-ForText 'Result 1' 20
         Assert-True ((Find-Element 'Result 2').matchCount -gt 0) 'the second result tab is missing'
         Wait-ForText 'model' 10
@@ -744,6 +791,61 @@ try {
         else {
             Assert-True ($null -ne $restoredTab -and [Math]::Abs($restoredTab.y - $after.y) -lt 30) "switching query tabs lost the result position (before=$($after.y) after=$($restoredTab.y))"
         }
+    }
+
+    Test-UI 'result tabs can be reordered by dragging' {
+        $first = @((Find-Element 'Result 1').matches) | Where-Object { $_.width -gt 0 } | Select-Object -First 1
+        $second = @((Find-Element 'Result 2').matches) | Where-Object { $_.width -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $first -and $null -ne $second) 'the result tabs were not found'
+        Assert-True ($second.x -gt $first.x) 'the result tabs did not start in order'
+
+        $from = "$([int]($first.x + ($first.width / 2))),$([int]($first.y + ($first.height / 2)))"
+        $to = "$([int]($second.x + ($second.width / 2))),$([int]($second.y + ($second.height / 2)))"
+        Invoke-Ui @('drag', $from, $to, '--hold-ms', '250', '--dwell-ms', '300') | Out-Null
+        Start-Sleep -Milliseconds 700
+
+        # Dragging the model result (old Result 1) to the right makes the label result first;
+        # titles reindex, so the old second grid must now answer to Result 2.
+        Click-Element 'Result 2'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'model').matchCount -gt 0) 'the first result did not move to the right'
+        Assert-True ((Find-Element 'row_1').matchCount -eq 0) 'the second result stayed in place'
+
+        # The query tab owns its results; switching away and back must keep the new order.
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Result 2'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'model').matchCount -gt 0) 'the reordered results reverted on tab switch'
+    }
+
+    Test-UI 'query tabs can be reordered by dragging' {
+        $first = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        $second = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $first -and $null -ne $second) 'the query tabs were not found'
+        Assert-True ($second.y -gt $first.y) 'the query tabs did not start in order'
+
+        $from = "$([int]($first.x + ($first.width / 2))),$([int]($first.y + ($first.height / 2)))"
+        $to = "$([int]($second.x + ($second.width / 2))),$([int]($second.y + ($second.height / 2)))"
+        Invoke-Ui @('drag', $from, $to, '--hold-ms', '250', '--dwell-ms', '300') | Out-Null
+        Start-Sleep -Milliseconds 700
+
+        $movedFirst = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        $movedSecond = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $movedFirst -and $null -ne $movedSecond) 'the query tabs disappeared after dragging'
+        Assert-True ($movedFirst.y -gt $movedSecond.y) "Query 1 did not move below Query 2 (Query 1 y=$($movedFirst.y), Query 2 y=$($movedSecond.y))"
+
+        # The space owns the tab order; switching workspaces and back must preserve it.
+        Click-Element 'Workspace Staging'
+        Start-Sleep -Milliseconds 700
+        Click-Element 'Workspace Local SQL Server'
+        Start-Sleep -Milliseconds 700
+        $persistedFirst = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        $persistedSecond = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $persistedFirst -and $null -ne $persistedSecond) 'the query tabs disappeared after switching workspaces'
+        Assert-True ($persistedFirst.y -gt $persistedSecond.y) 'the dragged tab order was not saved to the workspace'
     }
 
     Test-UI 'workspace state is saved to disk' {
