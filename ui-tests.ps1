@@ -93,6 +93,8 @@ public class LarikWin32 {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
 }
 "@
 
@@ -167,6 +169,43 @@ try {
         Click-Element 'Workspace Staging'
         Start-Sleep -Milliseconds 800
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the indicator did not switch back'
+    }
+
+    Test-UI 'a horizontal trackpad swipe over the rail switches workspaces' {
+        Focus-App
+        $rail = @((Find-Element 'Query tabs').matches)[0]
+        Assert-True ($null -ne $rail) 'the rail was not found'
+        [LarikWin32]::SetCursorPos([int]($rail.x + ($rail.width / 2)), [int]($rail.y + ($rail.height / 2))) | Out-Null
+        Start-Sleep -Milliseconds 250
+
+        # Positive horizontal wheel = swipe left, so the workspace on the right comes in.
+        for ($i = 0; $i -lt 3; $i++) {
+            [LarikWin32]::mouse_event(0x01000, 0, 0, 120, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 40
+        }
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Get-EditorText) -match 'sys.databases') 'the swipe did not select the next workspace'
+
+        # Swipe back to where we were.
+        for ($i = 0; $i -lt 3; $i++) {
+            [LarikWin32]::mouse_event(0x01000, 0, 0, -120, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 40
+        }
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the swipe did not select the previous workspace'
+    }
+
+    Test-UI 'creating a workspace opens its connection settings' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'New workspace'
+        Start-Sleep -Milliseconds 1000
+        Assert-True ((Find-Element 'Provider').matchCount -gt 0) 'the connection dialog did not open'
+        Click-Element 'Cancel'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Workspace Space 4').matchCount -gt 0) 'the new workspace is not in the indicator'
+        Click-Element 'Workspace Staging'
+        Start-Sleep -Milliseconds 700
     }
 
     Test-UI 'a workspace starts disconnected and connects on demand' {

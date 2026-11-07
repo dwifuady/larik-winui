@@ -92,7 +92,7 @@ public partial class SpaceViewModel : ObservableObject
 
     public string IndicatorName => $"Workspace {Name}";
 
-    public double IndicatorDotSize => IsActive ? 11 : 7;
+    public double IndicatorDotSize => IsActive ? 9 : 7;
 
     public double IndicatorDotOpacity => IsActive ? 1 : 0.45;
 

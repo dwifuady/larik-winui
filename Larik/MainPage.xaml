@@ -353,14 +353,15 @@
                                     <Button
                                         Width="26"
                                         Height="24"
+                                        Padding="0"
                                         AutomationProperties.Name="{x:Bind IndicatorName, Mode=OneWay}"
                                         Click="WorkspaceIndicator_Click"
                                         Style="{StaticResource StudioIconButtonStyle}"
                                         ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}">
-                                        <Grid Width="14" Height="14">
+                                        <Grid Width="16" Height="16">
                                             <Ellipse
-                                                Width="13"
-                                                Height="13"
+                                                Width="15"
+                                                Height="15"
                                                 Stroke="{x:Bind AccentBrush}"
                                                 StrokeThickness="1.5"
                                                 Visibility="{x:Bind IndicatorRingVisibility, Mode=OneWay}" />
@@ -405,6 +406,7 @@
 
             <!--  Query toolbar  -->
             <Grid
+                x:Name="QueryToolbar"
                 Grid.Row="1"
                 Padding="16,4,12,8"
                 ColumnSpacing="10">
@@ -497,7 +499,11 @@
             </controls:DragHandle>
 
             <!--  Results  -->
-            <Grid Grid.Row="4" Margin="12,0,12,0" RowSpacing="6">
+            <Grid
+                x:Name="ResultsPane"
+                Grid.Row="4"
+                Margin="12,0,12,0"
+                RowSpacing="6">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />

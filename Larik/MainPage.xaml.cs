@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Larik.Data;
 using Larik.Editor;
 using Larik.Models;
@@ -10,7 +11,9 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
+using Windows.UI.ViewManagement;
 
 namespace Larik;
 
@@ -24,6 +27,15 @@ public sealed partial class MainPage : Page
 
     private bool _hooked;
     private readonly StudioCompletionSource _completionSource;
+    private Storyboard? _spaceSlide;
+    private int _lastSpaceIndex = -1;
+
+    // Two-finger horizontal trackpad swipes over the rail move between workspaces.
+    private const double SwipeThreshold = 150;
+    private static readonly TimeSpan SwipeCooldown = TimeSpan.FromMilliseconds(350);
+    private double _swipeDelta;
+    private DateTime _lastWheelAt = DateTime.MinValue;
+    private DateTime _lastSwipeAt = DateTime.MinValue;
 
     private bool _draggingSplitter;
     private double _splitStartY;
@@ -40,6 +52,13 @@ public sealed partial class MainPage : Page
     {
         InitializeComponent();
         Loaded += OnLoaded;
+
+        // Two-finger horizontal trackpad swipes over the rail move between workspaces. The
+        // handler is registered as handledEventsToo so the tab list's scroller cannot swallow it.
+        Sidebar.AddHandler(
+            UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(Sidebar_PointerWheelChanged),
+            handledEventsToo: true);
 
         _completionSource = new StudioCompletionSource(
             () => ViewModel.Snippets,
@@ -74,6 +93,8 @@ public sealed partial class MainPage : Page
 
             ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
             ViewModel.ResultChanged += (_, _) => RenderResults();
+            ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+            _lastSpaceIndex = ActiveSpaceIndex();
         }
 
         // The caption lives inside the content column (the rail runs full height), so the page owns the drag region.
@@ -86,6 +107,123 @@ public sealed partial class MainPage : Page
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) =>
         ViewModel.ToggleSidebarCommand.Execute(null);
+
+    // ---------------------------------------------------------------- workspace switching
+
+    private int ActiveSpaceIndex() =>
+        ViewModel.ActiveSpace is null ? -1 : ViewModel.Spaces.IndexOf(ViewModel.ActiveSpace);
+
+    /// <summary>
+    /// The query content slides in from the side the new workspace lives on, so the dots at the
+    /// bottom (and the switcher order) read as a left-to-right sequence.
+    /// </summary>
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(StudioViewModel.ActiveSpace))
+        {
+            return;
+        }
+
+        var index = ActiveSpaceIndex();
+        if (_hooked && _lastSpaceIndex >= 0 && index >= 0 && index != _lastSpaceIndex)
+        {
+            SlideQueryContent(index > _lastSpaceIndex ? 1 : -1);
+        }
+
+        _lastSpaceIndex = index;
+    }
+
+    private void SlideQueryContent(int direction)
+    {
+        if (!new UISettings().AnimationsEnabled)
+        {
+            return;
+        }
+
+        _spaceSlide?.Stop();
+
+        var duration = new Duration(TimeSpan.FromMilliseconds(220));
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var offset = direction > 0 ? 32 : -32;
+        var board = new Storyboard();
+
+        foreach (FrameworkElement pane in new FrameworkElement[] { QueryToolbar, SqlEditor, Splitter, ResultsPane })
+        {
+            if (pane.RenderTransform is not TranslateTransform transform)
+            {
+                transform = new TranslateTransform();
+                pane.RenderTransform = transform;
+            }
+
+            transform.X = offset;
+            pane.Opacity = 0.7;
+
+            var slide = new DoubleAnimation { To = 0, Duration = duration, EasingFunction = easing };
+            Storyboard.SetTarget(slide, transform);
+            Storyboard.SetTargetProperty(slide, "X");
+
+            var fade = new DoubleAnimation { To = 1, Duration = duration, EasingFunction = easing };
+            Storyboard.SetTarget(fade, pane);
+            Storyboard.SetTargetProperty(fade, "Opacity");
+
+            board.Children.Add(slide);
+            board.Children.Add(fade);
+        }
+
+        _spaceSlide = board;
+        board.Begin();
+    }
+
+    /// <summary>
+    /// A two-finger horizontal swipe over the rail moves one workspace in the swipe direction.
+    /// Deltas are accumulated because precision touchpads send a stream of small values; one
+    /// gesture switches once (cooldown), and the ends do not wrap.
+    /// </summary>
+    private void Sidebar_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        var wheel = e.GetCurrentPoint(Sidebar).Properties;
+        if (!wheel.IsHorizontalMouseWheel)
+        {
+            return;
+        }
+
+        e.Handled = true;
+
+        var now = DateTime.UtcNow;
+        if (now - _lastSwipeAt < SwipeCooldown)
+        {
+            return;
+        }
+
+        if (now - _lastWheelAt > TimeSpan.FromMilliseconds(300))
+        {
+            _swipeDelta = 0;
+        }
+
+        _lastWheelAt = now;
+
+        var delta = wheel.MouseWheelDelta;
+        if (delta == 0)
+        {
+            return;
+        }
+
+        if (_swipeDelta != 0 && Math.Sign(delta) != Math.Sign(_swipeDelta))
+        {
+            _swipeDelta = 0;
+        }
+
+        _swipeDelta += delta;
+        if (Math.Abs(_swipeDelta) < SwipeThreshold)
+        {
+            return;
+        }
+
+        // Positive horizontal wheel = scroll right = swipe left: reveal the workspace on the right.
+        ViewModel.SelectRelativeSpace(_swipeDelta > 0 ? 1 : -1);
+        _swipeDelta = 0;
+        _lastSwipeAt = now;
+    }
 
     // ---------------------------------------------------------------- editor surface
 
@@ -208,7 +346,13 @@ public sealed partial class MainPage : Page
             Text = "New workspace",
             Icon = new FontIcon { Glyph = "\uE710" },
         };
-        newSpace.Click += (_, _) => ViewModel.NewSpaceCommand.Execute(null);
+        newSpace.Click += async (_, _) =>
+        {
+            ViewModel.NewSpaceCommand.Execute(null);
+
+            // A workspace is only useful once it points at a server, so configure it right away.
+            await ShowConnectionDialogAsync();
+        };
         flyout.Items.Add(newSpace);
 
         flyout.ShowAt(SpaceSwitcherButton, new Point(0, 40));
@@ -631,3 +775,4 @@ public sealed partial class MainPage : Page
         args.Handled = true;
     }
 }
+

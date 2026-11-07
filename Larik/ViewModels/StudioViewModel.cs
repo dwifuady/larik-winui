@@ -302,6 +302,28 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Moves <paramref name="offset"/> workspaces along the dot order (negative = left).
+    /// Returns false at the ends, so a swipe never wraps around.
+    /// </summary>
+    public bool SelectRelativeSpace(int offset)
+    {
+        if (ActiveSpace is null)
+        {
+            return false;
+        }
+
+        var index = Spaces.IndexOf(ActiveSpace);
+        var target = index + offset;
+        if (index < 0 || target < 0 || target >= Spaces.Count)
+        {
+            return false;
+        }
+
+        SelectSpace(Spaces[target]);
+        return true;
+    }
+
     /// <summary>Switches the database the active space queries against and reloads its schema.</summary>
     public async Task SelectDatabaseAsync(DatabaseViewModel database)
     {
