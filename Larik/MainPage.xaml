@@ -489,8 +489,86 @@
                 RowSpacing="6">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+
+                <!--  Result tabs for a batch: one per result set.  -->
+                <ScrollViewer
+                    x:Name="ResultTabsScroller"
+                    Grid.Row="1"
+                    HorizontalScrollBarVisibility="Hidden"
+                    HorizontalScrollMode="Enabled"
+                    Visibility="{x:Bind ViewModel.ResultTabsVisibility, Mode=OneWay}"
+                    VerticalScrollBarVisibility="Disabled"
+                    VerticalScrollMode="Disabled">
+                    <ItemsControl AutomationProperties.Name="Result tabs" ItemsSource="{x:Bind ViewModel.Results}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="4" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ResultSetViewModel">
+                                <Border
+                                    Margin="0,0,2,0"
+                                    Background="{x:Bind TabBackground, Mode=OneWay}"
+                                    CornerRadius="6"
+                                    ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Button
+                                            Padding="9,3"
+                                            HorizontalContentAlignment="Left"
+                                            AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Click="ResultTabSelect_Click">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <TextBlock
+                                                    FontSize="11"
+                                                    FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
+                                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                                    Text="{x:Bind Title, Mode=OneWay}" />
+                                                <TextBlock
+                                                    MaxWidth="120"
+                                                    FontSize="10"
+                                                    Foreground="{x:Bind DetailBrush, Mode=OneWay}"
+                                                    Text="{x:Bind Detail, Mode=OneWay}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </Button>
+
+                                        <Button
+                                            Grid.Column="1"
+                                            Padding="6,3"
+                                            AutomationProperties.Name="{x:Bind CloseName, Mode=OneWay}"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Click="ResultTabClose_Click"
+                                            ToolTipService.ToolTip="Close result">
+                                            <FontIcon FontSize="9" Glyph="&#xE711;" />
+                                        </Button>
+
+                                        <Rectangle
+                                            Grid.ColumnSpan="2"
+                                            Width="2"
+                                            Height="14"
+                                            HorizontalAlignment="Left"
+                                            IsHitTestVisible="False"
+                                            VerticalAlignment="Center"
+                                            Fill="{x:Bind AccentBrush, Mode=OneWay}"
+                                            Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
 
                 <Grid Grid.Row="0" Padding="4,0,4,0">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -517,7 +595,7 @@
                 </Grid>
 
                 <Border
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"

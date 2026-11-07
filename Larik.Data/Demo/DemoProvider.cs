@@ -95,20 +95,58 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
     public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default) =>
         ExecuteAsync(sql, database, QueryExecutionOptions.Default, cancellationToken);
 
-    public Task<QueryResult> ExecuteAsync(
+    public async Task<QueryResult> ExecuteAsync(
         string sql,
         string? database,
         QueryExecutionOptions options,
         CancellationToken cancellationToken = default)
     {
+        var results = await ExecuteBatchAsync(sql, database, options, cancellationToken);
+        return results.Count > 0
+            ? results[0]
+            : QueryResult.Error("No result returned.", TimeSpan.Zero, database);
+    }
+
+    public async Task<IReadOnlyList<QueryResult>> ExecuteBatchAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        // The demo provider keeps its statement splitter deliberately simple; the SQL Server
+        // provider reads native result sets instead of parsing.
+        var statements = sql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(statement => !string.IsNullOrWhiteSpace(statement))
+            .ToList();
+
+        if (statements.Count == 0)
+        {
+            return [QueryResult.Error("Nothing to run — the editor is empty.", TimeSpan.Zero, database)];
+        }
+
+        var results = new List<QueryResult>(statements.Count);
+        foreach (var statement in statements)
+        {
+            var result = ExecuteStatement(statement, database, options);
+            results.Add(result);
+
+            if (result.IsError)
+            {
+                break;
+            }
+        }
+
+        return results;
+    }
+
+    private static QueryResult ExecuteStatement(
+        string sql,
+        string? database,
+        QueryExecutionOptions options)
+    {
         var stopwatch = Stopwatch.StartNew();
         var trimmed = sql.Trim();
-
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            stopwatch.Stop();
-            return Task.FromResult(QueryResult.Error("Nothing to run — the editor is empty.", stopwatch.Elapsed, database));
-        }
 
         var tableName = FindTargetTable(trimmed);
         var table = tableName is null
@@ -118,12 +156,12 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         if (table is null)
         {
             stopwatch.Stop();
-            return Task.FromResult(QueryResult.Error(
+            return QueryResult.Error(
                 tableName is null
                     ? "No table in this statement — SELECT ... FROM <table> to see rows."
                     : $"Invalid object name '{tableName}'.",
                 stopwatch.Elapsed,
-                database));
+                database);
         }
 
         var rowLimit = options.EffectiveMaxRows;
@@ -131,7 +169,7 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         var truncated = generated.Count > rowLimit;
         var rows = truncated ? generated[..rowLimit] : generated;
         stopwatch.Stop();
-        return Task.FromResult(new QueryResult
+        return new QueryResult
         {
             Columns = table.Columns.Select(c => new QueryColumn { Name = Headerize(c) }).ToList(),
             Rows = rows,
@@ -140,7 +178,7 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
             Database = database,
             IsTruncated = truncated,
             RowLimit = rowLimit,
-        });
+        };
     }
 
     public Task CloseAsync(CancellationToken cancellationToken = default)

@@ -283,8 +283,21 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         QueryExecutionOptions options,
         CancellationToken cancellationToken = default)
     {
+        var results = await ExecuteBatchAsync(sql, database, options, cancellationToken);
+        return results.Count > 0
+            ? results[0]
+            : QueryResult.Error("No result returned.", TimeSpan.Zero, database);
+    }
+
+    public async Task<IReadOnlyList<QueryResult>> ExecuteBatchAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default)
+    {
         var stopwatch = Stopwatch.StartNew();
         var rowLimit = options.EffectiveMaxRows;
+        var results = new List<QueryResult>();
 
         await OpenAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
@@ -298,74 +311,114 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-            var columns = new List<QueryColumn>();
-            var rows = new List<string?[]>();
-            var truncated = false;
-
-            if (reader.FieldCount > 0)
+            var affectedBefore = 0;
+            do
             {
-                for (var i = 0; i < reader.FieldCount; i++)
+                var affected = reader.RecordsAffected;
+                if (reader.FieldCount > 0)
                 {
-                    columns.Add(new QueryColumn
+                    results.Add(await ReadResultSetAsync(
+                        reader,
+                        database,
+                        rowLimit,
+                        stopwatch,
+                        cancellationToken));
+                }
+                else
+                {
+                    var delta = affected > affectedBefore ? affected - affectedBefore : 0;
+                    results.Add(new QueryResult
                     {
-                        Name = reader.GetName(i),
-                        DataType = reader.GetDataTypeName(i),
+                        Columns = [],
+                        Rows = [],
+                        RecordsAffected = delta,
+                        Message = delta > 0 ? $"{delta} rows affected" : "Statement completed",
+                        Elapsed = stopwatch.Elapsed,
+                        Database = database,
                     });
                 }
 
-                // Read one row past the cap only to know whether more data existed; the provider
-                // never materializes the rest of a large result.
-                while (await reader.ReadAsync(cancellationToken))
-                {
-                    if (rows.Count >= rowLimit)
-                    {
-                        truncated = true;
-                        break;
-                    }
-
-                    var values = new string?[reader.FieldCount];
-                    for (var i = 0; i < reader.FieldCount; i++)
-                    {
-                        values[i] = Format(reader.GetValue(i));
-                    }
-
-                    rows.Add(values);
-                }
+                affectedBefore = Math.Max(affectedBefore, affected);
             }
-
-            var affected = reader.RecordsAffected;
-            stopwatch.Stop();
-
-            var message = columns.Count > 0
-                ? $"{rows.Count} rows"
-                : $"{Math.Max(affected, 0)} rows affected";
-
-            return new QueryResult
-            {
-                Columns = columns,
-                Rows = rows,
-                RecordsAffected = affected,
-                Message = message,
-                Elapsed = stopwatch.Elapsed,
-                Database = database,
-                IsTruncated = truncated,
-                RowLimit = columns.Count > 0 ? rowLimit : null,
-            };
+            while (await reader.NextResultAsync(cancellationToken));
         }
         catch (SqlException ex)
         {
-            stopwatch.Stop();
-            return QueryResult.Error(ex.Message, stopwatch.Elapsed, database);
+            results.Add(QueryResult.Error(ex.Message, stopwatch.Elapsed, database));
         }
         catch (InvalidOperationException ex)
         {
-            stopwatch.Stop();
-            return QueryResult.Error(ex.Message, stopwatch.Elapsed, database);
+            results.Add(QueryResult.Error(ex.Message, stopwatch.Elapsed, database));
         }
         finally
         {
             _gate.Release();
         }
+
+        if (results.Count == 0)
+        {
+            results.Add(new QueryResult
+            {
+                Columns = [],
+                Rows = [],
+                Message = "Statement completed",
+                Elapsed = stopwatch.Elapsed,
+                Database = database,
+            });
+        }
+
+        return results;
+    }
+
+    private static async Task<QueryResult> ReadResultSetAsync(
+        SqlDataReader reader,
+        string? database,
+        int rowLimit,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        var columns = new List<QueryColumn>(reader.FieldCount);
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            columns.Add(new QueryColumn
+            {
+                Name = reader.GetName(i),
+                DataType = reader.GetDataTypeName(i),
+            });
+        }
+
+        var rows = new List<string?[]>();
+        var truncated = false;
+
+        // Read one row past the cap only to know whether more data existed; the provider
+        // never materializes the rest of a large result.
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (rows.Count >= rowLimit)
+            {
+                truncated = true;
+                break;
+            }
+
+            var values = new string?[reader.FieldCount];
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                values[i] = Format(reader.GetValue(i));
+            }
+
+            rows.Add(values);
+        }
+
+        return new QueryResult
+        {
+            Columns = columns,
+            Rows = rows,
+            Message = $"{rows.Count} rows",
+            Elapsed = stopwatch.Elapsed,
+            Database = database,
+            IsTruncated = truncated,
+            RowLimit = rowLimit,
+        };
     }
 
     public async ValueTask DisposeAsync()

@@ -125,6 +125,13 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         CancellationToken cancellationToken = default) =>
         RequireSession().ExecuteAsync(sql, database, options, cancellationToken);
 
+    public Task<IReadOnlyList<QueryResult>> ExecuteBatchAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default) =>
+        RequireSession().ExecuteBatchAsync(sql, database, options, cancellationToken);
+
     /// <summary>Swaps the provider/profile (from the connection dialog). Closes any live session.</summary>
     public async Task ReconfigureAsync(string providerId, ConnectionProfile profile)
     {

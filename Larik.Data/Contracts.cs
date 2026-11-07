@@ -191,5 +191,17 @@ public interface IDatabaseConnection : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(sql, database, cancellationToken);
 
+    /// <summary>
+    /// Executes a batch and returns one result per result set (one result tab each). Providers
+    /// that support native multiple result sets should override this; the default keeps older
+    /// providers working with a single result.
+    /// </summary>
+    async Task<IReadOnlyList<QueryResult>> ExecuteBatchAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default) =>
+        [await ExecuteAsync(sql, database, options, cancellationToken)];
+
     Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
 }

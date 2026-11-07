@@ -660,6 +660,92 @@ try {
         Assert-True ($moved.x -gt ($next.x + 50)) "the column did not widen (before=$($next.x) after=$($moved.x))"
     }
 
+    Test-UI 'a batch opens one result tab per statement' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select name from sys.databases where database_id = 3; select name from sys.databases where database_id = 4;" -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'Result 1' 20
+        Assert-True ((Find-Element 'Result 2').matchCount -gt 0) 'the second result tab is missing'
+        Wait-ForText 'model' 10
+
+        Click-Element 'Result 2'
+        Start-Sleep -Milliseconds 500
+        Wait-ForText 'msdb' 10
+    }
+
+    Test-UI 'Ctrl+backslash appends a new result tab' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select name from sys.databases where database_id = 1;' -Literal
+        Send-Keys 'ctrl+\'
+        Wait-ForText 'master' 20
+        Assert-True ((Find-Element 'Result 3').matchCount -gt 0) 'the appended result tab is missing'
+    }
+
+    Test-UI 'Ctrl+Enter replaces the active result tab' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select name from sys.databases where database_id = 4;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'msdb' 20
+        Assert-True ((Find-Element 'Result 3').matchCount -gt 0) 'the active result tab disappeared'
+        Assert-True ((Find-Element 'Result 4').matchCount -eq 0) 'Ctrl+Enter appended instead of replacing'
+    }
+
+    Test-UI 'a result tab can be closed' {
+        Click-Element 'Close Result 3'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Result 3').matchCount -eq 0) 'the result tab was not closed'
+        Assert-True ((Find-Element 'Result 2').matchCount -gt 0) 'the remaining result tabs disappeared'
+    }
+
+    Test-UI 'each result remembers its scroll position' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select top 1000 'row_' + cast(row_number() over (order by (select null)) as varchar(10)) as label from sys.all_objects a cross join sys.all_objects b;" -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'row_1' 30
+
+        $before = @((Find-Element 'row_1').matches) | Select-Object -First 1
+        Assert-True ($null -ne $before) 'the first row was not visible before scrolling'
+
+        Focus-Element 'Results grid'
+        for ($i = 0; $i -lt 5; $i++) {
+            Send-Keys 'pagedown'
+        }
+        Start-Sleep -Milliseconds 600
+        $after = @((Find-Element 'row_1').matches) | Select-Object -First 1
+        Assert-True ($null -eq $after -or $after.y -lt ($before.y - 30)) "scrolling did not move the grid (before=$($before.y) after=$($after.y))"
+
+        Click-Element 'Result 1'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'model').matchCount -gt 0) 'the first result was not restored'
+
+        Click-Element 'Result 2'
+        Start-Sleep -Milliseconds 600
+        $restored = @((Find-Element 'row_1').matches) | Select-Object -First 1
+        if ($null -eq $after) {
+            Assert-True ($null -eq $restored) "the second result lost its scroll position (row_1 y=$($restored.y))"
+        }
+        else {
+            Assert-True ($null -ne $restored -and [Math]::Abs($restored.y - $after.y) -lt 30) "the second result lost its scroll position (before=$($after.y) after=$($restored.y))"
+        }
+        Assert-True ((Find-Element 'label').matchCount -gt 0) 'the restored grid is empty'
+
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 600
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 600
+        $restoredTab = @((Find-Element 'row_1').matches) | Select-Object -First 1
+        if ($null -eq $after) {
+            Assert-True ($null -eq $restoredTab) "switching query tabs lost the result position (row_1 y=$($restoredTab.y))"
+        }
+        else {
+            Assert-True ($null -ne $restoredTab -and [Math]::Abs($restoredTab.y - $after.y) -lt 30) "switching query tabs lost the result position (before=$($after.y) after=$($restoredTab.y))"
+        }
+    }
+
     Test-UI 'workspace state is saved to disk' {
         Start-Sleep -Milliseconds 900
         Assert-True (Test-Path $StatePath) 'no workspace database was written'

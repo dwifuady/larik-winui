@@ -29,9 +29,11 @@ public sealed partial class ResultsGrid : UserControl
     private const double MaxColumnWidth = 900;
 
     private readonly ConditionalWeakTable<QueryResult, ResultLayout> _layouts = new();
+    private readonly ConditionalWeakTable<QueryResult, ResultViewState> _viewStates = new();
     private readonly List<Grid> _headerContainers = [];
     private readonly List<Border> _headerSurfaces = [];
 
+    private QueryResult? _result;
     private ResultLayout? _layout;
     private IReadOnlyList<ResultRow> _rows = [];
     private ScrollViewer? _listScroller;
@@ -53,6 +55,24 @@ public sealed partial class ResultsGrid : UserControl
     private Brush _headerSelectionBrush = null!;
     private Brush _headerBackground = null!;
     private Brush _dividerBrush = null!;
+
+    /// <summary>Per-result scroll/selection state, so each result tab remembers where it was.</summary>
+    private sealed class ResultViewState
+    {
+        public double VerticalOffset { get; set; }
+
+        public double HorizontalOffset { get; set; }
+
+        public bool HasSelection { get; set; }
+
+        public int AnchorRow { get; set; }
+
+        public int AnchorColumn { get; set; }
+
+        public int FocusRow { get; set; }
+
+        public int FocusColumn { get; set; }
+    }
 
     public ResultsGrid()
     {
@@ -76,6 +96,8 @@ public sealed partial class ResultsGrid : UserControl
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
     {
+        SaveViewState();
+
         _accentHex = accentHex;
         UpdateAccentBrushes();
 
@@ -88,19 +110,24 @@ public sealed partial class ResultsGrid : UserControl
         if (result.Columns.Count == 0 || result.Rows.Count == 0)
         {
             Clear();
+            _result = result;
             EmptyText.Text = result.Message;
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
 
+        _result = result;
         _layout = GetOrBuildLayout(result);
         _rows = BuildRows(result, _layout);
         BuildHeader(_layout);
 
+        var state = _viewStates.GetOrCreateValue(result);
         IsTabStop = true;
-        _hasSelection = true;
-        _anchorRow = _focusRow = 0;
-        _anchorColumn = _focusColumn = 0;
+        _hasSelection = _rows.Count > 0 && _layout.Columns.Count > 0;
+        _anchorRow = _hasSelection ? Math.Clamp(state.AnchorRow, 0, _rows.Count - 1) : 0;
+        _focusRow = _hasSelection ? Math.Clamp(state.FocusRow, 0, _rows.Count - 1) : 0;
+        _anchorColumn = _hasSelection ? Math.Clamp(state.AnchorColumn, 0, _layout.Columns.Count - 1) : 0;
+        _focusColumn = _hasSelection ? Math.Clamp(state.FocusColumn, 0, _layout.Columns.Count - 1) : 0;
 
         EmptyText.Visibility = Visibility.Collapsed;
         RowsList.ItemsSource = _rows;
@@ -108,11 +135,12 @@ public sealed partial class ResultsGrid : UserControl
         AccentRule.Visibility = Visibility.Visible;
 
         UpdateSelectionVisuals();
-        ResetScroll();
+        RestoreViewState(state, result);
     }
 
     private void Clear()
     {
+        _result = null;
         _layout = null;
         _rows = [];
         _hasSelection = false;
@@ -732,14 +760,47 @@ public sealed partial class ResultsGrid : UserControl
         _syncingScroll = false;
     }
 
-    private void ResetScroll()
+    private void SaveViewState()
     {
-        if (_listScroller is not null)
+        if (_result is null)
         {
-            _listScroller.ChangeView(0, 0, null, disableAnimation: true);
+            return;
         }
 
-        HeaderScroller.ChangeView(0, null, null, disableAnimation: true);
+        var state = _viewStates.GetOrCreateValue(_result);
+        if (_listScroller is not null)
+        {
+            state.VerticalOffset = _listScroller.VerticalOffset;
+            state.HorizontalOffset = _listScroller.HorizontalOffset;
+        }
+
+        state.HasSelection = _hasSelection;
+        state.AnchorRow = _anchorRow;
+        state.AnchorColumn = _anchorColumn;
+        state.FocusRow = _focusRow;
+        state.FocusColumn = _focusColumn;
+    }
+
+    private void RestoreViewState(ResultViewState state, QueryResult result)
+    {
+        void Restore()
+        {
+            if (!ReferenceEquals(_result, result) || _listScroller is null)
+            {
+                return;
+            }
+
+            _listScroller.ChangeView(
+                state.HorizontalOffset,
+                state.VerticalOffset,
+                null,
+                disableAnimation: true);
+        }
+
+        // Give the new item source a layout pass so the scroll extent exists before restoring.
+        RowsList.UpdateLayout();
+        Restore();
+        DispatcherQueue.TryEnqueue(Restore);
     }
 
     // ---------------------------------------------------------------- helpers

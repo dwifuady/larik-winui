@@ -55,6 +55,15 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Tabs of the active space. Mutated in place so the ListView keeps its identity.</summary>
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
+    /// <summary>Result tabs of the active query tab.</summary>
+    public ObservableCollection<ResultSetViewModel> Results { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ResultTabsVisibility))]
+    public partial bool HasMultipleResults { get; set; }
+
+    public Visibility ResultTabsVisibility => HasMultipleResults ? Visibility.Visible : Visibility.Collapsed;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SidebarVisibility))]
     public partial bool IsSidebarOpen { get; set; }
@@ -208,7 +217,12 @@ public partial class StudioViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task RunAsync()
+    private Task RunAsync() => RunCoreAsync(append: false);
+
+    [RelayCommand]
+    private Task RunNewResultAsync() => RunCoreAsync(append: true);
+
+    private async Task RunCoreAsync(bool append)
     {
         var tab = ActiveTab;
         var space = ActiveSpace;
@@ -219,9 +233,9 @@ public partial class StudioViewModel : ObservableObject
 
         if (!space.Connection.IsConnected)
         {
-            ApplyResult(tab, QueryResult.Error(
+            ApplyResults(tab, [QueryResult.Error(
                 $"Not connected — connect to {space.Name} to run queries.",
-                TimeSpan.Zero), "Disconnected");
+                TimeSpan.Zero)], append, "Disconnected");
             return;
         }
 
@@ -232,9 +246,9 @@ public partial class StudioViewModel : ObservableObject
 
         if (mutates && !guarded)
         {
-            ApplyResult(tab, QueryResult.Error(
+            ApplyResults(tab, [QueryResult.Error(
                 "Refused: this statement modifies rows without a WHERE clause.",
-                TimeSpan.Zero), "Error");
+                TimeSpan.Zero)], append, "Error");
             return;
         }
 
@@ -243,17 +257,17 @@ public partial class StudioViewModel : ObservableObject
         try
         {
             // The tab pins the database, so switching tabs while the query runs cannot retarget it.
-            // The provider applies the row cap while reading, not after materializing everything.
-            var result = await space.Connection.ExecuteAsync(
+            // The provider applies the row cap while reading and returns one result per result set.
+            var results = await space.Connection.ExecuteBatchAsync(
                 sql,
                 DatabaseNameFor(space, tab),
                 QueryExecutionOptions.Default,
                 _lifetime.Token);
-            ApplyResult(tab, result);
+            ApplyResults(tab, results, append);
         }
         catch (Exception ex)
         {
-            ApplyResult(tab, QueryResult.Error(ex.Message, TimeSpan.Zero));
+            ApplyResults(tab, [QueryResult.Error(ex.Message, TimeSpan.Zero)], append);
         }
         finally
         {
@@ -272,34 +286,117 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    /// <summary>Stores a result on its tab and mirrors it to the shell only when that tab is active.</summary>
-    private void ApplyResult(TabViewModel tab, QueryResult result, string? status = null)
+    /// <summary>Stores new result tabs on their query tab and mirrors the active one to the shell.</summary>
+    private void ApplyResults(
+        TabViewModel tab,
+        IReadOnlyList<QueryResult> results,
+        bool append,
+        string? status = null)
     {
-        tab.ApplyResult(result);
+        tab.ApplyResults(results, append);
 
         if (!ReferenceEquals(tab, ActiveTab))
         {
             return;
         }
 
-        LastResult = result;
-        ResultMessage = tab.ResultMessage;
-        ResultSummary = tab.ResultSummary;
-        StatusText = status ?? (result.IsError
-            ? "Error"
-            : result.IsTruncated
-                ? $"Showing first {result.RowLimit:N0} rows"
-                : $"{result.Rows.Count} rows returned");
+        SyncResultsMirror(tab);
+        StatusText = status ?? DescribeRun(results, append);
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Republishes the active tab's stored result; an empty tab clears the grid.</summary>
+    /// <summary>Selects a result tab and republishes its grid, message and summary.</summary>
+    public void SelectResult(ResultSetViewModel result)
+    {
+        if (ActiveTab is null || !ReferenceEquals(result.Tab, ActiveTab))
+        {
+            return;
+        }
+
+        ActiveTab.SelectResult(result);
+        SyncResultsMirror(ActiveTab);
+        StatusText = result.Result.IsError
+            ? "Error"
+            : result.Result.Rows.Count > 0
+                ? $"{result.Result.Rows.Count} rows returned"
+                : result.Result.Message;
+        ResultChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Closes one result tab and keeps the remaining active result/shell mirror coherent.</summary>
+    public void CloseResult(ResultSetViewModel result)
+    {
+        if (ActiveTab is null || !ReferenceEquals(result.Tab, ActiveTab))
+        {
+            return;
+        }
+
+        ActiveTab.CloseResult(result);
+        SyncResultsMirror(ActiveTab);
+        StatusText = ActiveTab.ActiveResult is not { } active
+            ? "No results"
+            : active.Result.IsError
+                ? "Error"
+                : active.Result.Rows.Count > 0
+                    ? $"{active.Result.Rows.Count} rows returned"
+                    : active.Result.Message;
+        ResultChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static string DescribeRun(IReadOnlyList<QueryResult> results, bool append)
+    {
+        if (results.Count == 0)
+        {
+            return "No result";
+        }
+
+        var errors = results.Count(result => result.IsError);
+        if (results.Count == 1)
+        {
+            var result = results[0];
+            return result.IsError
+                ? "Error"
+                : result.IsTruncated
+                    ? $"Showing first {result.RowLimit:N0} rows"
+                    : $"{result.Rows.Count} rows returned";
+        }
+
+        var rows = results.Where(result => !result.IsError).Sum(result => result.Rows.Count);
+        var suffix = errors > 0 ? $" · {errors} error{(errors == 1 ? string.Empty : "s")}" : string.Empty;
+        var sets = $"result set{(results.Count == 1 ? string.Empty : "s")}";
+        return append
+            ? $"Added {results.Count} {sets}{suffix}"
+            : $"{results.Count} {sets} · {rows} rows{suffix}";
+    }
+
+    /// <summary>Republishes the active tab's result tabs; an empty tab clears the grid.</summary>
     private void SyncResultMirror(TabViewModel? tab)
     {
-        LastResult = tab?.Result;
-        ResultMessage = tab?.ResultMessage ?? string.Empty;
-        ResultSummary = tab?.ResultSummary ?? string.Empty;
+        SyncResultsMirror(tab);
         ResultChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SyncResultsMirror(TabViewModel? tab)
+    {
+        var source = tab?.Results;
+        if (source is null)
+        {
+            Results.Clear();
+        }
+        else if (!Results.SequenceEqual(source))
+        {
+            Results.Clear();
+            foreach (var result in source)
+            {
+                Results.Add(result);
+            }
+        }
+
+        HasMultipleResults = Results.Count > 1;
+        var active = tab?.ActiveResult;
+        LastResult = active?.Result;
+        ResultMessage = active?.Message ?? string.Empty;
+        ResultSummary = active?.Summary ?? string.Empty;
     }
 
     public void SelectSpace(SpaceViewModel space, TabViewModel? tab = null)
@@ -695,7 +792,7 @@ public partial class StudioViewModel : ObservableObject
             StatusText = "Connection failed";
             if (ActiveTab is { } tab && ReferenceEquals(space, ActiveSpace))
             {
-                ApplyResult(tab, QueryResult.Error(ex.Message, TimeSpan.Zero), "Connection failed");
+                ApplyResults(tab, [QueryResult.Error(ex.Message, TimeSpan.Zero)], append: false, "Connection failed");
             }
         }
         finally

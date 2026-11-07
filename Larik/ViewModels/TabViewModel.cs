@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Larik.Data;
 using Microsoft.UI.Xaml;
@@ -51,23 +52,95 @@ public partial class TabViewModel : ObservableObject
     [ObservableProperty]
     public partial string Content { get; set; }
 
-    /// <summary>The last result produced while this tab was active. Results are not shared between tabs.</summary>
-    public QueryResult? Result { get; set; }
+    /// <summary>Result tabs produced by this query tab, in execution order.</summary>
+    public ObservableCollection<ResultSetViewModel> Results { get; } = [];
 
-    public string ResultMessage { get; set; } = string.Empty;
+    private ResultSetViewModel? _activeResult;
 
-    public string ResultSummary { get; set; } = string.Empty;
+    public ResultSetViewModel? ActiveResult => _activeResult;
 
-    /// <summary>Stores a result and the header text derived from it for this tab.</summary>
-    public void ApplyResult(QueryResult result)
+    public QueryResult? Result => _activeResult?.Result;
+
+    /// <summary>
+    /// Replaces the active result tab when <paramref name="append"/> is false, or appends the new
+    /// result tabs when it is true. A batch can produce several results at once.
+    /// </summary>
+    public void ApplyResults(IReadOnlyList<QueryResult> results, bool append)
     {
-        Result = result;
-        ResultMessage = result.IsTruncated && result.RowLimit is { } limit
-            ? $"Showing first {limit:N0} rows"
-            : result.Message;
-        ResultSummary = result is { IsError: false, Rows.Count: > 0 }
-            ? $"{result.Rows.Count} rows · {result.Elapsed.TotalMilliseconds:0} ms"
-            : string.Empty;
+        if (results.Count == 0)
+        {
+            return;
+        }
+
+        var index = append || Results.Count == 0
+            ? Results.Count
+            : Math.Clamp(Results.IndexOf(_activeResult!), 0, Results.Count - 1);
+
+        if (!append && Results.Count > 0)
+        {
+            Results.RemoveAt(index);
+        }
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            Results.Insert(index + i, new ResultSetViewModel(this, results[i], index + i));
+        }
+
+        Reindex();
+        SetActiveResult(Results[Math.Clamp(index, 0, Results.Count - 1)]);
+    }
+
+    public void SelectResult(ResultSetViewModel result)
+    {
+        if (Results.Contains(result))
+        {
+            SetActiveResult(result);
+        }
+    }
+
+    public void CloseResult(ResultSetViewModel result)
+    {
+        var index = Results.IndexOf(result);
+        if (index < 0)
+        {
+            return;
+        }
+
+        var wasActive = ReferenceEquals(_activeResult, result);
+        Results.RemoveAt(index);
+        Reindex();
+
+        if (Results.Count == 0)
+        {
+            SetActiveResult(null);
+        }
+        else if (wasActive)
+        {
+            SetActiveResult(Results[Math.Clamp(index, 0, Results.Count - 1)]);
+        }
+    }
+
+    private void SetActiveResult(ResultSetViewModel? result)
+    {
+        foreach (var item in Results)
+        {
+            item.IsActive = item == result;
+        }
+
+        if (!ReferenceEquals(_activeResult, result))
+        {
+            _activeResult = result;
+            OnPropertyChanged(nameof(ActiveResult));
+            OnPropertyChanged(nameof(Result));
+        }
+    }
+
+    private void Reindex()
+    {
+        for (var index = 0; index < Results.Count; index++)
+        {
+            Results[index].Index = index;
+        }
     }
 
     [ObservableProperty]

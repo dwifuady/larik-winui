@@ -295,6 +295,14 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     CommandRequested?.Invoke(this, EditorCommandKind.NewTab);
                     e.Handled = true;
                     return;
+
+                // VK_OEM_5 is the backslash key. Running to a new result tab must not clear
+                // the results already shown for this query tab.
+                case (VirtualKey)220:
+                    HideCompletions();
+                    CommandRequested?.Invoke(this, EditorCommandKind.RunNewResult);
+                    e.Handled = true;
+                    return;
             }
         }
 

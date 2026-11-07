@@ -253,6 +253,9 @@ public sealed partial class MainPage : Page
             case EditorCommandKind.RunQuery:
                 ViewModel.RunCommand.Execute(null);
                 break;
+            case EditorCommandKind.RunNewResult:
+                ViewModel.RunNewResultCommand.Execute(null);
+                break;
             case EditorCommandKind.NewTab:
                 ViewModel.NewTabCommand.Execute(null);
                 break;
@@ -915,10 +918,67 @@ public sealed partial class MainPage : Page
             : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
 
         ResultsGrid.ShowResult(result, ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
+        BringActiveResultTabIntoView();
+    }
+
+    /// <summary>Keeps the active result tab visible when Ctrl+\ appends beyond the viewport.</summary>
+    private void BringActiveResultTabIntoView()
+    {
+        if (!ViewModel.HasMultipleResults)
+        {
+            return;
+        }
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            foreach (var button in FindDescendants<Button>(ResultTabsScroller))
+            {
+                if (button.DataContext is ResultSetViewModel { IsActive: true })
+                {
+                    button.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+                    return;
+                }
+            }
+        });
     }
 
     private void ResultsGrid_StatusChanged(object? sender, string message) =>
         ViewModel.StatusText = message;
+
+    private void ResultTabSelect_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ResultSetViewModel result })
+        {
+            ViewModel.SelectResult(result);
+        }
+    }
+
+    private void ResultTabClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ResultSetViewModel result })
+        {
+            ViewModel.CloseResult(result);
+        }
+    }
+
+    private static IEnumerable<T> FindDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T target)
+            {
+                yield return target;
+            }
+
+            foreach (var nested in FindDescendants<T>(child))
+            {
+                yield return nested;
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- accelerators
 

@@ -6,6 +6,7 @@ namespace Larik.Editor;
 public enum EditorCommandKind
 {
     RunQuery,
+    RunNewResult,
     NewTab,
     ToggleSidebar,
 }

@@ -53,11 +53,13 @@ declared `@variables`, `USE` databases and CTE names complete, workspace switchi
 connection + tabs + editor, a
 workspace starts disconnected until the status-bar action connects it, a new query asks for its
 database, the picker and result grid follow the active tab (and each tab restores its own result),
-a 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky
-header, results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with
-headers, Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the
-provider's declared fields and its Test result, saved state is written to disk, and a real
-**SQL Server** workspace is
+a batch opens one result tab per statement, Ctrl+Enter replaces the active result tab, Ctrl+\
+appends a new one, each result remembers its scroll row across result/query tab switches, a
+1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
+results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
+Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the provider's
+declared fields and its Test result, saved state is written to disk, and a real **SQL Server**
+workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
 or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
 
@@ -104,6 +106,10 @@ stop reading at `EffectiveMaxRows + 1` and set `QueryResult.IsTruncated`/`RowLim
 5,000 rows with a 100,000 ceiling, matching the Tauri app. The legacy overload keeps older provider
 assemblies working. This is an execution cap, not paging: no continuation tokens or ordering rules
 are needed, so a new provider only has to stop its own reader/cursor early.
+
+`ExecuteBatchAsync` returns one `QueryResult` per result set, which becomes one result tab. SQL
+Server reads native multiple result sets with `NextResultAsync`; the Demo provider splits on `;`.
+Providers that only implement the single-result method still work through a default implementation.
 
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
 `sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
@@ -159,16 +165,20 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once. Spaces still
   start disconnected; provider-declared password fields are never written, so SQL-auth
   connections re-prompt after a restart. Corrupt state falls back to the seeded spaces.
-- **Results grid**: per tab and virtualized — a `ListView` realizes only the visible rows and
-  recycles their containers, so a 1,000-row result stays quick and light to switch back to. A real
-  grid with header/row/column rules and a sticky header. Click a cell or move with the arrow keys;
-  Shift extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies
-  the selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
+- **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
+  tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
+  result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
+  query tab. Each grid is virtualized — a `ListView` realizes only the visible rows and recycles
+  their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
+  header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
+  extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies the
+  selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
   context menu offers Copy / Copy with headers / Select all. Drag a header edge to resize a column;
-  widths persist with that tab's result. The provider caps each result at 5,000 rows (100,000
-  ceiling) while reading, and a truncated result says **Showing first 5,000 rows**. Switching tabs
-  restores that tab's last result; running a query while another tab is active writes to the tab
-  that started it.
+  widths persist with that result set. Each result also remembers its vertical/horizontal scroll
+  offset and active cell, so switching to another result or query tab and back returns to the same
+  row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
+  result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
+  running a query while another tab is active writes to the tab that started it.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
@@ -191,6 +201,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
+| A failing batch statement stops the server batch | SQL Server executes the batch natively, so the first server error ends the remaining statements. Split-and-execute per statement (as the Tauri drivers do) if every statement must report independently. |
 | No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |
 
