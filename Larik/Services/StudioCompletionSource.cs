@@ -6,8 +6,8 @@ namespace Larik.Services;
 
 /// <summary>
 /// Bridges the shell's current snippets and schema to any editor surface. The surface asks with a
-/// document + caret; this resolves the word, the clause and the tables in play, then runs the
-/// shared completion engine.
+/// document + caret; this resolves the word, the clause, the tables (and their aliases) in play,
+/// then runs the shared completion engine.
 /// </summary>
 public sealed class StudioCompletionSource(
     Func<IReadOnlyList<SnippetDef>> snippets,
@@ -18,16 +18,17 @@ public sealed class StudioCompletionSource(
         var text = query.DocumentText;
         var caret = query.CaretOffset;
         var (_, word, qualifier) = CompletionEngine.ExtractContext(text, caret);
+        var (scope, keyword) = CompletionEngine.DetectScope(text, caret);
         var schema = tables();
 
         return CompletionEngine.Suggest(new CompletionRequest(
             word,
             qualifier,
-            CompletionEngine.DetectScope(text, caret),
+            scope,
+            keyword,
             snippets(),
             schema,
-            CompletionEngine.TablesInStatement(text, caret, schema),
-            qualifier is null ? null : CompletionEngine.ResolveQualifier(text, caret, qualifier, schema),
+            CompletionEngine.FindTableReferences(text, caret, schema),
             Clipboard: string.Empty));
     }
 }

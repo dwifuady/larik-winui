@@ -45,7 +45,8 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 
 The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
-`FROM ` lists every table in the database, workspace switching swaps connection + tabs + editor, a
+`FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
+are offered through their alias, workspace switching swaps connection + tabs + editor, a
 workspace starts disconnected until the status-bar action connects it, the database picker repoints
 the rail/status bar/tab subtitle, the connection dialog renders the provider's declared fields and
 its Test result, saved state is written to disk, and a real **SQL Server** workspace is
@@ -106,8 +107,12 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
-  lists every table in the active database, after `SELECT`/`WHERE`/`ON`/`AND`/`SET`/... the columns
-  of the tables in that statement, and elsewhere snippets + keywords + schema.
+  lists every table in the active database, appending a generated alias in join positions
+  (`customers AS c`, plus a `no alias` variant); after `SELECT`/`WHERE`/`ON`/`AND`/`SET`/... it
+  lists the statement's columns through their aliases (`c.full_name`), offers join conditions
+  (`o.customer_id = c.id`, matched from `xxx_id` stems and shared column names), and the built-in
+  functions (inserted as `COUNT()` with the caret inside). Elsewhere it mixes snippets, keywords
+  and schema.
 - **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
   builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs` and `app_state` — the
   same model as `src-tauri/src/storage` — so spaces, connection profiles (non-secret settings),
@@ -137,6 +142,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | **Secrets are memory-only** | Connection profiles persist without provider-declared password fields. Next: Windows Credential Manager (what `keyring` uses in the Tauri app) or DPAPI, instead of keeping them in memory. |
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
+| Completion context is token-based | UPDATE/INSERT target columns, CTE/subquery aliases and `USE` database completion still need statement parsing (the Tauri app uses an AST). Join conditions use name heuristics until the provider contract exposes primary/foreign keys. Only the MSSQL function list ships. |
 | Results grid not virtualized | Fine for a slice; for large result sets move to `ItemsRepeater` with a shared row template. |
 | No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |

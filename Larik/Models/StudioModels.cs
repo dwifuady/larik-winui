@@ -10,6 +10,8 @@ public enum CompletionKind
     Keyword,
     Table,
     Column,
+    Function,
+    Join,
 }
 
 /// <summary>A SQL snippet: a short trigger that expands to a statement.</summary>
@@ -55,15 +57,19 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Snippet => "SNIP",
         CompletionKind.Keyword => "KW",
         CompletionKind.Table => "TBL",
-        _ => "COL",
+        CompletionKind.Column => "COL",
+        CompletionKind.Function => "FN",
+        _ => "JN",
     };
 
-    /// <summary>Ordering bucket so snippets outrank schema objects, which outrank keywords.</summary>
+    /// <summary>Ordering bucket so joins and snippets lead, schema objects follow, keywords last.</summary>
     public int Rank => Kind switch
     {
         CompletionKind.Snippet => 0,
+        CompletionKind.Join => 0,
         CompletionKind.Table => 1,
         CompletionKind.Column => 2,
-        _ => 3,
+        CompletionKind.Function => 3,
+        _ => 4,
     };
 }

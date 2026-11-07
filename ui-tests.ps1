@@ -211,6 +211,38 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'FROM table suggestions append a generated alias' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from cust' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'customers').matchCount -gt 0) 'customers is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -eq 'select * from customers AS c') "alias was not appended: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'join condition is suggested after ON' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers c join orders o on ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Join on').matchCount -gt 0) 'join condition is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText).TrimEnd().EndsWith('o.customer_id = c.id')) "join condition was not inserted: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'columns are suggested through their table alias' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers c where ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'c.full_name').matchCount -gt 0) 'alias-qualified column is not suggested'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
     Test-UI 'switching database updates the rail, status bar and tab' {
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 600
