@@ -243,6 +243,48 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'UPDATE SET suggests the target columns with =' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'update customers set ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'full_name').matchCount -gt 0) 'target column is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText).TrimEnd().EndsWith('set id =')) "assignment was not inserted: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'INSERT INTO suggests the target columns' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'insert into order_items (' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'order_id').matchCount -gt 0) 'insert column is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText).EndsWith('id')) "column was not inserted: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'declared variables are suggested' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'declare @order_id int; select * from orders where ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element '@order_id').matchCount -gt 0) 'variable is not suggested'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'USE suggests the workspace databases' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'use lar' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'larik_sandbox').matchCount -gt 0) 'database is not suggested'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
     Test-UI 'switching database updates the rail, status bar and tab' {
         Click-Element 'Select database'
         Start-Sleep -Milliseconds 600

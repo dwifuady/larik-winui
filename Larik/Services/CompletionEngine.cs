@@ -16,7 +16,13 @@ public enum CompletionScope
 
     /// <summary>After SELECT, WHERE, ON, ...: columns.</summary>
     Column,
+
+    /// <summary>After USE: database names.</summary>
+    Database,
 }
+
+/// <summary>The table an UPDATE/INSERT writes, when the caret is in its column list.</summary>
+public sealed record StatementTarget(TableSchema Table, bool Assignment);
 
 /// <summary>A table named by FROM/JOIN in the statement under the caret.</summary>
 public sealed record TableReference(TableSchema? Table, string Name, string? Alias);
@@ -30,6 +36,9 @@ public sealed record CompletionRequest(
     IReadOnlyList<SnippetDef> Snippets,
     IReadOnlyList<TableSchema> Tables,
     IReadOnlyList<TableReference> References,
+    IReadOnlyList<string> Variables,
+    IReadOnlyList<string> Databases,
+    StatementTarget? Target,
     string Clipboard);
 
 /// <summary>
@@ -149,8 +158,14 @@ public static partial class CompletionEngine
             return (CompletionScope.Keyword, null);
         }
 
+        // "USE [name" is still typing an identifier; drop the bracket before reading words.
+        if (before.EndsWith('['))
+        {
+            before = before[..^1].TrimEnd();
+        }
+
         // Operators and separators are followed by a column, not by a keyword.
-        if (before[^1] is '=' or '<' or '>' or '!' or ',' or '(')
+        if (before.Length > 0 && before[^1] is '=' or '<' or '>' or '!' or ',' or '(')
         {
             return (CompletionScope.Column, null);
         }
@@ -159,6 +174,12 @@ public static partial class CompletionEngine
         if (words.Length == 0)
         {
             return (CompletionScope.Keyword, null);
+        }
+
+        // USE <database> at the start of a batch.
+        if (words.Length == 1 && words[0].Equals("USE", StringComparison.OrdinalIgnoreCase))
+        {
+            return (CompletionScope.Database, "USE");
         }
 
         var last = words[^1].ToUpperInvariant();
@@ -223,6 +244,82 @@ public static partial class CompletionEngine
         return references;
     }
 
+    /// <summary>
+    /// The table an UPDATE or INSERT writes, when the caret is in its column list
+    /// (<c>INSERT INTO x (…)</c> or <c>UPDATE x SET …</c>). <see cref="StatementTarget.Assignment"/>
+    /// asks for <c>column = </c> insertion.
+    /// </summary>
+    public static StatementTarget? FindTarget(string text, int caret, IReadOnlyList<TableSchema> tables)
+    {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var statement = text[StatementStart(text, caret)..caret];
+
+        var insert = InsertStatementPattern().Match(statement);
+        if (insert.Success)
+        {
+            var table = FindTable(NormalizeIdentifier(insert.Groups["table"].Value), tables);
+            if (table is null)
+            {
+                return null;
+            }
+
+            var afterTable = statement[(insert.Index + insert.Length)..];
+            var open = afterTable.IndexOf('(');
+
+            // Only the first parenthesis group directly after the table is the column list;
+            // "VALUES (" or an already closed list is not.
+            if (open < 0 || !string.IsNullOrWhiteSpace(afterTable[..open]) || afterTable[(open + 1)..].Contains(')'))
+            {
+                return null;
+            }
+
+            return new StatementTarget(table, Assignment: false);
+        }
+
+        var update = UpdateStatementPattern().Match(statement);
+        if (!update.Success)
+        {
+            return null;
+        }
+
+        var updated = FindTable(NormalizeIdentifier(update.Groups["table"].Value), tables);
+        if (updated is null)
+        {
+            return null;
+        }
+
+        var afterUpdate = statement[(update.Groups["table"].Index + update.Groups["table"].Length)..];
+        var set = SetKeywordPattern().Match(afterUpdate);
+        if (!set.Success)
+        {
+            return null;
+        }
+
+        var afterSet = afterUpdate[(set.Index + set.Length)..];
+        return new StatementTarget(updated, Assignment: !WhereKeywordPattern().IsMatch(afterSet));
+    }
+
+    /// <summary>T-SQL variables declared before the caret (<c>DECLARE @x INT</c>).</summary>
+    public static IReadOnlyList<string> DeclaredVariables(string text, int caret)
+    {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var found = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match declaration in DeclarePattern().Matches(text[..caret]))
+        {
+            foreach (Match variable in VariablePattern().Matches(declaration.Groups["body"].Value))
+            {
+                if (seen.Add(variable.Value))
+                {
+                    found.Add(variable.Value);
+                }
+            }
+        }
+
+        return found;
+    }
+
     public static IReadOnlyList<CompletionItem> Suggest(CompletionRequest request)
     {
         var needle = request.Word.ToLowerInvariant();
@@ -254,11 +351,22 @@ public static partial class CompletionEngine
 
         switch (request.Scope)
         {
+            case CompletionScope.Database:
+                AddDatabases(results, request.Databases, needle);
+                break;
+
             case CompletionScope.Table:
                 AddTables(results, request, needle);
                 break;
 
             case CompletionScope.Column:
+                if (request.Target is { } target)
+                {
+                    AddTargetColumns(results, target, needle);
+                    break;
+                }
+
+                AddVariables(results, request.Variables, needle);
                 AddJoinConditions(results, request, needle);
                 AddScopedColumns(results, request, needle);
                 AddFunctions(results, needle);
@@ -271,16 +379,17 @@ public static partial class CompletionEngine
                 }
 
                 AddSnippets(results, request.Snippets, request.Word, request.Clipboard);
+                AddVariables(results, request.Variables, needle);
                 AddKeywords(results, needle);
                 AddPlainTables(results, request.Tables, needle);
                 AddColumns(results, request.Tables, needle);
                 break;
         }
 
-        // A table list is what FROM is for: show every table, the popup scrolls.
+        // A table or database list is what these clauses are for: show them all, the popup scrolls.
         var max = request.Scope switch
         {
-            CompletionScope.Table => int.MaxValue,
+            CompletionScope.Table or CompletionScope.Database => int.MaxValue,
             CompletionScope.Keyword => KeywordLimit,
             _ => SchemaLimit,
         };
@@ -521,11 +630,59 @@ public static partial class CompletionEngine
         }
     }
 
+    /// <summary>Columns of the table an UPDATE/INSERT writes; SET positions ask for <c>column = </c>.</summary>
+    private static void AddTargetColumns(List<CompletionItem> results, StatementTarget target, string needle)
+    {
+        foreach (var column in target.Table.Columns.Where(column => Matches(column, needle)))
+        {
+            results.Add(new CompletionItem
+            {
+                Label = column,
+                Detail = $"{target.Table.Name}.{column}",
+                Kind = CompletionKind.Column,
+                InsertText = target.Assignment ? $"{column} = " : column,
+            });
+        }
+    }
+
+    private static void AddVariables(List<CompletionItem> results, IReadOnlyList<string> variables, string needle)
+    {
+        foreach (var variable in variables)
+        {
+            // The label carries the '@'; match what the user types after it too.
+            if (!Matches(variable, needle) && !Matches(variable.TrimStart('@'), needle))
+            {
+                continue;
+            }
+
+            results.Add(new CompletionItem
+            {
+                Label = variable,
+                Detail = "local variable",
+                Kind = CompletionKind.Variable,
+                InsertText = variable,
+            });
+        }
+    }
+
+    private static void AddDatabases(List<CompletionItem> results, IReadOnlyList<string> databases, string needle)
+    {
+        foreach (var database in databases.Where(database => Matches(database, needle)))
+        {
+            results.Add(new CompletionItem
+            {
+                Label = database,
+                Detail = "database",
+                Kind = CompletionKind.Database,
+                InsertText = database,
+            });
+        }
+    }
+
     /// <summary>
     /// Join conditions for the table named last in the statement, matched against the tables
-    /// before it. The schema has no foreign keys, so this mirrors the desktop app's name
-    /// heuristics: <c>customer_id</c> -> <c>customers.id</c>, shared column names, and the
-    /// reverse direction.
+    /// before it. Declared foreign keys win; when the provider has none, the desktop app's name
+    /// heuristics fill in (<c>customer_id</c> -> <c>customers.id</c>, shared columns, reverse).
     /// </summary>
     private static void AddJoinConditions(List<CompletionItem> results, CompletionRequest request, string needle)
     {
@@ -551,6 +708,31 @@ public static partial class CompletionEngine
         {
             var otherTable = other.Table!;
             var otherAlias = other.Alias ?? otherTable.Name;
+
+            // Declared foreign keys: joined.customer_id -> other.id (and the reverse direction).
+            foreach (var group in joinedTable.ForeignKeys
+                         .Where(key => key.ReferencedTable.Equals(otherTable.Name, StringComparison.OrdinalIgnoreCase))
+                         .GroupBy(key => key.Constraint, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = group.First();
+                suggestions.Add(new JoinSuggestion(
+                    $"Join on {first.Column} = {first.ReferencedColumn}",
+                    "Foreign key",
+                    string.Join(" AND ", group.Select(key => $"{joinedAlias}.{key.Column} = {otherAlias}.{key.ReferencedColumn}")),
+                    1000 - (group.Count() - 1)));
+            }
+
+            foreach (var group in otherTable.ForeignKeys
+                         .Where(key => key.ReferencedTable.Equals(joinedTable.Name, StringComparison.OrdinalIgnoreCase))
+                         .GroupBy(key => key.Constraint, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = group.First();
+                suggestions.Add(new JoinSuggestion(
+                    $"Join on {first.ReferencedColumn} = {first.Column}",
+                    "Foreign key (reverse)",
+                    string.Join(" AND ", group.Select(key => $"{joinedAlias}.{key.ReferencedColumn} = {otherAlias}.{key.Column}")),
+                    980 - (group.Count() - 1)));
+            }
 
             // joined.customer_id -> other.id
             var otherKeys = PreferredKeyColumns(otherTable);
@@ -582,11 +764,14 @@ public static partial class CompletionEngine
                         continue;
                     }
 
+                    var isKey = joinedTable.PrimaryKey.Contains(column, StringComparer.OrdinalIgnoreCase)
+                                || otherTable.PrimaryKey.Contains(otherColumn, StringComparer.OrdinalIgnoreCase);
+
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {column} = {otherColumn}",
                         "Heuristic match",
                         $"{joinedAlias}.{column} = {otherAlias}.{otherColumn}",
-                        720));
+                        isKey ? 760 : 720));
                 }
             }
 
@@ -654,6 +839,24 @@ public static partial class CompletionEngine
         @"\b(?:FROM|JOIN)\s+(?<table>(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*))?)(?:\s+(?:AS\s+)?(?<alias>[A-Za-z_][\w$#@]*))?",
         RegexOptions.IgnoreCase)]
     private static partial Regex TableReferencePattern();
+
+    [GeneratedRegex(@"^\s*UPDATE\s+(?<table>\[[^\]]+\]|[A-Za-z_][\w$#@]*)", RegexOptions.IgnoreCase)]
+    private static partial Regex UpdateStatementPattern();
+
+    [GeneratedRegex(@"^\s*INSERT\s+(?:INTO\s+)?(?<table>\[[^\]]+\]|[A-Za-z_][\w$#@]*)", RegexOptions.IgnoreCase)]
+    private static partial Regex InsertStatementPattern();
+
+    [GeneratedRegex(@"\bSET\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SetKeywordPattern();
+
+    [GeneratedRegex(@"\bWHERE\b", RegexOptions.IgnoreCase)]
+    private static partial Regex WhereKeywordPattern();
+
+    [GeneratedRegex(@"\bDECLARE\b(?<body>[^;]*)", RegexOptions.IgnoreCase)]
+    private static partial Regex DeclarePattern();
+
+    [GeneratedRegex(@"@[A-Za-z_][\w$#@]*")]
+    private static partial Regex VariablePattern();
 
     private static int StatementStart(string text, int caret) =>
         caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
@@ -729,9 +932,11 @@ public static partial class CompletionEngine
         return alias;
     }
 
-    /// <summary>Key columns usable as the "one" side of a join. The schema has no keys, so <c>id</c>.</summary>
+    /// <summary>Key columns usable as the "one" side of a join: the primary key, else <c>id</c>.</summary>
     private static IReadOnlyList<string> PreferredKeyColumns(TableSchema table) =>
-        table.Columns.Where(column => column.Equals("id", StringComparison.OrdinalIgnoreCase)).ToList();
+        table.PrimaryKey.Count > 0
+            ? table.PrimaryKey
+            : table.Columns.Where(column => column.Equals("id", StringComparison.OrdinalIgnoreCase)).ToList();
 
     /// <summary><c>customer_id</c> -> <c>customer</c>; null when the column is not an id column.</summary>
     private static string? ColumnStem(string column)

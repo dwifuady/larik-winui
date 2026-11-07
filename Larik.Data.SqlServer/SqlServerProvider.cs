@@ -151,31 +151,18 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         {
             SwitchDatabase(database);
 
-            await using var command = _connection!.CreateCommand();
-            command.CommandText = """
-                SELECT t.name AS table_name, c.name AS column_name
-                FROM sys.tables AS t
-                INNER JOIN sys.columns AS c ON c.object_id = t.object_id
-                ORDER BY t.name, c.column_id;
-                """;
+            var columns = await ReadColumnsAsync(cancellationToken);
+            var primaryKeys = await ReadPrimaryKeysAsync(cancellationToken);
+            var foreignKeys = await ReadForeignKeysAsync(cancellationToken);
 
-            var tables = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var table = reader.GetString(0);
-                var column = reader.GetString(1);
-                if (!tables.TryGetValue(table, out var columns))
+            return columns
+                .Select(pair => new TableSchema
                 {
-                    columns = [];
-                    tables[table] = columns;
-                }
-
-                columns.Add(column);
-            }
-
-            return tables
-                .Select(pair => new TableSchema { Name = pair.Key, Columns = pair.Value })
+                    Name = pair.Key,
+                    Columns = pair.Value,
+                    PrimaryKey = primaryKeys.TryGetValue(pair.Key, out var keys) ? keys : [],
+                    ForeignKeys = foreignKeys.TryGetValue(pair.Key, out var references) ? references : [],
+                })
                 .ToList();
         }
         catch (SqlException)
@@ -187,6 +174,97 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         {
             _gate.Release();
         }
+    }
+
+    private async Task<Dictionary<string, List<string>>> ReadColumnsAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection!.CreateCommand();
+        command.CommandText = """
+            SELECT t.name, c.name
+            FROM sys.tables AS t
+            INNER JOIN sys.columns AS c ON c.object_id = t.object_id
+            ORDER BY t.name, c.column_id;
+            """;
+
+        var tables = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var table = reader.GetString(0);
+            if (!tables.TryGetValue(table, out var columns))
+            {
+                columns = [];
+                tables[table] = columns;
+            }
+
+            columns.Add(reader.GetString(1));
+        }
+
+        return tables;
+    }
+
+    private async Task<Dictionary<string, List<string>>> ReadPrimaryKeysAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection!.CreateCommand();
+        command.CommandText = """
+            SELECT t.name, c.name
+            FROM sys.tables AS t
+            INNER JOIN sys.indexes AS i ON i.object_id = t.object_id AND i.is_primary_key = 1
+            INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns AS c ON c.object_id = t.object_id AND c.column_id = ic.column_id
+            ORDER BY t.name, ic.key_ordinal;
+            """;
+
+        var keys = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var table = reader.GetString(0);
+            if (!keys.TryGetValue(table, out var columns))
+            {
+                columns = [];
+                keys[table] = columns;
+            }
+
+            columns.Add(reader.GetString(1));
+        }
+
+        return keys;
+    }
+
+    private async Task<Dictionary<string, List<ForeignKeySchema>>> ReadForeignKeysAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection!.CreateCommand();
+        command.CommandText = """
+            SELECT tp.name, cp.name, tr.name, cr.name, fk.name
+            FROM sys.foreign_keys AS fk
+            INNER JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
+            INNER JOIN sys.tables AS tp ON tp.object_id = fkc.parent_object_id
+            INNER JOIN sys.columns AS cp ON cp.object_id = fkc.parent_object_id AND cp.column_id = fkc.parent_column_id
+            INNER JOIN sys.tables AS tr ON tr.object_id = fkc.referenced_object_id
+            INNER JOIN sys.columns AS cr ON cr.object_id = fkc.referenced_object_id AND cr.column_id = fkc.referenced_column_id
+            ORDER BY tp.name, fk.name, fkc.constraint_column_id;
+            """;
+
+        var references = new Dictionary<string, List<ForeignKeySchema>>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var table = reader.GetString(0);
+            if (!references.TryGetValue(table, out var foreignKeys))
+            {
+                foreignKeys = [];
+                references[table] = foreignKeys;
+            }
+
+            foreignKeys.Add(new ForeignKeySchema(
+                reader.GetString(4),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
+        }
+
+        return references;
     }
 
     public async Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default)

@@ -5,13 +5,14 @@ using Larik.Services;
 namespace Larik.Services;
 
 /// <summary>
-/// Bridges the shell's current snippets and schema to any editor surface. The surface asks with a
-/// document + caret; this resolves the word, the clause, the tables (and their aliases) in play,
-/// then runs the shared completion engine.
+/// Bridges the shell's current snippets, schema and databases to any editor surface. The surface
+/// asks with a document + caret; this resolves the word, the clause, the tables (and their
+/// aliases), declared variables and the UPDATE/INSERT target, then runs the shared engine.
 /// </summary>
 public sealed class StudioCompletionSource(
     Func<IReadOnlyList<SnippetDef>> snippets,
-    Func<IReadOnlyList<Data.TableSchema>> tables) : IEditorCompletionSource
+    Func<IReadOnlyList<Data.TableSchema>> tables,
+    Func<IReadOnlyList<string>> databases) : IEditorCompletionSource
 {
     public IReadOnlyList<CompletionItem> GetCompletions(CompletionQuery query)
     {
@@ -29,6 +30,9 @@ public sealed class StudioCompletionSource(
             snippets(),
             schema,
             CompletionEngine.FindTableReferences(text, caret, schema),
+            CompletionEngine.DeclaredVariables(text, caret),
+            databases(),
+            CompletionEngine.FindTarget(text, caret, schema),
             Clipboard: string.Empty));
     }
 }

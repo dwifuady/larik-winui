@@ -35,10 +35,36 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
 {
     private static readonly TableSchema[] Tables =
     [
-        new() { Name = "customers", Columns = ["id", "full_name", "email", "country", "created_at"] },
-        new() { Name = "orders", Columns = ["id", "customer_id", "total_amount", "status", "ordered_at"] },
-        new() { Name = "order_items", Columns = ["id", "order_id", "product_id", "quantity", "unit_price"] },
-        new() { Name = "products", Columns = ["id", "sku", "name", "price", "stock"] },
+        new()
+        {
+            Name = "customers",
+            Columns = ["id", "full_name", "email", "country", "created_at"],
+            PrimaryKey = ["id"],
+        },
+        new()
+        {
+            Name = "orders",
+            Columns = ["id", "customer_id", "total_amount", "status", "ordered_at"],
+            PrimaryKey = ["id"],
+            ForeignKeys = [new ForeignKeySchema("FK_orders_customers", "customer_id", "customers", "id")],
+        },
+        new()
+        {
+            Name = "order_items",
+            Columns = ["id", "order_id", "product_id", "quantity", "unit_price"],
+            PrimaryKey = ["id"],
+            ForeignKeys =
+            [
+                new ForeignKeySchema("FK_order_items_orders", "order_id", "orders", "id"),
+                new ForeignKeySchema("FK_order_items_products", "product_id", "products", "id"),
+            ],
+        },
+        new()
+        {
+            Name = "products",
+            Columns = ["id", "sku", "name", "price", "stock"],
+            PrimaryKey = ["id"],
+        },
     ];
 
     public ConnectionState State { get; private set; } = ConnectionState.Disconnected;

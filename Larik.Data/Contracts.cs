@@ -87,11 +87,28 @@ public sealed class QueryResult
     };
 }
 
+/// <summary>
+/// A foreign key on a table: <see cref="Column"/> points at <see cref="ReferencedTable"/>.<see cref="ReferencedColumn"/>.
+/// <see cref="Constraint"/> groups composite keys.
+/// </summary>
+public sealed record ForeignKeySchema(
+    string Constraint,
+    string Column,
+    string ReferencedTable,
+    string ReferencedColumn);
+
 /// <summary>Tables and columns, used to feed completion after a connection opens.</summary>
 public sealed class TableSchema
 {
     public required string Name { get; init; }
+
     public required IReadOnlyList<string> Columns { get; init; }
+
+    /// <summary>Primary-key columns in key order; empty when the provider cannot report them.</summary>
+    public IReadOnlyList<string> PrimaryKey { get; init; } = [];
+
+    /// <summary>Foreign keys declared on this table, used to suggest join conditions.</summary>
+    public IReadOnlyList<ForeignKeySchema> ForeignKeys { get; init; } = [];
 }
 
 /// <summary>

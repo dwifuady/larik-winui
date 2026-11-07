@@ -41,7 +41,16 @@ public sealed partial class MainPage : Page
         InitializeComponent();
         Loaded += OnLoaded;
 
-        _completionSource = new StudioCompletionSource(() => ViewModel.Snippets, () => ViewModel.Tables);
+        _completionSource = new StudioCompletionSource(
+            () => ViewModel.Snippets,
+            () => ViewModel.Tables,
+            () =>
+            {
+                var space = ViewModel.ActiveSpace;
+                return space is null
+                    ? []
+                    : space.Databases.Select(database => database.Name).ToList();
+            });
 
         // The shell is drawn on Mica: only real surfaces (cards, popup) paint over it.
         // Without Mica support the backdrop is blank, so fall back to the design's solid background.
