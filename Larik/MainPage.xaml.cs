@@ -332,21 +332,47 @@ public sealed partial class MainPage : Page
             return profile;
         }
 
-        var content = new StackPanel { Spacing = 12, MinWidth = 360 };
-        content.Children.Add(new TextBlock { Text = "Provider", FontSize = 11 });
-        content.Children.Add(providerBox);
-        content.Children.Add(fields);
+        var providerGroup = new StackPanel { Spacing = 4 };
+        providerGroup.Children.Add(new TextBlock { Text = "Provider", FontSize = 11 });
+        providerGroup.Children.Add(providerBox);
+
+        // The dialog's own scroller does not always engage when the form outgrows the window,
+        // so the fields scroll in their own viewport and the status line stays in view.
+        var fieldsScroll = new ScrollViewer
+        {
+            Content = fields,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollMode = ScrollMode.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            IsTabStop = false,
+        };
+
+        var content = new Grid { MinWidth = 360, RowSpacing = 12 };
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        Grid.SetRow(providerGroup, 0);
+        Grid.SetRow(fieldsScroll, 1);
+        Grid.SetRow(status, 2);
+        content.Children.Add(providerGroup);
+        content.Children.Add(fieldsScroll);
         content.Children.Add(status);
 
         if (DatabaseProviderCatalog.LoadErrors.Count > 0)
         {
-            content.Children.Add(new TextBlock
+            var loadErrors = new TextBlock
             {
                 Text = "Provider load problems: " + string.Join("; ", DatabaseProviderCatalog.LoadErrors),
                 FontSize = 10,
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = dangerBrush,
-            });
+            };
+
+            Grid.SetRow(loadErrors, 3);
+            content.Children.Add(loadErrors);
         }
 
         var dialog = new ContentDialog
@@ -371,6 +397,7 @@ public sealed partial class MainPage : Page
             args.Cancel = true;
             status.Foreground = mutedBrush;
             status.Text = "Testing…";
+            dialog.IsSecondaryButtonEnabled = false;
 
             IDatabaseConnection? probe = null;
             try
@@ -392,6 +419,8 @@ public sealed partial class MainPage : Page
                 {
                     await probe.DisposeAsync();
                 }
+
+                dialog.IsSecondaryButtonEnabled = true;
             }
         };
 

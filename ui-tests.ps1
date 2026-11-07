@@ -182,8 +182,19 @@ try {
             Click-Element 'Provider'
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
-            Send-Keys 'esc'
-            Start-Sleep -Milliseconds 400
+            # The SQL Server form is the tall one: Test must keep its result on screen, not
+            # just in the automation tree below the visible part of the dialog.
+            Click-Element 'SQL Server'
+            Start-Sleep -Milliseconds 800
+            Click-Element 'Test'
+            $status = $null
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+                $status = @((Find-Element 'Connected ·').matches) | Where-Object { $_.width -gt 0 } | Select-Object -First 1
+                if ($status) { break }
+                Start-Sleep -Milliseconds 300
+            }
+            Assert-True ($null -ne $status) 'Test did not report its result on screen'
         }
         finally {
             Click-Element 'Cancel'
