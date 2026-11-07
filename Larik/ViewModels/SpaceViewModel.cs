@@ -58,6 +58,12 @@ public partial class SpaceViewModel : ObservableObject
 
     public TabViewModel? LastActiveTab { get; set; }
 
+    /// <summary>
+    /// Database to reselect when the connection opens. It outlives disconnects (the database
+    /// list empties) and restarts, so a space remembers what the user was working on.
+    /// </summary>
+    public string? PreferredDatabase { get; set; }
+
     public bool IsConnected => Connection.IsConnected;
 
     public string Driver => Connection.Dialect;
@@ -80,7 +86,7 @@ public partial class SpaceViewModel : ObservableObject
     /// <summary>Replaces the database list with what the server reported, keeping the selection by name.</summary>
     public void UpdateDatabases(IEnumerable<string> names)
     {
-        var selectedName = ActiveDatabase?.Name;
+        var selectedName = ActiveDatabase?.Name ?? PreferredDatabase;
         var incoming = names.ToList();
 
         Databases.Clear();

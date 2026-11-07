@@ -17,8 +17,9 @@ C:\dev\larik-winui\
 │   ├── Models/StudioModels.cs    # Snippet, CompletionItem
 │   ├── Services/
 │   │   ├── SnippetCatalog.cs     # built-in snippets ported 1:1 from src-tauri/src/storage/snippets.rs
-│   │   ├── CompletionEngine.cs   # trigger matching, ${cursor}/${1:placeholder} expansion, alias.column
+│   │   ├── CompletionEngine.cs   # clause-aware completion, ${cursor}/${1:placeholder} expansion
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
+│   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, app_state (no passwords)
 │   │   └── StudioColors.cs       # space palette + active-tab tint
 │   ├── ViewModels/               # Studio / Space / Connection / Database / Tab
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
@@ -44,11 +45,16 @@ powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 
 The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
-workspace switching swaps connection + tabs + editor, a workspace starts disconnected until the
-status-bar action connects it, the database picker repoints the rail/status bar/tab subtitle, the
-connection dialog renders the provider's declared fields, and a real **SQL Server** workspace is
+`FROM ` lists every table in the database, workspace switching swaps connection + tabs + editor, a
+workspace starts disconnected until the status-bar action connects it, the database picker repoints
+the rail/status bar/tab subtitle, the connection dialog renders the provider's declared fields and
+its Test result, saved state is written to disk, and a real **SQL Server** workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
 or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
+
+The suite parks the `%LOCALAPPDATA%\Larik` SQLite files (database + WAL sidecars) before
+launching, so it always starts from the seeded workspaces, and restores the tester's files when it
+finishes.
 
 ## Providers: adding a database
 
@@ -96,9 +102,19 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
   the provider with timing.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
-  `ITextSelection.GetRect`; Up/Down to move, **Tab or Enter accepts**, Esc dismisses. Expansion
-  honours `${cursor}`, `${1:placeholder}` (left selected), repeat markers, and `alias.` column
-  completion from the schema. Keywords, tables and columns are suggested alongside snippets.
+  `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
+  **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
+  selected), repeat markers, and `alias.`/`table.` column completion resolved through the
+  statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
+  lists every table in the active database, after `SELECT`/`WHERE`/`ON`/`AND`/`SET`/... the columns
+  of the tables in that statement, and elsewhere snippets + keywords + schema.
+- **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
+  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs` and `app_state` — the
+  same model as `src-tauri/src/storage` — so spaces, connection profiles (non-secret settings),
+  tabs and their SQL survive a restart. WAL mode, foreign keys with cascade deletes, schema
+  versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once. Spaces still
+  start disconnected; provider-declared password fields are never written, so SQL-auth
+  connections re-prompt after a restart. Corrupt state falls back to the seeded spaces.
 - **Results grid**: ListView-free, code-generated columns/rows (500-row cap), numeric columns
   right-aligned, space-coloured rule under the header.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
@@ -118,7 +134,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Gap | Why / next step |
 |---|---|
 | **No syntax highlighting** | `RichEditBox` is plain text here. Next: format ranges on a debounce (`ITextCharacterFormat`), or host Monaco in WebView2 and keep the native shell. |
-| No persistence | Workspaces, connections and tabs are seeded in `StudioViewModel.Seed()`; edited profiles and passwords live in memory only. Next: SQLite with DPAPI-protected secrets, same shape as `src-tauri/src/storage`. |
+| **Secrets are memory-only** | Connection profiles persist without provider-declared password fields. Next: Windows Credential Manager (what `keyring` uses in the Tauri app) or DPAPI, instead of keeping them in memory. |
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Results grid not virtualized | Fine for a slice; for large result sets move to `ItemsRepeater` with a shared row template. |

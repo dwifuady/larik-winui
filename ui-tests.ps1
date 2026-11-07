@@ -12,6 +12,40 @@ $ScopeArgs = @(if ($Target -eq 'sandbox') { '--on'; 'sandbox' })
 $results = [Collections.Generic.List[object]]::new()
 $screenshots = [Collections.Generic.List[string]]::new()
 
+# Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik (larik-dev.db in Debug
+# builds). Park the tester's databases, WAL sidecars included, so every run starts from the
+# seeded spaces; Restore-StudioState puts them back untouched. When attaching to a running app
+# (-AppPid) the state belongs to that app, so leave it alone.
+$LaunchedHere = $AppPid -le 0
+$StateDir = Join-Path $env:LOCALAPPDATA 'Larik'
+$StateBases = @('larik-dev.db', 'larik.db') | ForEach-Object { Join-Path $StateDir $_ }
+$StatePath = $StateBases[0]
+$StateMoved = @()
+if ($LaunchedHere) {
+    foreach ($base in $StateBases) {
+        foreach ($suffix in '', '-wal', '-shm') {
+            $path = "$base$suffix"
+            if (Test-Path $path) {
+                Move-Item $path "$path.ui-tests" -Force
+                $StateMoved += $path
+            }
+        }
+    }
+}
+
+function Restore-StudioState {
+    if (-not $LaunchedHere) { return }
+
+    foreach ($base in $StateBases) {
+        foreach ($suffix in '', '-wal', '-shm') {
+            Remove-Item "$base$suffix" -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($path in $StateMoved) {
+        if (Test-Path "$path.ui-tests") { Move-Item "$path.ui-tests" $path -Force }
+    }
+}
+
 function Invoke-WinAppChecked {
     param([string[]]$Arguments, [int]$Attempts = 1)
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
@@ -97,7 +131,14 @@ function Wait-ForText {
 }
 
 if ($AppPid -le 0) {
-    $launch = (Invoke-WinAppChecked (@('run', '.', '--detach', '--json') + $ScopeArgs)) -join "`n" | ConvertFrom-Json
+    try {
+        $launch = (Invoke-WinAppChecked (@('run', '.', '--detach', '--json') + $ScopeArgs)) -join "`n" | ConvertFrom-Json
+    }
+    catch {
+        # The app never started, so hand the tester's workspaces back before failing.
+        Restore-StudioState
+        throw
+    }
     $AppPid = [int]$launch.ProcessId
 }
 New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
@@ -255,6 +296,30 @@ try {
         Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'new tab did not appear'
     }
 
+    Test-UI 'workspace state is saved to disk' {
+        Start-Sleep -Milliseconds 900
+        Assert-True (Test-Path $StatePath) 'no workspace database was written'
+
+        # Recent writes may still sit in the WAL, and SQLite keeps the files open, so read
+        # both pages and the WAL with shared access.
+        $state = ''
+        foreach ($suffix in '', '-wal') {
+            $path = "$StatePath$suffix"
+            if (Test-Path $path) {
+                $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                try {
+                    $state += [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8).ReadToEnd()
+                }
+                finally {
+                    $stream.Dispose()
+                }
+            }
+        }
+
+        Assert-True ($state -match 'Customer totals') 'seeded tabs are missing from the database'
+        Assert-True ($state -match 'Query 1') 'the new tab is missing from the database'
+    }
+
     Test-UI 'refuses a mutating statement without WHERE' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -274,4 +339,11 @@ finally {
         $results | Where-Object Status -eq "FAIL" | ForEach-Object { Write-Host ("FAIL: " + $_.Name + " :: " + $_.Detail) }
     }
     $screenshots | ForEach-Object { Write-Host "screenshot: $_" }
+
+    # The state written during this run is test data: stop the app, drop it, restore the tester's.
+    if ($LaunchedHere -and $AppPid -gt 0) {
+        Stop-Process -Id $AppPid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
+    Restore-StudioState
 }

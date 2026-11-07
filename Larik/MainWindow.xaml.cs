@@ -23,6 +23,9 @@ public sealed partial class MainWindow : Window
 
         RootFrame.Navigate(typeof(MainPage));
 
+        // The last edits may still be inside the debounce window; flush them on close.
+        Closed += (_, _) => (RootFrame.Content as MainPage)?.ViewModel.SaveNow();
+
         ResizeForDesktop(1360, 860);
     }
 

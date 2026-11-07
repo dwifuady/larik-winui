@@ -12,6 +12,8 @@ namespace Larik.ViewModels;
 public partial class StudioViewModel : ObservableObject
 {
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly StudioStore _store = new();
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
 
@@ -23,9 +25,26 @@ public partial class StudioViewModel : ObservableObject
         ResultSummary = string.Empty;
         IsSidebarOpen = true;
 
-        Seed();
-        SelectSpace(Spaces[0]);
+        if (_store.Load() is { Spaces.Count: > 0 } saved)
+        {
+            Restore(saved);
+        }
+        else
+        {
+            Seed();
+            SelectSpace(Spaces[0]);
+        }
+
         ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
+
+        Spaces.CollectionChanged += (_, _) => ScheduleSave();
+        PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab))
+            {
+                ScheduleSave();
+            }
+        };
     }
 
     public ObservableCollection<SpaceViewModel> Spaces { get; } = [];
@@ -149,6 +168,7 @@ public partial class StudioViewModel : ObservableObject
         var tab = new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty);
         space.Tabs.Add(tab);
         Spaces.Add(space);
+        TrackSpace(space);
         SelectSpace(space);
         StatusText = "New workspace — open Connection settings to point it at a server";
     }
@@ -167,6 +187,7 @@ public partial class StudioViewModel : ObservableObject
         ActiveSpace.UpdateDatabases([]);
         OnPropertyChanged(nameof(Snippets));
         StatusText = $"{ActiveSpace.Name} → {ActiveSpace.Connection.ProviderName}";
+        ScheduleSave();
 
         if (connect)
         {
@@ -356,6 +377,162 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
     public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
 
+    // ---------------------------------------------------------------- persistence
+
+    /// <summary>Writes the session immediately; used when the window closes.</summary>
+    public void SaveNow()
+    {
+        _saveTimer?.Stop();
+        _store.Save(CaptureState());
+    }
+
+    /// <summary>Debounces writes so typing in the editor does not hit the disk on every keystroke.</summary>
+    private void ScheduleSave()
+    {
+        if (_saveTimer is null)
+        {
+            var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            if (queue is null)
+            {
+                return;
+            }
+
+            _saveTimer = queue.CreateTimer();
+            _saveTimer.Interval = TimeSpan.FromMilliseconds(500);
+            _saveTimer.IsRepeating = false;
+            _saveTimer.Tick += (_, _) => SaveNow();
+        }
+
+        _saveTimer.Stop();
+        _saveTimer.Start();
+    }
+
+    private StudioState CaptureState() => new()
+    {
+        ActiveSpaceId = ActiveSpace?.Id,
+        QueryCounter = _queryCounter,
+        Spaces = Spaces.Select(space => new SpaceState
+        {
+            Id = space.Id,
+            Name = space.Name,
+            Color = space.ColorHex,
+            ProviderId = space.Connection.ProviderId,
+            Profile = VisibleProfile(space.Connection),
+            ActiveDatabase = space.PreferredDatabase,
+            ActiveTabId = space.LastActiveTab?.Id,
+            Tabs = space.Tabs.Select(tab => new TabState
+            {
+                Id = tab.Id,
+                Title = tab.Title,
+                Database = tab.Database,
+                Content = tab.Content,
+            }).ToList(),
+        }).ToList(),
+    };
+
+    /// <summary>The provider's declared secrets never reach the state file.</summary>
+    private static Dictionary<string, string> VisibleProfile(ConnectionViewModel connection)
+    {
+        var secrets = connection.Provider?.Settings
+            .Where(setting => setting.Kind == ProviderSettingKind.Password)
+            .Select(setting => setting.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+
+        return connection.Profile.Values
+            .Where(pair => !secrets.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void Restore(StudioState state)
+    {
+        _queryCounter = Math.Max(0, state.QueryCounter);
+
+        foreach (var spaceState in state.Spaces)
+        {
+            var providerId = string.IsNullOrWhiteSpace(spaceState.ProviderId) ? "mssql" : spaceState.ProviderId;
+            var profile = new ConnectionProfile { ProviderId = providerId };
+            foreach (var pair in spaceState.Profile)
+            {
+                profile.Values[pair.Key] = pair.Value;
+            }
+
+            var color = string.IsNullOrWhiteSpace(spaceState.Color)
+                ? StudioColors.Palette[Spaces.Count % StudioColors.Palette.Length]
+                : spaceState.Color;
+
+            var space = new SpaceViewModel(
+                string.IsNullOrWhiteSpace(spaceState.Id) ? Guid.NewGuid().ToString("n") : spaceState.Id,
+                string.IsNullOrWhiteSpace(spaceState.Name) ? $"Space {Spaces.Count + 1}" : spaceState.Name,
+                color,
+                new ConnectionViewModel(providerId, profile))
+            {
+                PreferredDatabase = spaceState.ActiveDatabase,
+            };
+
+            foreach (var tabState in spaceState.Tabs)
+            {
+                space.Tabs.Add(new TabViewModel(
+                    string.IsNullOrWhiteSpace(tabState.Id) ? Guid.NewGuid().ToString("n") : tabState.Id,
+                    tabState.Title,
+                    tabState.Database,
+                    space,
+                    tabState.Content));
+            }
+
+            if (space.Tabs.Count == 0)
+            {
+                space.Tabs.Add(new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty));
+            }
+
+            space.LastActiveTab = space.Tabs.FirstOrDefault(tab => tab.Id == spaceState.ActiveTabId) ?? space.Tabs[0];
+            TrackSpace(space);
+            Spaces.Add(space);
+        }
+
+        var active = Spaces.FirstOrDefault(space => space.Id == state.ActiveSpaceId) ?? Spaces[0];
+        SelectSpace(active, active.LastActiveTab);
+    }
+
+    private void TrackSpace(SpaceViewModel space)
+    {
+        space.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase))
+            {
+                ScheduleSave();
+            }
+        };
+
+        space.Tabs.CollectionChanged += (_, args) =>
+        {
+            if (args.NewItems is not null)
+            {
+                foreach (TabViewModel tab in args.NewItems)
+                {
+                    TrackTab(tab);
+                }
+            }
+
+            ScheduleSave();
+        };
+
+        foreach (var tab in space.Tabs)
+        {
+            TrackTab(tab);
+        }
+    }
+
+    private void TrackTab(TabViewModel tab)
+    {
+        tab.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(TabViewModel.Content) or nameof(TabViewModel.Title) or nameof(TabViewModel.Database))
+            {
+                ScheduleSave();
+            }
+        };
+    }
+
     private async Task ConnectSpaceAsync(SpaceViewModel space)
     {
         IsBusy = true;
@@ -443,6 +620,10 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveSpace.ActiveDatabase = database;
         ActiveSpace.LastActiveDatabase = database;
+        if (database is not null)
+        {
+            ActiveSpace.PreferredDatabase = database.Name;
+        }
 
         // Snippets are scoped per dialect, which the connection decides.
         OnPropertyChanged(nameof(Snippets));
@@ -477,6 +658,11 @@ public partial class StudioViewModel : ObservableObject
         Spaces.Add(staging);
         Spaces.Add(localSql);
         Spaces.Add(playground);
+
+        foreach (var space in Spaces)
+        {
+            TrackSpace(space);
+        }
     }
 
     private static ConnectionProfile DemoProfile(string databases)
