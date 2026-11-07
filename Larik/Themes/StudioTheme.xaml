@@ -21,6 +21,7 @@
             <SolidColorBrush x:Key="StudioAccentBrush" Color="#6366F1" />
             <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="#818CF8" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#336366F1" />
+            <SolidColorBrush x:Key="StudioOnAccentBrush" Color="#161618" />
             <SolidColorBrush x:Key="StudioSuccessBrush" Color="#22C55E" />
             <SolidColorBrush x:Key="StudioWarningBrush" Color="#F59E0B" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="#EF4444" />
@@ -39,6 +40,7 @@
             <SolidColorBrush x:Key="StudioAccentBrush" Color="#5B5FC7" />
             <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="#4F53B5" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="#265B5FC7" />
+            <SolidColorBrush x:Key="StudioOnAccentBrush" Color="#1A1A1A" />
             <SolidColorBrush x:Key="StudioSuccessBrush" Color="#15803D" />
             <SolidColorBrush x:Key="StudioWarningBrush" Color="#B45309" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="#DC2626" />
@@ -57,6 +59,7 @@
             <SolidColorBrush x:Key="StudioAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
             <SolidColorBrush x:Key="StudioAccentHoverBrush" Color="{ThemeResource SystemColorHighlightColor}" />
             <SolidColorBrush x:Key="StudioAccentSoftBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="StudioOnAccentBrush" Color="#000000" />
             <SolidColorBrush x:Key="StudioSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioWarningBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioDangerBrush" Color="{ThemeResource SystemColorWindowTextColor}" />

@@ -339,6 +339,32 @@ public sealed partial class MainPage : Page
             flyout.Items.Add(item);
         }
 
+        // The active workspace's identity colour, one level down in the menu that owns the workspace.
+        if (ViewModel.ActiveSpace is { } activeSpace)
+        {
+            var colours = new MenuFlyoutSubItem { Text = "Workspace colour" };
+            for (var index = 0; index < StudioColors.Palette.Length; index++)
+            {
+                var hex = StudioColors.Palette[index];
+                var swatch = new RadioMenuFlyoutItem
+                {
+                    Text = StudioColors.PaletteNames[index],
+                    GroupName = "workspace-colour",
+                    IsChecked = string.Equals(hex, activeSpace.ColorHex, StringComparison.OrdinalIgnoreCase),
+                    Icon = new PathIcon
+                    {
+                        Data = new EllipseGeometry { Center = new Point(6, 6), RadiusX = 5, RadiusY = 5 },
+                        Foreground = StudioColors.Brush(hex),
+                    },
+                };
+
+                swatch.Click += (_, _) => ViewModel.SetWorkspaceColor(hex);
+                colours.Items.Add(swatch);
+            }
+
+            flyout.Items.Add(colours);
+        }
+
         flyout.Items.Add(new MenuFlyoutSeparator());
 
         var newSpace = new MenuFlyoutItem

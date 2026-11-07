@@ -12,6 +12,13 @@ public static class StudioColors
         "#FDBA74", "#F9A8D4", "#FCA5A5", "#A5F3FC", "#E9D5FF",
     ];
 
+    /// <summary>Names for <see cref="Palette"/>, aligned by index (DESIGN.md "Space Colors").</summary>
+    public static string[] PaletteNames { get; } =
+    [
+        "Pastel Purple", "Pastel Blue", "Pastel Cyan", "Pastel Green", "Pastel Yellow",
+        "Pastel Orange", "Pastel Pink", "Pastel Red", "Light Cyan", "Light Purple",
+    ];
+
     public static SolidColorBrush Success { get; } = Brush("#22C55E");
     public static SolidColorBrush Warning { get; } = Brush("#F59E0B");
     public static SolidColorBrush Danger { get; } = Brush("#EF4444");

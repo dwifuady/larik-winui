@@ -110,11 +110,12 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle, the
   snippet dialect and the completion schema. An Arc-style row of workspace dots at the bottom of the
   rail shows every workspace with the current one ringed; clicking a dot switches workspace, and
-  creating a workspace opens its connection settings straight away. Switching — from the top
-  dropdown, the dots, or a two-finger horizontal trackpad swipe over the rail — slides the query
-  content in from the side the new workspace lives on (left/right matches the dot order), and is
-  skipped when Windows animations are turned off. A swipe moves one workspace per gesture and does
-  not wrap at the ends.
+  creating a workspace opens its connection settings straight away. Each workspace owns a palette
+  colour (dot, tab strip/tint and Run button); change it from the workspace menu's **Workspace
+  colour** submenu. Switching — from the top dropdown, the dots, or a two-finger horizontal trackpad
+  swipe over the rail — slides the query content in from the side the new workspace lives on
+  (left/right matches the dot order), and is skipped when Windows animations are turned off. A swipe
+  moves one workspace per gesture and does not wrap at the ends.
 - **Real execution**: connect opens the provider connection, `Run`/Ctrl+Enter executes there and the
   grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
   the provider with timing.

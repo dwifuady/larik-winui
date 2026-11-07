@@ -317,6 +317,15 @@ public partial class StudioViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>Re-tints the active workspace; the change schedules a save through TrackSpace.</summary>
+    public void SetWorkspaceColor(string hex)
+    {
+        if (ActiveSpace is not null)
+        {
+            ActiveSpace.ColorHex = hex;
+        }
+    }
+
     /// <summary>Switches the database the active space queries against and reloads its schema.</summary>
     public async Task SelectDatabaseAsync(DatabaseViewModel database)
     {
@@ -512,7 +521,7 @@ public partial class StudioViewModel : ObservableObject
     {
         space.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase))
+            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase) or nameof(SpaceViewModel.ColorHex))
             {
                 ScheduleSave();
             }

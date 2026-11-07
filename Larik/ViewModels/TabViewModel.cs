@@ -17,6 +17,18 @@ public partial class TabViewModel : ObservableObject
         Title = title;
         Database = database ?? string.Empty;
         Content = content;
+
+        // The workspace colour flows through to the tab strip and tint.
+        space.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(SpaceViewModel.ColorHex)
+                or nameof(SpaceViewModel.AccentBrush)
+                or nameof(SpaceViewModel.ActiveTintBrush))
+            {
+                OnPropertyChanged(nameof(AccentBrush));
+                OnPropertyChanged(nameof(ActiveTintBrush));
+            }
+        };
     }
 
     public string Id { get; }

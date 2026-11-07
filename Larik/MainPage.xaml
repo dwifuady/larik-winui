@@ -271,7 +271,7 @@
                                     Width="2"
                                     Height="18"
                                     VerticalAlignment="Center"
-                                    Fill="{x:Bind AccentBrush}"
+                                    Fill="{x:Bind AccentBrush, Mode=OneWay}"
                                     Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}"
                                     RadiusX="1"
                                     RadiusY="1" />
@@ -345,13 +345,13 @@
                                             <Ellipse
                                                 Width="15"
                                                 Height="15"
-                                                Stroke="{x:Bind AccentBrush}"
+                                                Stroke="{x:Bind AccentBrush, Mode=OneWay}"
                                                 StrokeThickness="1.5"
                                                 Visibility="{x:Bind IndicatorRingVisibility, Mode=OneWay}" />
                                             <Ellipse
                                                 Width="{x:Bind IndicatorDotSize, Mode=OneWay}"
                                                 Height="{x:Bind IndicatorDotSize, Mode=OneWay}"
-                                                Fill="{x:Bind AccentBrush}"
+                                                Fill="{x:Bind AccentBrush, Mode=OneWay}"
                                                 Opacity="{x:Bind IndicatorDotOpacity, Mode=OneWay}" />
                                         </Grid>
                                     </Button>
@@ -456,7 +456,7 @@
                         Background="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}"
                         Command="{x:Bind ViewModel.RunCommand}"
                         CornerRadius="6"
-                        Foreground="White"
+                        Foreground="{ThemeResource StudioOnAccentBrush}"
                         ToolTipService.ToolTip="Run query (Ctrl+Enter)">
                         <FontIcon FontSize="11" Glyph="&#xE768;" />
                     </Button>

@@ -46,6 +46,24 @@ function Restore-StudioState {
     }
 }
 
+# The app keeps the SQLite files open and recent writes may sit in the WAL; read both with shared access.
+function Get-StudioStateText {
+    $state = ''
+    foreach ($suffix in '', '-wal') {
+        $path = "$StatePath$suffix"
+        if (Test-Path $path) {
+            $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try {
+                $state += [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8).ReadToEnd()
+            }
+            finally {
+                $stream.Dispose()
+            }
+        }
+    }
+    return $state
+}
+
 function Invoke-WinAppChecked {
     param([string[]]$Arguments, [int]$Attempts = 1)
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
@@ -164,6 +182,19 @@ try {
         $switcher = @((Find-Element 'Switch workspace').matches)[0]
         Assert-True ($null -ne $switcher) 'the workspace switcher was not found'
         Assert-True ($switcher.width -ge 200) "the workspace switcher is only $($switcher.width)px wide"
+    }
+
+    Test-UI 'a workspace colour can be changed from the switcher menu' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        $colours = (Find-Element 'Workspace colour').matches | Where-Object type -eq 'MenuItem' | Select-Object -First 1
+        Assert-True ($null -ne $colours) 'the workspace colour submenu is missing'
+        Click-Element $colours.selector
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Pastel Yellow').matchCount -gt 0) 'the colour palette is missing'
+        Click-Element 'Pastel Yellow'
+        Start-Sleep -Milliseconds 1200
+        Assert-True ((Get-StudioStateText) -match '#FDE047') 'the new workspace colour was not saved'
     }
 
     Test-UI 'the workspace indicator shows every workspace and switches' {
@@ -451,22 +482,7 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True (Test-Path $StatePath) 'no workspace database was written'
 
-        # Recent writes may still sit in the WAL, and SQLite keeps the files open, so read
-        # both pages and the WAL with shared access.
-        $state = ''
-        foreach ($suffix in '', '-wal') {
-            $path = "$StatePath$suffix"
-            if (Test-Path $path) {
-                $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-                try {
-                    $state += [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8).ReadToEnd()
-                }
-                finally {
-                    $stream.Dispose()
-                }
-            }
-        }
-
+        $state = Get-StudioStateText
         Assert-True ($state -match 'Customer totals') 'seeded tabs are missing from the database'
         Assert-True ($state -match 'Query 1') 'the new tab is missing from the database'
     }

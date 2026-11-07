@@ -16,8 +16,6 @@ public partial class SpaceViewModel : ObservableObject
     {
         Id = id;
         ColorHex = colorHex;
-        AccentBrush = StudioColors.Brush(colorHex);
-        ActiveTintBrush = StudioColors.Tint(colorHex);
         Name = name;
         Connection = connection;
 
@@ -34,9 +32,17 @@ public partial class SpaceViewModel : ObservableObject
     }
 
     public string Id { get; }
-    public string ColorHex { get; }
-    public SolidColorBrush AccentBrush { get; }
-    public SolidColorBrush ActiveTintBrush { get; }
+
+    /// <summary>The workspace colour (a palette hex). Changing it re-tints the rail, tabs and toolbar.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AccentBrush))]
+    [NotifyPropertyChangedFor(nameof(ActiveTintBrush))]
+    public partial string ColorHex { get; set; }
+
+    public SolidColorBrush AccentBrush => StudioColors.Brush(ColorHex);
+
+    public SolidColorBrush ActiveTintBrush => StudioColors.Tint(ColorHex);
+
     public ConnectionViewModel Connection { get; }
 
     [ObservableProperty]
