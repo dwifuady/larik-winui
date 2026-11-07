@@ -522,14 +522,7 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <ScrollViewer
-                        x:Name="ResultsScroller"
-                        AutomationProperties.Name="Query results"
-                        HorizontalScrollBarVisibility="Auto"
-                        Padding="0,2,0,0"
-                        VerticalScrollBarVisibility="Auto">
-                        <Grid x:Name="ResultsHost" />
-                    </ScrollViewer>
+                    <controls:ResultsGrid x:Name="ResultsGrid" StatusChanged="ResultsGrid_StatusChanged" />
                 </Border>
             </Grid>
 

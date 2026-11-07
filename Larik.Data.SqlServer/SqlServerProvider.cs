@@ -271,9 +271,20 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         return references;
     }
 
-    public async Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default)
+    public Task<QueryResult> ExecuteAsync(
+        string sql,
+        string? database,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(sql, database, QueryExecutionOptions.Default, cancellationToken);
+
+    public async Task<QueryResult> ExecuteAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
+        var rowLimit = options.EffectiveMaxRows;
 
         await OpenAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
@@ -289,6 +300,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
             var columns = new List<QueryColumn>();
             var rows = new List<string?[]>();
+            var truncated = false;
 
             if (reader.FieldCount > 0)
             {
@@ -301,18 +313,23 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                     });
                 }
 
+                // Read one row past the cap only to know whether more data existed; the provider
+                // never materializes the rest of a large result.
                 while (await reader.ReadAsync(cancellationToken))
                 {
+                    if (rows.Count >= rowLimit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
                     var values = new string?[reader.FieldCount];
                     for (var i = 0; i < reader.FieldCount; i++)
                     {
                         values[i] = Format(reader.GetValue(i));
                     }
 
-                    if (rows.Count < 5_000)
-                    {
-                        rows.Add(values);
-                    }
+                    rows.Add(values);
                 }
             }
 
@@ -331,6 +348,8 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                 Message = message,
                 Elapsed = stopwatch.Elapsed,
                 Database = database,
+                IsTruncated = truncated,
+                RowLimit = columns.Count > 0 ? rowLimit : null,
             };
         }
         catch (SqlException ex)

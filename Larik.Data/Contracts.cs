@@ -71,6 +71,27 @@ public sealed class QueryColumn
     public string? DataType { get; init; }
 }
 
+/// <summary>Row-limit defaults shared by the shell and every provider (same shape as the Tauri app).</summary>
+public static class QueryLimits
+{
+    public const int DefaultMaxRows = 5_000;
+    public const int MaxAllowedRows = 100_000;
+
+    /// <summary>0 and negatives mean "use the default"; the ceiling is always enforced.</summary>
+    public static int Normalize(int maxRows) =>
+        Math.Min(maxRows <= 0 ? DefaultMaxRows : maxRows, MaxAllowedRows);
+}
+
+/// <summary>Per-statement options. Providers stop reading after <see cref="MaxRows"/> + 1 rows.</summary>
+public sealed class QueryExecutionOptions
+{
+    public static QueryExecutionOptions Default { get; } = new();
+
+    public int MaxRows { get; init; } = QueryLimits.DefaultMaxRows;
+
+    public int EffectiveMaxRows => QueryLimits.Normalize(MaxRows);
+}
+
 /// <summary>One executed statement: its grid, its message, and how long it took.</summary>
 public sealed class QueryResult
 {
@@ -81,6 +102,11 @@ public sealed class QueryResult
     public bool IsError { get; init; }
     public TimeSpan Elapsed { get; init; }
     public string? Database { get; init; }
+
+    /// <summary>True when the provider stopped at its row cap; <see cref="RowLimit"/> says where.</summary>
+    public bool IsTruncated { get; init; }
+
+    public int? RowLimit { get; init; }
 
     public static QueryResult Error(string message, TimeSpan elapsed, string? database = null) => new()
     {
@@ -153,6 +179,17 @@ public interface IDatabaseConnection : IAsyncDisposable
     Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default);
 
     Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes with an explicit row cap. The default implementation keeps older providers working;
+    /// new providers should stop reading at <see cref="QueryExecutionOptions.EffectiveMaxRows"/> + 1.
+    /// </summary>
+    Task<QueryResult> ExecuteAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(sql, database, cancellationToken);
 
     Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
 }

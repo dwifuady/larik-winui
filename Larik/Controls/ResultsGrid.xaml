@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Larik.Controls.ResultsGrid"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Larik.Controls"
+    AutomationProperties.Name="Results grid"
+    Background="Transparent"
+    IsTabStop="True"
+    PreviewKeyDown="ResultsGrid_KeyDown"
+    UseSystemFocusVisuals="False">
+
+    <UserControl.Resources>
+        <DataTemplate x:Key="ResultsRowTemplate">
+            <local:ResultRowView />
+        </DataTemplate>
+
+        <Style x:Key="ResultsRowItemStyle" TargetType="ListViewItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <ContentPresenter
+                            HorizontalContentAlignment="Left"
+                            VerticalContentAlignment="Stretch"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!--  Sticky column header; its horizontal offset follows the row scroller.  -->
+        <ScrollViewer
+            x:Name="HeaderScroller"
+            HorizontalContentAlignment="Left"
+            HorizontalScrollBarVisibility="Hidden"
+            HorizontalScrollMode="Enabled"
+            VerticalScrollBarVisibility="Disabled"
+            VerticalScrollMode="Disabled"
+            ViewChanged="HeaderScroller_ViewChanged">
+            <StackPanel
+                x:Name="HeaderHost"
+                HorizontalAlignment="Left"
+                Orientation="Horizontal" />
+        </ScrollViewer>
+
+        <Border
+            x:Name="AccentRule"
+            Grid.Row="0"
+            Height="2"
+            VerticalAlignment="Bottom"
+            Opacity="0.7" />
+
+        <!--  Virtualized rows: only visible rows have TextBlocks.  -->
+        <ListView
+            x:Name="RowsList"
+            Grid.Row="1"
+            Padding="0"
+            AutomationProperties.HelpText="Use the arrow keys to move between cells, Ctrl+C to copy, Ctrl+Shift+C to copy with headers."
+            AutomationProperties.Name="Query results"
+            ItemContainerStyle="{StaticResource ResultsRowItemStyle}"
+            ItemTemplate="{StaticResource ResultsRowTemplate}"
+            Loaded="RowsList_Loaded"
+            SelectionMode="None"
+            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+            ScrollViewer.HorizontalScrollMode="Enabled"
+            ScrollViewer.IsDeferredScrollingEnabled="False"
+            ScrollViewer.VerticalScrollBarVisibility="Auto"
+            ScrollViewer.VerticalScrollMode="Enabled">
+            <ListView.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem
+                        Click="Copy_Click"
+                        KeyboardAcceleratorTextOverride="Ctrl+C"
+                        Text="Copy" />
+                    <MenuFlyoutItem
+                        Click="CopyWithHeaders_Click"
+                        KeyboardAcceleratorTextOverride="Ctrl+Shift+C"
+                        Text="Copy with headers" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem
+                        Click="SelectAll_Click"
+                        KeyboardAcceleratorTextOverride="Ctrl+A"
+                        Text="Select all" />
+                </MenuFlyout>
+            </ListView.ContextFlyout>
+        </ListView>
+
+        <TextBlock
+            x:Name="EmptyText"
+            Grid.Row="1"
+            Margin="14,12,14,12"
+            FontSize="12"
+            Foreground="{ThemeResource StudioTextMutedBrush}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+    </Grid>
+</UserControl>

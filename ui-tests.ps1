@@ -11,6 +11,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 $ScopeArgs = @(if ($Target -eq 'sandbox') { '--on'; 'sandbox' })
 $results = [Collections.Generic.List[object]]::new()
 $screenshots = [Collections.Generic.List[string]]::new()
+$script:MainWindow = $null
 
 # Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik (larik-dev.db in Debug
 # builds). Park the tester's databases, WAL sidecars included, so every run starts from the
@@ -118,9 +119,15 @@ public class LarikWin32 {
 
 function Focus-App {
     $windows = @(Get-UiJson @('list-windows', '--json'))
-    $window = $windows | Where-Object { $_.processId -eq $AppPid } | Select-Object -First 1
+    $window = $windows |
+        Where-Object { $_.processId -eq $AppPid -and [double]$_.width -ge 400 -and [double]$_.height -ge 400 } |
+        Select-Object -First 1
+    if (-not $window) {
+        $window = $windows | Where-Object { $_.processId -eq $AppPid } | Select-Object -First 1
+    }
     if (-not $window) { return }
     $handle = [IntPtr]([int64](@($window.hwnd) | Select-Object -First 1))
+    $script:MainWindow = [string](@($window.hwnd) | Select-Object -First 1)
     [LarikWin32]::ShowWindow($handle, 9) | Out-Null
     if ([LarikWin32]::GetForegroundWindow() -ne $handle) {
         [LarikWin32]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
@@ -139,7 +146,23 @@ function Find-Element {
     ($raw -join "`n") | ConvertFrom-Json
 }
 function Send-Keys { param([string]$Keys, [switch]$Literal) Focus-App; Invoke-Ui (@('send-keys', $Keys, '--via', 'send-input') + $(if ($Literal) { @('--verbatim') } else { @() })) | Out-Null }
-function Click-Element { param([string]$Selector) Focus-App; Invoke-Ui @('click', $Selector) -Attempts 4 | Out-Null }
+function Click-Element {
+    param([string]$Selector)
+    Focus-App
+    try {
+        Invoke-Ui @('click', $Selector) -Attempts 2 | Out-Null
+        return
+    }
+    catch {
+        # Text selectors can be ambiguous (a ComboBox item and its Text child, for example).
+        # Fall back to the first match's stable slug so the click can still land.
+    }
+
+    $matches = @((Find-Element $Selector).matches)
+    if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
+    Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
+}
+function Focus-Element { param([string]$Selector) Focus-App; $target = if ($script:MainWindow) { @('-w', $script:MainWindow) } else { @() }; Invoke-Ui (@('focus', $Selector) + $target) | Out-Null }
 function Wait-ForText {
     param([string]$Text, [int]$Seconds = 8)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -167,7 +190,7 @@ Start-Sleep -Seconds 3
 # Wait for the shell, then focus it so synthetic input does not land in the console.
 try { Invoke-Ui @('wait-for', 'Editor') -Attempts 20 | Out-Null } catch { }
 Focus-App
-Invoke-Ui @('focus', 'Editor') -Attempts 5 | Out-Null
+Invoke-Ui @('focus', 'Editor') | Out-Null
 
 try {
     Test-UI 'window shows the studio title' {
@@ -286,10 +309,16 @@ try {
         Send-Keys 'tab'
         Start-Sleep -Milliseconds 900
         Assert-True ((Get-EditorText) -eq 'SELECT * FROM ') "editor text was '$((Get-EditorText))', expected 'SELECT * FROM '"
+
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline -and (Find-Element 'SQL suggestions').matchCount -gt 0) {
+            Start-Sleep -Milliseconds 200
+        }
         Assert-True ((Find-Element 'SQL suggestions').matchCount -eq 0) 'popup stayed open after accepting'
     }
 
     Test-UI 'Ctrl+Enter runs the query through the provider' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'customers;' -Literal
         Start-Sleep -Milliseconds 400
         Send-Keys 'ctrl+enter'
@@ -436,9 +465,12 @@ try {
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
             # The SQL Server form is the tall one: Test must keep its result on screen, not
-            # just in the automation tree below the visible part of the dialog.
-            Click-Element 'SQL Server'
+            # just in the automation tree below the visible part of the dialog. Providers sort
+            # by name (Demo first, SQL Server second), so Down + Enter is unambiguous.
+            Send-Keys 'down'
+            Send-Keys 'enter'
             Start-Sleep -Milliseconds 800
+            Assert-True ((Find-Element 'Advanced').matchCount -gt 0) 'the SQL Server provider was not selected'
             Assert-True ((Find-Element 'Connect timeout (s)').matchCount -eq 0) 'advanced fields are not collapsed'
             Click-Element 'Advanced'
             Start-Sleep -Milliseconds 600
@@ -488,10 +520,144 @@ try {
         Assert-True ((Find-Element 'DatabaseSelectorButton').matchCount -gt 0) 'sidebar did not come back'
     }
 
-    Test-UI 'New query adds a vertical tab' {
+    Test-UI 'New query asks for a database before creating the tab' {
         Click-Element 'New query tab'
         Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'New query database').matchCount -gt 0) 'the database picker did not open'
+        Click-Element 'Create'
+        Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'new tab did not appear'
+    }
+
+    Test-UI 'a new tab binds the database chosen in the picker' {
+        Click-Element 'New query tab'
+        Start-Sleep -Milliseconds 800
+        Click-Element 'New query database'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the picker did not list the server databases'
+        Click-Element 'tempdb'
+        Start-Sleep -Milliseconds 300
+        Click-Element 'Create'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Query 2').matchCount -gt 0) 'new tab did not appear'
+        Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab database'
+    }
+
+    Test-UI 'each tab keeps its own result grid' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select name as database_name from sys.databases;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'database_name' 20
+
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'database_name').matchCount -eq 0) 'the previous tab result stayed in the grid'
+        Assert-True ((Find-Element 'tempdb').matchCount -eq 0) 'the database selector did not switch back with the tab'
+
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'database_name').matchCount -gt 0) 'the tab result was not restored'
+        Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab'
+    }
+
+    Test-UI 'a large result switches tabs quickly' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select top 1000 'row_' + cast(row_number() over (order by (select null)) as varchar(10)) as label from sys.all_objects a cross join sys.all_objects b;" -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'row_1' 30
+        Assert-True ((Find-Element '1000 rows').matchCount -gt 0) 'the large query did not report its row count'
+
+        $start = Get-Date
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 300
+        Click-Element 'Query 2'
+        Wait-ForText 'row_1' 10
+        $elapsed = ((Get-Date) - $start).TotalSeconds
+        Assert-True ($elapsed -lt 8) "switching back to the large result took $($elapsed.ToString('0.0'))s"
+    }
+
+    Test-UI 'the provider caps a result at 5000 rows' {
+        Focus-Element 'Editor'
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select top 6000 a.name from sys.all_objects a cross join sys.all_objects b;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'Showing first 5,000 rows' 30
+        Assert-True ((Find-Element '5,000 rows').matchCount -gt 0) 'the truncation badge is missing'
+    }
+
+    Test-UI 'wide results scroll horizontally under the sticky header' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from sys.databases;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'database_id' 20
+
+        # page_verify_option sits far enough right to be clipped initially; scrolling must bring
+        # its sticky header into view. If the header stayed put, it would remain off-screen.
+        $visibleBefore = @((Find-Element 'page_verify_option').matches) | Where-Object { $_.x -gt 100 }
+        Assert-True ($visibleBefore.Count -eq 0) 'the far column was already visible before scrolling'
+
+        Invoke-Ui @('scroll', 'Query results', '--direction', 'right') | Out-Null
+        Start-Sleep -Milliseconds 500
+
+        $revealed = @((Find-Element 'page_verify_option').matches) | Where-Object { $_.x -gt 100 } | Select-Object -First 1
+        Assert-True ($null -ne $revealed) 'horizontal scrolling did not reveal later columns under the sticky header'
+
+        # Focus the grid, then Ctrl+Home returns the active cell (and horizontal offset) to the
+        # first column for the selection tests.
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Start-Sleep -Milliseconds 500
+    }
+
+    Test-UI 'grid cells select and copy like a spreadsheet' {
+        Set-Clipboard -Value ''
+        $cell = @((Find-Element 'master').matches) | Where-Object { $_.width -gt 0 -and $_.height -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $cell) 'the result cell was not found'
+        Focus-App
+        Invoke-Ui @('click', $cell.selector) -Attempts 4 | Out-Null
+        Send-Keys 'ctrl+c'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-Clipboard -Raw) -eq 'master') "a single cell copied '$((Get-Clipboard -Raw))' instead of 'master'"
+
+        Send-Keys 'shift+right'
+        Send-Keys 'shift+down'
+        Send-Keys 'ctrl+c'
+        Start-Sleep -Milliseconds 300
+        $block = Get-Clipboard -Raw
+        Assert-True ($block -match "master`t1") "the selected range is missing 'master<TAB>1': $block"
+        Assert-True ($block -match "tempdb`t2") "the selected range is missing 'tempdb<TAB>2': $block"
+    }
+
+    Test-UI 'Ctrl+Space selects a column and copy carries its header' {
+        Set-Clipboard -Value ''
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Send-Keys 'ctrl+space'
+        Send-Keys 'ctrl+shift+c'
+        Start-Sleep -Milliseconds 300
+        $withHeaders = Get-Clipboard -Raw
+        Assert-True ($withHeaders -match '^name') "the header row is missing: $withHeaders"
+        Assert-True ($withHeaders -match 'master') "the column values are missing: $withHeaders"
+    }
+
+    Test-UI 'a column width can be dragged from the header' {
+        $handle = @((Find-Element 'Resize name column').matches) | Select-Object -First 1
+        Assert-True ($null -ne $handle) 'the column resize handle was not found'
+        $next = @((Find-Element 'database_id').matches) | Select-Object -First 1
+        Assert-True ($null -ne $next) 'the next column header was not found'
+
+        $y = [int]($handle.y + ($handle.height / 2))
+        $from = "$([int]($handle.x + 2)),$y"
+        $to = "$([int]($handle.x + 82)),$y"
+        Invoke-Ui @('drag', $from, $to) | Out-Null
+        Start-Sleep -Milliseconds 500
+
+        $moved = @((Find-Element 'database_id').matches) | Select-Object -First 1
+        Assert-True ($null -ne $moved) 'the next column disappeared after resizing'
+        Assert-True ($moved.x -gt ($next.x + 50)) "the column did not widen (before=$($next.x) after=$($moved.x))"
     }
 
     Test-UI 'workspace state is saved to disk' {

@@ -118,6 +118,13 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default) =>
         RequireSession().ExecuteAsync(sql, database, cancellationToken);
 
+    public Task<QueryResult> ExecuteAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default) =>
+        RequireSession().ExecuteAsync(sql, database, options, cancellationToken);
+
     /// <summary>Swaps the provider/profile (from the connection dialog). Closes any live session.</summary>
     public async Task ReconfigureAsync(string providerId, ConnectionProfile profile)
     {

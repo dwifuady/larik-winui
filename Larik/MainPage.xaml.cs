@@ -1,11 +1,9 @@
 using System.ComponentModel;
 using Larik.Data;
 using Larik.Editor;
-using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
 using Microsoft.UI.Composition.SystemBackdrops;
-using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -24,8 +22,6 @@ namespace Larik;
 /// </summary>
 public sealed partial class MainPage : Page
 {
-    private const int MaxRenderedRows = 500;
-
     private bool _hooked;
     private readonly StudioCompletionSource _completionSource;
     private Storyboard? _spaceSlide;
@@ -42,6 +38,8 @@ public sealed partial class MainPage : Page
     private double _splitStartY;
     private double _splitStartHeight;
     private double _splitTotalHeight;
+
+    private bool _newTabDialogOpen;
 
     public StudioViewModel ViewModel { get; } = new();
 
@@ -94,6 +92,7 @@ public sealed partial class MainPage : Page
 
             ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
             ViewModel.ResultChanged += (_, _) => RenderResults();
+            ViewModel.NewTabRequested += ViewModel_NewTabRequested;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
             _lastSpaceIndex = ActiveSpaceIndex();
         }
@@ -775,6 +774,105 @@ public sealed partial class MainPage : Page
         await dialog.ShowAsync();
     }
 
+    // ---------------------------------------------------------------- new query
+
+    private async void ViewModel_NewTabRequested(object? sender, EventArgs e)
+    {
+        try
+        {
+            await ShowNewTabDialogAsync();
+        }
+        catch (Exception ex)
+        {
+            ViewModel.StatusText = $"Could not open the new query dialog: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Every new tab starts with a database choice: completion, the database picker and the
+    /// result grid are per tab, so the tab must know which database it belongs to from day one.
+    /// </summary>
+    private async Task ShowNewTabDialogAsync()
+    {
+        if (_newTabDialogOpen || ViewModel.ActiveSpace is not { } space)
+        {
+            return;
+        }
+
+        _newTabDialogOpen = true;
+        try
+        {
+            var databases = space.Databases.Select(database => database.Name).ToList();
+            ComboBox? databaseBox = null;
+
+            var body = new StackPanel { MinWidth = 320, Spacing = 6 };
+            if (databases.Count > 0)
+            {
+                databaseBox = new ComboBox
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Header = "Database",
+                    ItemsSource = databases,
+                    PlaceholderText = "Choose a database",
+                };
+
+                var selected = ViewModel.ActiveTab?.Database;
+                databaseBox.SelectedItem = databases.FirstOrDefault(name =>
+                        string.Equals(name, selected, StringComparison.OrdinalIgnoreCase))
+                    ?? databases.FirstOrDefault(name =>
+                        string.Equals(name, space.PreferredDatabase, StringComparison.OrdinalIgnoreCase))
+                    ?? space.ActiveDatabase?.Name
+                    ?? databases[0];
+                AutomationProperties.SetName(databaseBox, "New query database");
+
+                body.Children.Add(databaseBox);
+                body.Children.Add(new TextBlock
+                {
+                    Text = "Autocomplete, queries and results stay with this tab's database.",
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
+                });
+            }
+            else
+            {
+                body.Children.Add(new TextBlock
+                {
+                    Text = space.Connection.IsConnected
+                        ? "This connection exposes no databases. The tab opens without one."
+                        : "Connect this workspace to choose a database. The tab opens without one.",
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
+                });
+            }
+
+            var dialog = new ContentDialog
+            {
+                Title = "New query",
+                XamlRoot = XamlRoot,
+                Content = body,
+                DefaultButton = ContentDialogButton.Primary,
+                PrimaryButtonText = "Create",
+                CloseButtonText = "Cancel",
+            };
+
+            dialog.Opened += (_, _) => databaseBox?.Focus(FocusState.Programmatic);
+            dialog.PrimaryButtonClick += (_, _) =>
+            {
+                var chosen = databaseBox?.SelectedItem as string
+                    ?? ViewModel.ActiveTab?.Database;
+                ViewModel.CreateTab(chosen);
+            };
+
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            _newTabDialogOpen = false;
+        }
+    }
+
     // ---------------------------------------------------------------- splitter
 
     private void Splitter_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -811,109 +909,16 @@ public sealed partial class MainPage : Page
 
     private void RenderResults()
     {
-        ResultsHost.Children.Clear();
-        ResultsHost.ColumnDefinitions.Clear();
-        ResultsHost.RowDefinitions.Clear();
-
         var result = ViewModel.LastResult;
         ResultMessageText.Foreground = result?.IsError == true
             ? StudioColors.Danger
             : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
 
-        if (result is null)
-        {
-            return;
-        }
-
-        if (result.Columns.Count == 0 || result.Rows.Count == 0)
-        {
-            ResultsHost.Children.Add(new TextBlock
-            {
-                Text = result.Message,
-                Margin = new Thickness(14, 12, 14, 12),
-                FontSize = 12,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
-            });
-            return;
-        }
-
-        var accent = StudioColors.Brush(ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
-        var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-        var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
-        var primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
-
-        var columns = result.Columns;
-        for (var c = 0; c < columns.Count; c++)
-        {
-            var numeric = result.Rows.All(r => IsNumeric(r[c]));
-            ResultsHost.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(c == 0 ? 72 : 176),
-                MinWidth = 72,
-            });
-
-            ResultsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            var header = new TextBlock
-            {
-                Text = columns[c].Name,
-                FontSize = 10,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                CharacterSpacing = 80,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Foreground = mutedBrush,
-                Padding = new Thickness(12, 8, 12, 8),
-                HorizontalAlignment = numeric ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            };
-            Grid.SetColumn(header, c);
-            Grid.SetRow(header, 0);
-            ResultsHost.Children.Add(header);
-        }
-
-        var rowCount = Math.Min(result.Rows.Count, MaxRenderedRows);
-        for (var r = 0; r < rowCount; r++)
-        {
-            ResultsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            for (var c = 0; c < columns.Count; c++)
-            {
-                var numeric = columns.Count > 0 && result.Rows.All(row => IsNumeric(row[c]));
-                var cell = new TextBlock
-                {
-                    Text = result.Rows[r][c] ?? "NULL",
-                    FontFamily = (FontFamily)Application.Current.Resources["StudioMonoFont"],
-                    FontSize = 12,
-                    Padding = new Thickness(12, 5, 12, 5),
-                    Foreground = result.Rows[r][c] is null
-                        ? mutedBrush
-                        : c == 0 ? secondaryBrush : primaryBrush,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    HorizontalAlignment = numeric ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-                };
-
-                Grid.SetColumn(cell, c);
-                Grid.SetRow(cell, r + 1);
-                ResultsHost.Children.Add(cell);
-            }
-        }
-
-        // Keep the space colour visible in the result header: a 2px accent rule under row 0.
-        var rule = new Border
-        {
-            Height = 2,
-            Background = accent,
-            Opacity = 0.7,
-            VerticalAlignment = VerticalAlignment.Bottom,
-        };
-        Grid.SetColumn(rule, 0);
-        Grid.SetColumnSpan(rule, columns.Count);
-        Grid.SetRow(rule, 0);
-        ResultsHost.Children.Add(rule);
+        ResultsGrid.ShowResult(result, ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
     }
 
-    private static bool IsNumeric(string? value) =>
-        value is not null && double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _);
+    private void ResultsGrid_StatusChanged(object? sender, string message) =>
+        ViewModel.StatusText = message;
 
     // ---------------------------------------------------------------- accelerators
 

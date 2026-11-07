@@ -22,6 +22,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private const double PopupMaxHeight = 268;
 
     private bool _suppressEvents;
+    private bool _skipCompletionUpdateOnce;
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
 
@@ -98,6 +99,15 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
         RaiseTextChanged();
         RaiseCaretChanged();
+
+        // Inserting a completion can raise a delayed TextChanged after the popup closes. Do not
+        // immediately reopen it with the next clause's suggestions; wait for the next real key.
+        if (_skipCompletionUpdateOnce)
+        {
+            _skipCompletionUpdateOnce = false;
+            return;
+        }
+
         UpdateCompletions();
     }
 
@@ -207,6 +217,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             return;
         }
 
+        _skipCompletionUpdateOnce = true;
         var item = _completions[_selectedIndex];
         var caret = Editor.Document.Selection.StartPosition;
         var (start, _, _) = CompletionEngine.ExtractContext(GetText(), caret);
@@ -260,6 +271,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
     private void Editor_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // Any new key means the user is typing again; a pending post-accept guard no longer applies.
+        _skipCompletionUpdateOnce = false;
+
         // RichEditBox swallows Ctrl+Enter and owns Ctrl+B/Ctrl+T, so shell commands are raised here.
         if (e.Key is VirtualKey.Enter or VirtualKey.F5 && (e.Key == VirtualKey.F5 || IsKeyDown(VirtualKey.Control)))
         {

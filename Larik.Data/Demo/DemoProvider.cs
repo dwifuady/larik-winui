@@ -92,7 +92,14 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         return Tables;
     }
 
-    public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default)
+    public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default) =>
+        ExecuteAsync(sql, database, QueryExecutionOptions.Default, cancellationToken);
+
+    public Task<QueryResult> ExecuteAsync(
+        string sql,
+        string? database,
+        QueryExecutionOptions options,
+        CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
         var trimmed = sql.Trim();
@@ -119,7 +126,10 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
                 database));
         }
 
-        var rows = GenerateRows(table, 24).Cast<string?[]>().ToList();
+        var rowLimit = options.EffectiveMaxRows;
+        var generated = GenerateRows(table, 24).Cast<string?[]>().ToList();
+        var truncated = generated.Count > rowLimit;
+        var rows = truncated ? generated[..rowLimit] : generated;
         stopwatch.Stop();
         return Task.FromResult(new QueryResult
         {
@@ -128,6 +138,8 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
             Message = $"{rows.Count} rows",
             Elapsed = stopwatch.Elapsed,
             Database = database,
+            IsTruncated = truncated,
+            RowLimit = rowLimit,
         });
     }
 

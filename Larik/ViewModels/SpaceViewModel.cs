@@ -92,6 +92,13 @@ public partial class SpaceViewModel : ObservableObject
     public string ConnectedDatabaseText => ActiveDatabase?.Name
         ?? (Connection.IsConnected ? "no database" : "not connected");
 
+    /// <summary>Finds a database by name, or null when the list is empty or the name is unknown.</summary>
+    public DatabaseViewModel? FindDatabase(string? name) =>
+        string.IsNullOrWhiteSpace(name)
+            ? null
+            : Databases.FirstOrDefault(database =>
+                string.Equals(database.Name, name, StringComparison.OrdinalIgnoreCase));
+
     public double IsActiveDotVisible => IsActive ? 1 : 0;
 
     // ---- workspace indicator (bottom of the rail): one dot per workspace, the active one ringed

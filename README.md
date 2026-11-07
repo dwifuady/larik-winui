@@ -51,9 +51,13 @@ Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs thr
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
 connection + tabs + editor, a
-workspace starts disconnected until the status-bar action connects it, the database picker repoints
-the rail/status bar/tab subtitle, the connection dialog renders the provider's declared fields and
-its Test result, saved state is written to disk, and a real **SQL Server** workspace is
+workspace starts disconnected until the status-bar action connects it, a new query asks for its
+database, the picker and result grid follow the active tab (and each tab restores its own result),
+a 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky
+header, results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with
+headers, Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the
+provider's declared fields and its Test result, saved state is written to disk, and a real
+**SQL Server** workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
 or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
 
@@ -95,6 +99,12 @@ to the desktop app's name heuristics.
 `ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
 connection dialog's **Advanced** section instead of competing with the server and credentials.
 
+`IDatabaseConnection.ExecuteAsync` has an overload taking `QueryExecutionOptions`. Providers should
+stop reading at `EffectiveMaxRows + 1` and set `QueryResult.IsTruncated`/`RowLimit`; the default is
+5,000 rows with a 100,000 ceiling, matching the Tauri app. The legacy overload keeps older provider
+assemblies working. This is an execution cap, not paging: no continuation tokens or ordering rules
+are needed, so a new provider only has to stop its own reader/cursor early.
+
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
 `sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
@@ -102,16 +112,20 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 ## What works in this slice
 
 - **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
-  database subtitle revealed on hover/active, close button, Ctrl+T for a new query. The workspace
-  switcher spans the full rail width; the sidebar toggle lives in the title bar (Ctrl+B also works).
+  database subtitle revealed on hover/active, close button. Ctrl+T (or the + button) opens a
+  **New query** dialog that asks which database the tab belongs to; each tab owns that database and
+  its result grid, so switching tabs repoints completion, the database picker and the grid together.
+  The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
+  (Ctrl+B also works).
 - **Workspaces, connections and databases**: one space owns exactly one connection; that
   connection exposes several databases. The rail's top strip carries the workspace switcher, whose
   chip shows the workspace name and its connection state (dot **and** `Connected`/`Disconnected`) —
   **spaces start disconnected**. Connect from the chip's status bar action or the workspace menu;
   running a query while disconnected is refused with an explicit message. The row beneath the strip
-  is a database picker for the active connection, filled from the provider once connected. Switching
-  database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle, the
-  snippet dialect and the completion schema. An Arc-style row of workspace dots at the bottom of the
+  is a database picker for the active tab, filled from the provider once connected. Switching
+  database updates that tab (and the space while it is active): the rail, toolbar badge, status bar,
+  tab subtitle, snippet dialect and completion schema all follow. Other tabs keep their own database
+  and schema. An Arc-style row of workspace dots at the bottom of the
   rail shows every workspace with the current one ringed; clicking a dot switches workspace.
   **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
   under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the workspace
@@ -145,8 +159,16 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once. Spaces still
   start disconnected; provider-declared password fields are never written, so SQL-auth
   connections re-prompt after a restart. Corrupt state falls back to the seeded spaces.
-- **Results grid**: ListView-free, code-generated columns/rows (500-row cap), numeric columns
-  right-aligned, space-coloured rule under the header.
+- **Results grid**: per tab and virtualized — a `ListView` realizes only the visible rows and
+  recycles their containers, so a 1,000-row result stays quick and light to switch back to. A real
+  grid with header/row/column rules and a sticky header. Click a cell or move with the arrow keys;
+  Shift extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies
+  the selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
+  context menu offers Copy / Copy with headers / Select all. Drag a header edge to resize a column;
+  widths persist with that tab's result. The provider caps each result at 5,000 rows (100,000
+  ceiling) while reading, and a truncated result says **Showing first 5,000 rows**. Switching tabs
+  restores that tab's last result; running a query while another tab is active writes to the tab
+  that started it.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
@@ -168,7 +190,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
 | No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |
-| Results grid not virtualized | Fine for a slice; for large result sets move to `ItemsRepeater` with a shared row template. |
+| Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | No drag-reorder, folders, pinned tabs, command palette, MCP | Ported later; the tab list is a plain `ListView` so reorder is a small change. |
 | No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |
 

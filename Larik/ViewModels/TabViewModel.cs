@@ -1,11 +1,15 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Larik.Data;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI.Text;
 
 namespace Larik.ViewModels;
 
-/// <summary>One vertical tab in the sidebar.</summary>
+/// <summary>
+/// One vertical tab in the sidebar. A tab owns its database context and its last result, so
+/// switching tabs swaps the completion schema, database picker and results grid together.
+/// </summary>
 public partial class TabViewModel : ObservableObject
 {
     private bool _isPointerOver;
@@ -46,6 +50,25 @@ public partial class TabViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string Content { get; set; }
+
+    /// <summary>The last result produced while this tab was active. Results are not shared between tabs.</summary>
+    public QueryResult? Result { get; set; }
+
+    public string ResultMessage { get; set; } = string.Empty;
+
+    public string ResultSummary { get; set; } = string.Empty;
+
+    /// <summary>Stores a result and the header text derived from it for this tab.</summary>
+    public void ApplyResult(QueryResult result)
+    {
+        Result = result;
+        ResultMessage = result.IsTruncated && result.RowLimit is { } limit
+            ? $"Showing first {limit:N0} rows"
+            : result.Message;
+        ResultSummary = result is { IsError: false, Rows.Count: > 0 }
+            ? $"{result.Rows.Count} rows · {result.Elapsed.TotalMilliseconds:0} ms"
+            : string.Empty;
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ActiveTintBrush))]

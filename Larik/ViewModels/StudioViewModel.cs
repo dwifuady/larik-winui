@@ -17,6 +17,9 @@ public partial class StudioViewModel : ObservableObject
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
 
+    // Schemas are per database; keeping them makes switching tabs back to a database instant.
+    private readonly Dictionary<string, IReadOnlyList<TableSchema>> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+
     public StudioViewModel()
     {
         StatusText = "Ready";
@@ -94,6 +97,9 @@ public partial class StudioViewModel : ObservableObject
 
     public event EventHandler? ActiveTabChanged;
 
+    /// <summary>The shell shows the database picker before creating a tab; the view owns dialogs.</summary>
+    public event EventHandler? NewTabRequested;
+
     [RelayCommand]
     private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
 
@@ -115,25 +121,42 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Asks the shell for a database choice. Creating a tab is a database decision, so it never
+    /// happens straight from the command: the page shows the picker and calls <see cref="CreateTab"/>.
+    /// </summary>
     [RelayCommand]
     private void NewTab()
     {
-        if (ActiveSpace is null)
+        if (ActiveSpace is not null)
         {
-            return;
+            NewTabRequested?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    /// <summary>Creates and activates a tab bound to <paramref name="databaseName"/> (null = unbound).</summary>
+    public TabViewModel CreateTab(string? databaseName)
+    {
+        var space = ActiveSpace ?? throw new InvalidOperationException("No active workspace.");
 
         var tab = new TabViewModel(
             Guid.NewGuid().ToString("n"),
             $"Query {++_queryCounter}",
-            ActiveSpace.ActiveDatabase?.Name ?? string.Empty,
-            ActiveSpace,
+            databaseName ?? string.Empty,
+            space,
             string.Empty);
 
-        ActiveSpace.Tabs.Add(tab);
-        Tabs.Add(tab);
+        space.Tabs.Add(tab);
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            Tabs.Add(tab);
+        }
+
         SelectTab(tab);
-        StatusText = $"New query in {ActiveSpace.Name}";
+        StatusText = string.IsNullOrWhiteSpace(databaseName)
+            ? $"New query in {space.Name} · no database"
+            : $"New query in {space.Name} · {databaseName}";
+        return tab;
     }
 
     /// <summary>
@@ -171,8 +194,8 @@ public partial class StudioViewModel : ObservableObject
         }
 
         await ActiveSpace.Connection.ReconfigureAsync(providerId, profile);
-        _schema = [];
-        OnPropertyChanged(nameof(Tables));
+        _schemaCache.Clear();
+        ClearSchema();
         ActiveSpace.UpdateDatabases([]);
         OnPropertyChanged(nameof(Snippets));
         StatusText = $"{ActiveSpace.Name} → {ActiveSpace.Connection.ProviderName}";
@@ -187,31 +210,31 @@ public partial class StudioViewModel : ObservableObject
     [RelayCommand]
     private async Task RunAsync()
     {
-        if (ActiveTab is null || ActiveSpace is null || IsBusy)
+        var tab = ActiveTab;
+        var space = ActiveSpace;
+        if (tab is null || space is null || IsBusy)
         {
             return;
         }
 
-        if (!ActiveSpace.Connection.IsConnected)
+        if (!space.Connection.IsConnected)
         {
-            LastResult = QueryResult.Error(
-                $"Not connected — connect to {ActiveSpace.Name} to run queries.",
-                TimeSpan.Zero);
-            FinishRun("Disconnected");
+            ApplyResult(tab, QueryResult.Error(
+                $"Not connected — connect to {space.Name} to run queries.",
+                TimeSpan.Zero), "Disconnected");
             return;
         }
 
-        var sql = ActiveTab.Content;
+        var sql = tab.Content;
         var upper = sql.ToUpperInvariant();
         var mutates = upper.Contains("UPDATE ") || upper.Contains("DELETE ") || upper.Contains("TRUNCATE ");
         var guarded = upper.Contains("WHERE");
 
         if (mutates && !guarded)
         {
-            LastResult = QueryResult.Error(
+            ApplyResult(tab, QueryResult.Error(
                 "Refused: this statement modifies rows without a WHERE clause.",
-                TimeSpan.Zero);
-            FinishRun("Error");
+                TimeSpan.Zero), "Error");
             return;
         }
 
@@ -219,21 +242,23 @@ public partial class StudioViewModel : ObservableObject
         StatusText = "Running…";
         try
         {
-            LastResult = await ActiveSpace.Connection.ExecuteAsync(
+            // The tab pins the database, so switching tabs while the query runs cannot retarget it.
+            // The provider applies the row cap while reading, not after materializing everything.
+            var result = await space.Connection.ExecuteAsync(
                 sql,
-                ActiveSpace.ActiveDatabase?.Name,
+                DatabaseNameFor(space, tab),
+                QueryExecutionOptions.Default,
                 _lifetime.Token);
+            ApplyResult(tab, result);
         }
         catch (Exception ex)
         {
-            LastResult = QueryResult.Error(ex.Message, TimeSpan.Zero);
+            ApplyResult(tab, QueryResult.Error(ex.Message, TimeSpan.Zero));
         }
         finally
         {
             IsBusy = false;
         }
-
-        FinishRun();
     }
 
     [RelayCommand]
@@ -247,21 +272,33 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    private void FinishRun(string? status = null)
+    /// <summary>Stores a result on its tab and mirrors it to the shell only when that tab is active.</summary>
+    private void ApplyResult(TabViewModel tab, QueryResult result, string? status = null)
     {
-        if (LastResult is null)
+        tab.ApplyResult(result);
+
+        if (!ReferenceEquals(tab, ActiveTab))
         {
             return;
         }
 
-        ResultMessage = LastResult.Message;
-        ResultSummary = LastResult is { IsError: false, Rows.Count: > 0 }
-            ? $"{LastResult.Rows.Count} rows · {LastResult.Elapsed.TotalMilliseconds:0} ms"
-            : string.Empty;
-
-        StatusText = status ?? (LastResult.IsError
+        LastResult = result;
+        ResultMessage = tab.ResultMessage;
+        ResultSummary = tab.ResultSummary;
+        StatusText = status ?? (result.IsError
             ? "Error"
-            : $"{LastResult.Rows.Count} rows returned");
+            : result.IsTruncated
+                ? $"Showing first {result.RowLimit:N0} rows"
+                : $"{result.Rows.Count} rows returned");
+        ResultChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Republishes the active tab's stored result; an empty tab clears the grid.</summary>
+    private void SyncResultMirror(TabViewModel? tab)
+    {
+        LastResult = tab?.Result;
+        ResultMessage = tab?.ResultMessage ?? string.Empty;
+        ResultSummary = tab?.ResultSummary ?? string.Empty;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -273,7 +310,6 @@ public partial class StudioViewModel : ObservableObject
         }
 
         ActiveSpace = space;
-        ApplyDatabase(space.LastActiveDatabase ?? space.ActiveDatabase ?? space.Databases.FirstOrDefault());
 
         Tabs.Clear();
         foreach (var item in space.Tabs)
@@ -281,14 +317,16 @@ public partial class StudioViewModel : ObservableObject
             Tabs.Add(item);
         }
 
-        SelectTab(tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault());
+        var target = tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault();
+        SelectTab(target);
+
+        if (target is null)
+        {
+            ApplyDatabase(space.LastActiveDatabase ?? space.ActiveDatabase);
+        }
+
         OnPropertyChanged(nameof(Snippets));
         OnPropertyChanged(nameof(ActiveSpace));
-
-        if (space.Connection.IsConnected)
-        {
-            _ = RefreshSchemaAsync(space);
-        }
     }
 
     /// <summary>
@@ -322,9 +360,17 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    /// <summary>Switches the database the active space queries against and reloads its schema.</summary>
+    /// <summary>
+    /// Switches the active tab's database. The tab, not the space, owns this choice: other tabs
+    /// keep their own database and result grid.
+    /// </summary>
     public async Task SelectDatabaseAsync(DatabaseViewModel database)
     {
+        if (ActiveSpace is null)
+        {
+            return;
+        }
+
         ApplyDatabase(database);
 
         if (ActiveTab is not null)
@@ -332,11 +378,11 @@ public partial class StudioViewModel : ObservableObject
             ActiveTab.Database = database.Name;
         }
 
-        StatusText = $"{database.Name} · {ActiveSpace?.StatusText}";
+        StatusText = $"{database.Name} · {ActiveSpace.StatusText}";
 
-        if (ActiveSpace is not null)
+        if (ActiveTab is not null)
         {
-            await RefreshSchemaAsync(ActiveSpace);
+            await SyncSchemaForTabAsync(ActiveSpace, ActiveTab);
         }
     }
 
@@ -345,6 +391,7 @@ public partial class StudioViewModel : ObservableObject
         if (tab is null)
         {
             ActiveTab = null;
+            SyncResultMirror(null);
             return;
         }
 
@@ -355,12 +402,54 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveTab = tab;
 
-        if (ActiveSpace is not null)
+        if (ActiveSpace is not null && ReferenceEquals(tab.Space, ActiveSpace))
         {
             ActiveSpace.LastActiveTab = tab;
+            ApplyTabDatabase(tab);
         }
 
+        SyncResultMirror(tab);
         ActiveTabChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Points the space's database context at the tab's database and reloads completion.</summary>
+    private void ApplyTabDatabase(TabViewModel tab)
+    {
+        if (ActiveSpace is null)
+        {
+            return;
+        }
+
+        var database = ActiveSpace.FindDatabase(tab.Database);
+        if (database is not null)
+        {
+            ApplyDatabase(database);
+        }
+        else
+        {
+            // Before the connection opens the list is empty: remember the tab's database so the
+            // connect flow reselects it, instead of falling back to an unrelated default.
+            foreach (var candidate in ActiveSpace.Databases)
+            {
+                candidate.IsActive = false;
+            }
+
+            ActiveSpace.ActiveDatabase = null;
+            ActiveSpace.LastActiveDatabase = null;
+            if (!string.IsNullOrWhiteSpace(tab.Database))
+            {
+                ActiveSpace.PreferredDatabase = tab.Database;
+            }
+        }
+
+        if (ActiveSpace.Connection.IsConnected)
+        {
+            _ = SyncSchemaForTabAsync(ActiveSpace, tab);
+        }
+        else
+        {
+            ClearSchema();
+        }
     }
 
     public void CloseTab(TabViewModel tab)
@@ -563,23 +652,51 @@ public partial class StudioViewModel : ObservableObject
             await space.Connection.ConnectAsync(_lifetime.Token);
             var databases = await space.Connection.GetDatabasesAsync(_lifetime.Token);
             space.UpdateDatabases(databases);
-            ApplyDatabase(space.ActiveDatabase);
 
-            if (ActiveTab is not null && space == ActiveSpace)
+            // The connection is new, so any cached schema may be stale.
+            _schemaCache.Clear();
+
+            if (ReferenceEquals(space, ActiveSpace))
             {
-                ActiveTab.Database = space.ActiveDatabase?.Name ?? string.Empty;
+                if (ActiveTab is { } tab)
+                {
+                    // Keep the tab's database when the server still exposes it; otherwise adopt
+                    // the connection default. Tabs created while disconnected gain one here.
+                    var target = space.FindDatabase(tab.Database)
+                        ?? space.ActiveDatabase
+                        ?? space.Databases.FirstOrDefault();
+
+                    if (target is not null)
+                    {
+                        if (!string.Equals(tab.Database, target.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            tab.Database = target.Name;
+                        }
+
+                        ApplyDatabase(target);
+                        foreach (var candidate in space.Tabs.Where(t => string.IsNullOrWhiteSpace(t.Database)))
+                        {
+                            candidate.Database = target.Name;
+                        }
+                    }
+
+                    await SyncSchemaForTabAsync(space, tab);
+                }
+                else
+                {
+                    ApplyDatabase(space.ActiveDatabase);
+                }
             }
 
-            await RefreshSchemaAsync(space);
             StatusText = $"Connected · {space.Connection.Endpoint} · {databases.Count} databases";
         }
         catch (Exception ex)
         {
             StatusText = "Connection failed";
-            LastResult = QueryResult.Error(ex.Message, TimeSpan.Zero);
-            ResultMessage = ex.Message;
-            ResultSummary = string.Empty;
-            ResultChanged?.Invoke(this, EventArgs.Empty);
+            if (ActiveTab is { } tab && ReferenceEquals(space, ActiveSpace))
+            {
+                ApplyResult(tab, QueryResult.Error(ex.Message, TimeSpan.Zero), "Connection failed");
+            }
         }
         finally
         {
@@ -594,8 +711,8 @@ public partial class StudioViewModel : ObservableObject
         {
             await space.Connection.DisconnectAsync(_lifetime.Token);
             space.UpdateDatabases([]);
-            _schema = [];
-            OnPropertyChanged(nameof(Tables));
+            _schemaCache.Clear();
+            ClearSchema();
             StatusText = $"Disconnected from {space.Name}";
         }
         catch (Exception ex)
@@ -608,12 +725,42 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    private async Task RefreshSchemaAsync(SpaceViewModel space)
+    /// <summary>
+    /// Loads the schema for the tab's database, from cache when possible. Completion is scoped to
+    /// the active tab, so an in-flight load for a tab the user already left is discarded.
+    /// </summary>
+    private async Task SyncSchemaForTabAsync(SpaceViewModel space, TabViewModel tab)
     {
+        if (!ReferenceEquals(space, ActiveSpace) || !ReferenceEquals(tab, ActiveTab))
+        {
+            return;
+        }
+
+        var database = DatabaseNameFor(space, tab);
+        if (!space.Connection.IsConnected || string.IsNullOrWhiteSpace(database))
+        {
+            ClearSchema();
+            return;
+        }
+
+        var key = SchemaKey(space, database);
+        if (_schemaCache.TryGetValue(key, out var cached))
+        {
+            _schema = cached;
+            OnPropertyChanged(nameof(Tables));
+            return;
+        }
+
+        ClearSchema();
+
         try
         {
-            var schema = await space.Connection.GetSchemaAsync(space.ActiveDatabase?.Name, _lifetime.Token);
-            if (space == ActiveSpace)
+            var schema = await space.Connection.GetSchemaAsync(database, _lifetime.Token);
+            _schemaCache[key] = schema;
+
+            if (ReferenceEquals(space, ActiveSpace)
+                && ReferenceEquals(tab, ActiveTab)
+                && string.Equals(DatabaseNameFor(space, tab), database, StringComparison.OrdinalIgnoreCase))
             {
                 _schema = schema;
                 OnPropertyChanged(nameof(Tables));
@@ -623,6 +770,19 @@ public partial class StudioViewModel : ObservableObject
         {
             // Completion degrades to keywords/snippets; the session itself stays usable.
         }
+    }
+
+    /// <summary>The database a tab is bound to, falling back to the space default when it is unknown.</summary>
+    private static string? DatabaseNameFor(SpaceViewModel space, TabViewModel tab) =>
+        space.FindDatabase(tab.Database)?.Name ?? space.ActiveDatabase?.Name;
+
+    private static string SchemaKey(SpaceViewModel space, string database) =>
+        $"{space.Id}\u001F{database}";
+
+    private void ClearSchema()
+    {
+        _schema = [];
+        OnPropertyChanged(nameof(Tables));
     }
 
     /// <summary>Sets the space's active database without touching the active tab.</summary>
