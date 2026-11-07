@@ -49,4 +49,27 @@ public static class SnippetCatalog
 
     public static IReadOnlyList<SnippetDef> ForDialect(string dialect) =>
         All.Where(s => s.Dialects is null || s.Dialects.Contains(dialect)).ToList();
+
+    /// <summary>Stable row id for a built-in, so seeding can run on every launch without duplicates.</summary>
+    public static string BuiltinId(SnippetDef snippet)
+    {
+        var scope = SnippetDialects.Normalize(snippet.Dialects) is { } dialects
+            ? string.Join("+", dialects)
+            : "all";
+
+        return $"builtin:{scope}:{snippet.Trigger}";
+    }
+
+    public static SnippetRecord ToRecord(SnippetDef snippet, bool enabled = true) => new()
+    {
+        Id = BuiltinId(snippet),
+        Trigger = snippet.Trigger,
+        Name = snippet.Name,
+        Content = snippet.Content,
+        Description = snippet.Description,
+        Category = snippet.Category,
+        Dialects = SnippetDialects.Normalize(snippet.Dialects),
+        IsBuiltin = true,
+        IsEnabled = enabled,
+    };
 }

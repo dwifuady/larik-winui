@@ -18,6 +18,8 @@ C:\dev\larik-winui\
 │   ├── Models/StudioModels.cs    # Snippet, CompletionItem
 │   ├── Services/
 │   │   ├── SnippetCatalog.cs     # built-in snippets ported 1:1 from src-tauri/src/storage/snippets.rs
+│   │   ├── SnippetStore.cs       # SQLite snippets table (built-ins + user-defined, enabled + dialect scope)
+│   │   ├── SnippetLibrary.cs     # live snippet set shared by completion and the settings page
 │   │   ├── CompletionEngine.cs   # clause-aware completion, ${cursor}/${1:placeholder} expansion
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
 │   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, app_state (no passwords)
@@ -27,6 +29,7 @@ C:\dev\larik-winui\
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
 │   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
+│   ├── SettingsPage.xaml(.cs)    # settings shell + snippet manager (create/edit/enable/reset/delete)
 │   └── MainPage.xaml(.cs)        # shell, results grid, connection dialog
 └── ui-tests.ps1                  # UI Automation checks (incl. a real SQL Server round trip)
 ```
@@ -167,14 +170,22 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   CTEs complete too — a CTE takes its columns from an explicit list, its SELECT aliases, or the
   source table when it selects `*`, and shadows a real table of the same name. Elsewhere it mixes
   snippets, keywords and schema.
+- **Snippet manager (Settings)**: the gear in the query toolbar opens a Settings page with a
+  **Snippets** section modelled on the desktop app's `SnippetsDialog`: search and category filters,
+  a built-in/custom badge, and an editor for the trigger, name, category, description and expansion
+  content. Built-ins can be edited, disabled and reset to their catalog default but not deleted;
+  custom snippets can be created and deleted. Each snippet can be scoped to **All SQL databases**,
+  **SQL Server** or **PostgreSQL**, and typing the trigger then Tab expands it in the editor. Rows
+  persist in the same SQLite database as the workspace (the `snippets` table, same shape as
+  `src-tauri/src/storage/snippets.rs`), with built-ins seeded by stable id so edits survive upgrades.
 - **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
-  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs` and `app_state` — the
-  same model as `src-tauri/src/storage` — so spaces, connection profiles (non-secret settings),
-  tabs and their SQL survive a restart. WAL mode, foreign keys with cascade deletes, schema
-  versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once. Spaces still
-  start disconnected. Provider-declared password fields are kept in Windows Credential Manager
-  (never in SQLite), so SQL-auth connections reconnect after a restart without re-entering the
-  password. Corrupt state falls back to the seeded spaces.
+  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `snippets` and
+  `app_state` — the same model as `src-tauri/src/storage` — so spaces, connection profiles
+  (non-secret settings), tabs and their SQL survive a restart. WAL mode, foreign keys with cascade
+  deletes, schema versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once.
+  Spaces still start disconnected. Provider-declared password fields are kept in Windows Credential
+  Manager (never in SQLite), so SQL-auth connections reconnect after a restart without re-entering
+  the password. Corrupt state falls back to the seeded spaces.
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
@@ -219,7 +230,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing batch statement stops the server batch | SQL Server executes the batch natively, so the first server error ends the remaining statements. Split-and-execute per statement (as the Tauri drivers do) if every statement must report independently. |
 | Folders, pinned tabs, command palette, MCP | Ported later; tab reordering is in place, the remaining organisation features are not. |
-| No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |
+| No snippet import | The manager handles built-ins and custom snippets; DBeaver template XML import from the web app is not ported yet. |
 
 ## WinUI notes worth remembering
 
