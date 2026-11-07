@@ -158,9 +158,17 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void SpaceSwitcher_Click(object sender, RoutedEventArgs e)
+    /// <summary>The dots at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
+    private void WorkspaceIndicator_Click(object sender, RoutedEventArgs e)
     {
-        var flyout = new MenuFlyout();
+        if (sender is FrameworkElement { DataContext: SpaceViewModel space })
+        {
+            ViewModel.SelectSpace(space);
+        }
+    }
+
+    private void SpaceSwitcher_Click(object sender, RoutedEventArgs e)
+    {        var flyout = new MenuFlyout();
 
         // The connection belongs to the active workspace, so its actions live with the workspace menu.
         var toggle = new MenuFlyoutItem

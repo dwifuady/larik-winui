@@ -158,6 +158,17 @@ try {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'workspace tab is not exposed'
     }
 
+    Test-UI 'the workspace indicator shows every workspace and switches' {
+        Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'indicator does not show the active workspace'
+        Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -gt 0) 'indicator does not show every workspace'
+        Click-Element 'Workspace Local SQL Server'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Get-EditorText) -match 'sys.databases') 'the indicator did not switch workspaces'
+        Click-Element 'Workspace Staging'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the indicator did not switch back'
+    }
+
     Test-UI 'a workspace starts disconnected and connects on demand' {
         # Fresh start: the connection belongs to the workspace and is off until asked for.
         Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'workspace did not start disconnected'

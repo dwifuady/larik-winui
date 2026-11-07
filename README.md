@@ -43,7 +43,8 @@ cd C:\dev\larik-winui\Larik
 powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 ```
 
-The suite drives the real window over UI Automation: tab switching, `sel` → suggestion popup →
+The suite drives the real window over UI Automation: tab switching, the workspace dots switch
+workspaces, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs through the provider,
 `FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
@@ -105,7 +106,8 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   running a query while disconnected is refused with an explicit message. The row beneath the strip
   is a database picker for the active connection, filled from the provider once connected. Switching
   database repoints the rail, the toolbar badge, the status bar, the active tab's subtitle, the
-  snippet dialect and the completion schema.
+  snippet dialect and the completion schema. An Arc-style row of workspace dots at the bottom of the
+  rail shows every workspace with the current one ringed; clicking a dot switches workspace.
 - **Real execution**: connect opens the provider connection, `Run`/Ctrl+Enter executes there and the
   grid renders returned columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from
   the provider with timing.

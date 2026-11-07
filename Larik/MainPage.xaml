@@ -38,6 +38,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <!--  Pane header: caption-height strip so the rail runs to the window edge  -->
@@ -325,6 +326,56 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
+
+                <!--  Workspace indicator: one dot per workspace, the active one ringed. The row is also a switcher.  -->
+                <Grid
+                    Grid.Row="4"
+                    Padding="12,8"
+                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                    BorderThickness="0,1,0,0">
+                    <ScrollViewer
+                        HorizontalContentAlignment="Center"
+                        HorizontalScrollBarVisibility="Hidden"
+                        HorizontalScrollMode="Enabled"
+                        VerticalScrollBarVisibility="Disabled"
+                        VerticalScrollMode="Disabled">
+                        <ItemsControl
+                            HorizontalAlignment="Center"
+                            AutomationProperties.Name="Workspaces"
+                            ItemsSource="{x:Bind ViewModel.Spaces}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="2" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SpaceViewModel">
+                                    <Button
+                                        Width="26"
+                                        Height="24"
+                                        AutomationProperties.Name="{x:Bind IndicatorName, Mode=OneWay}"
+                                        Click="WorkspaceIndicator_Click"
+                                        Style="{StaticResource StudioIconButtonStyle}"
+                                        ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}">
+                                        <Grid Width="14" Height="14">
+                                            <Ellipse
+                                                Width="13"
+                                                Height="13"
+                                                Stroke="{x:Bind AccentBrush}"
+                                                StrokeThickness="1.5"
+                                                Visibility="{x:Bind IndicatorRingVisibility, Mode=OneWay}" />
+                                            <Ellipse
+                                                Width="{x:Bind IndicatorDotSize, Mode=OneWay}"
+                                                Height="{x:Bind IndicatorDotSize, Mode=OneWay}"
+                                                Fill="{x:Bind AccentBrush}"
+                                                Opacity="{x:Bind IndicatorDotOpacity, Mode=OneWay}" />
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </Border>
 

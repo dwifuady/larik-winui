@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Larik.Services;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 
 namespace Larik.ViewModels;
@@ -40,10 +41,14 @@ public partial class SpaceViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TooltipText))]
+    [NotifyPropertyChangedFor(nameof(IndicatorName))]
     public partial string Name { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsActiveDotVisible))]
+    [NotifyPropertyChangedFor(nameof(IndicatorDotSize))]
+    [NotifyPropertyChangedFor(nameof(IndicatorDotOpacity))]
+    [NotifyPropertyChangedFor(nameof(IndicatorRingVisibility))]
     public partial bool IsActive { get; set; }
 
     [ObservableProperty]
@@ -82,6 +87,16 @@ public partial class SpaceViewModel : ObservableObject
         ?? (Connection.IsConnected ? "no database" : "not connected");
 
     public double IsActiveDotVisible => IsActive ? 1 : 0;
+
+    // ---- workspace indicator (bottom of the rail): one dot per workspace, the active one ringed
+
+    public string IndicatorName => $"Workspace {Name}";
+
+    public double IndicatorDotSize => IsActive ? 11 : 7;
+
+    public double IndicatorDotOpacity => IsActive ? 1 : 0.45;
+
+    public Visibility IndicatorRingVisibility => IsActive ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Replaces the database list with what the server reported, keeping the selection by name.</summary>
     public void UpdateDatabases(IEnumerable<string> names)
