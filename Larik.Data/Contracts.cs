@@ -95,6 +95,25 @@ public sealed class QueryExecutionOptions
     public int EffectiveMaxRows => QueryLimits.Normalize(MaxRows);
 }
 
+/// <summary>
+/// The session's transaction state as reported by the engine. SQL Server fills
+/// <see cref="TransactionCount"/> from <c>@@TRANCOUNT</c> and <see cref="XactState"/> from
+/// <c>XACT_STATE()</c> (1 = committable, 0 = no transaction, -1 = doomed).
+/// </summary>
+public readonly record struct SessionTransactionState(int TransactionCount, int XactState)
+{
+    public static SessionTransactionState None { get; } = new(0, 0);
+
+    public bool HasTransaction => TransactionCount > 0;
+
+    /// <summary>True when the transaction can only be rolled back (SQL Server XACT_STATE() = -1).</summary>
+    public bool IsDoomed => XactState < 0;
+
+    public bool CanCommit => TransactionCount > 0 && XactState == 1;
+
+    public bool CanRollback => TransactionCount > 0;
+}
+
 /// <summary>One executed statement: its grid, its message, and how long it took.</summary>
 public sealed class QueryResult
 {
@@ -207,4 +226,25 @@ public interface IDatabaseConnection : IAsyncDisposable
         [await ExecuteAsync(sql, database, options, cancellationToken)];
 
     Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// True when the provider can report and finish transactions the user started in SQL.
+    /// Providers without transaction support keep the default and the shell hides the guard.
+    /// </summary>
+    bool SupportsTransactions => false;
+
+    /// <summary>
+    /// Reads the session's transaction depth. SQL Server uses <c>@@TRANCOUNT</c> and
+    /// <c>XACT_STATE()</c>; other providers can map their own introspection.
+    /// </summary>
+    Task<SessionTransactionState> GetTransactionStateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(SessionTransactionState.None);
+
+    /// <summary>Commits the user's open transaction. Check <see cref="SupportsTransactions"/> first.</summary>
+    Task CommitTransactionAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This provider does not support transactions.");
+
+    /// <summary>Rolls back the user's open transaction. Check <see cref="SupportsTransactions"/> first.</summary>
+    Task RollbackTransactionAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This provider does not support transactions.");
 }

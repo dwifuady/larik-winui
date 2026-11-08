@@ -848,6 +848,105 @@ try {
         Assert-True ($persistedFirst.y -gt $persistedSecond.y) 'the dragged tab order was not saved to the workspace'
     }
 
+    Test-UI 'transactions belong to the query tab that opened them' {
+        # Query 2 is active. Open a transaction and check the guard.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'begin tran; select @@trancount as tran_count;' -Literal
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+enter'
+
+        # Wait for the guard, not for the alias: the alias also exists in the editor text.
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline -and (Find-Element '1 open transaction').matchCount -eq 0) {
+            Start-Sleep -Milliseconds 250
+        }
+        Assert-True ((Find-Element '1 open transaction').matchCount -gt 0) 'the tab did not show its open transaction'
+        Assert-True ((Find-Element 'Commit transaction').matchCount -gt 0) 'no commit action'
+        Assert-True ((Find-Element 'Roll back transaction').matchCount -gt 0) 'no rollback action'
+
+        # Query 1 has its own session, so it must not see Query 2's transaction.
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 800
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 12345 * (1 + @@trancount) as session_state;' -Literal
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+enter'
+        Wait-ForText '1 rows returned' 20
+        # Clean is 12345; a leaked transaction would make it 24690. The value is computed,
+        # so it cannot be satisfied by the editor text itself.
+        Assert-True ((Find-Element '24690').matchCount -eq 0) 'the transaction leaked into another tab'
+
+        # Switching back must restore the tab's own guard.
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element '1 open transaction').matchCount -gt 0) 'the transaction indicator was lost when switching back'
+
+        # Disconnecting is refused while that transaction is open.
+        Click-Element 'ConnectionToggleButton'
+        Wait-ForText 'Roll back the open transaction' 10
+        Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'the workspace disconnected with an open transaction'
+
+        Click-Element 'Roll back transaction'
+        $deadline = (Get-Date).AddSeconds(8)
+        while ((Get-Date) -lt $deadline -and (Find-Element '1 open transaction').matchCount -gt 0) {
+            Start-Sleep -Milliseconds 200
+        }
+        Assert-True ((Find-Element '1 open transaction').matchCount -eq 0) 'rollback did not clear the transaction indicator'
+    }
+
+    Test-UI 'F5 splits GO batches instead of sending GO to the server' {
+        # A fresh tab starts with no result tabs, so the two GO batches are Result 1 and 2.
+        # Pin it to master first: the test then proves USE carries across the GO boundary.
+        Click-Element 'New query tab'
+        Start-Sleep -Milliseconds 800
+        Click-Element 'New query database'
+        Start-Sleep -Milliseconds 600
+        Click-Element 'master'
+        Start-Sleep -Milliseconds 300
+        Click-Element 'PrimaryButton'
+        Start-Sleep -Milliseconds 900
+
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'use tempdb;' -Literal
+        Send-Keys 'enter'
+        Send-Keys 'GO' -Literal
+        Send-Keys 'enter'
+        Send-Keys "select db_name() + '-suffix' as db_name;" -Literal
+        Send-Keys 'f5'
+        Wait-ForText 'Result 2' 20
+        Assert-True ((Find-Element 'Incorrect syntax').matchCount -eq 0) 'GO reached SQL Server'
+        Click-Element 'Result 2'
+        Wait-ForText 'tempdb-suffix' 20
+    }
+
+    Test-UI 'a running query can be stopped from the toolbar' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "waitfor delay '00:00:20'; select 1 as stopped;" -Literal
+        Send-Keys 'ctrl+a'
+        $start = Get-Date
+        Send-Keys 'ctrl+enter'
+
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline -and (Find-Element 'Stop query').matchCount -eq 0) {
+            Start-Sleep -Milliseconds 200
+        }
+        Assert-True ((Find-Element 'Stop query').matchCount -gt 0) 'the Stop button did not appear'
+        $run = @((Find-Element 'Run query').matches) | Where-Object { $_.automationId -eq 'RunButton' } | Select-Object -First 1
+        Assert-True ($null -ne $run -and -not $run.isEnabled) 'Run stayed enabled while the query was running'
+
+        Click-Element 'Stop query'
+        Wait-ForText 'Cancelled' 20
+        Assert-True (((Get-Date) - $start).TotalSeconds -lt 15) 'the running query was not cancelled promptly'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Stop query').matchCount -eq 0) 'the Stop button stayed visible after the query ended'
+        $run = @((Find-Element 'Run query').matches) | Where-Object { $_.automationId -eq 'RunButton' } | Select-Object -First 1
+        Assert-True ($null -ne $run -and $run.isEnabled) 'Run stayed disabled after the query ended'
+    }
+
     Test-UI 'workspace state is saved to disk' {
         Start-Sleep -Milliseconds 900
         Assert-True (Test-Path $StatePath) 'no workspace database was written'

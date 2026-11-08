@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Larik.Data;
+using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI.Text;
@@ -22,6 +23,12 @@ public partial class TabViewModel : ObservableObject
         Title = title;
         Database = database ?? string.Empty;
         Content = content;
+        StatusText = "Ready";
+
+        // Transactions, temp tables and SET options belong to the tab's own session, not to the
+        // workspace. The session opens lazily so a restored tab costs nothing until it runs.
+        Session = new QuerySession(space.Connection.CreateSession);
+        Session.StateChanged += (_, _) => RaiseSessionStateChanged();
 
         // The workspace colour flows through to the tab strip and tint.
         space.PropertyChanged += (_, args) =>
@@ -39,6 +46,52 @@ public partial class TabViewModel : ObservableObject
     public string Id { get; }
 
     public SpaceViewModel Space { get; }
+
+    /// <summary>This tab's persistent server session; nothing is shared with the other tabs.</summary>
+    public QuerySession Session { get; }
+
+    [ObservableProperty]
+    public partial string StatusText { get; set; }
+
+    public bool IsRunning => Session.IsRunning;
+
+    public bool CanRun => !Session.IsRunning;
+
+    public Visibility IsRunningVisibility => Session.IsRunning ? Visibility.Visible : Visibility.Collapsed;
+
+    public bool HasOpenTransaction => Session.HasOpenTransaction;
+
+    public bool CanCommit => Session.CanCommit;
+
+    public bool CanRollback => Session.CanRollback;
+
+    public Visibility TransactionBadgeVisibility =>
+        Session.HasOpenTransaction ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility TransactionGuardVisibility => TransactionBadgeVisibility;
+
+    public string TransactionSummary
+    {
+        get
+        {
+            if (!Session.HasOpenTransaction)
+            {
+                return string.Empty;
+            }
+
+            if (Session.IsDoomed)
+            {
+                return "Transaction is uncommittable — roll back";
+            }
+
+            return Session.Transaction.TransactionCount == 1
+                ? "1 open transaction"
+                : $"{Session.Transaction.TransactionCount} nested transactions open";
+        }
+    }
+
+    public SolidColorBrush TransactionBrush => (SolidColorBrush)Application.Current.Resources[
+        Session.IsDoomed ? "StudioDangerBrush" : "StudioWarningBrush"];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Subtitle))]
@@ -160,6 +213,24 @@ public partial class TabViewModel : ObservableObject
         {
             Results[index].Index = index;
         }
+    }
+
+    /// <summary>Cancels any running query, rolls back an open transaction and disposes the session.</summary>
+    public Task CloseSessionAsync(CancellationToken cancellationToken = default) =>
+        Session.CloseAsync(cancellationToken);
+
+    private void RaiseSessionStateChanged()
+    {
+        OnPropertyChanged(nameof(IsRunning));
+        OnPropertyChanged(nameof(CanRun));
+        OnPropertyChanged(nameof(IsRunningVisibility));
+        OnPropertyChanged(nameof(HasOpenTransaction));
+        OnPropertyChanged(nameof(CanCommit));
+        OnPropertyChanged(nameof(CanRollback));
+        OnPropertyChanged(nameof(TransactionBadgeVisibility));
+        OnPropertyChanged(nameof(TransactionGuardVisibility));
+        OnPropertyChanged(nameof(TransactionSummary));
+        OnPropertyChanged(nameof(TransactionBrush));
     }
 
     [ObservableProperty]

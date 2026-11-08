@@ -287,14 +287,17 @@ public sealed partial class MainPage : Page
         var text = SqlEditor.Text;
         var selection = SqlEditor.Selection;
 
-        string sql;
+        IReadOnlyList<string> batches;
         if (!selection.IsEmpty)
         {
-            sql = text.Substring(selection.Start, selection.Length);
+            batches = SqlStatementParser.SplitBatches(
+                text.Substring(selection.Start, selection.Length));
         }
         else if (all)
         {
-            sql = text;
+            // F5 may contain GO: SQL Server does not understand it (it is an SSMS/sqlcmd
+            // separator), so split into real server batches before sending.
+            batches = SqlStatementParser.SplitBatches(text);
         }
         else
         {
@@ -304,10 +307,10 @@ public sealed partial class MainPage : Page
                 SqlEditor.Select(statement);
             }
 
-            sql = text.Substring(statement.Start, statement.Length);
+            batches = [text.Substring(statement.Start, statement.Length)];
         }
 
-        await ViewModel.RunSqlAsync(sql, append);
+        await ViewModel.RunBatchesAsync(batches, append);
     }
 
     private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);
@@ -326,12 +329,40 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void TabClose_Click(object sender, RoutedEventArgs e)
+    private async void TabClose_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: TabViewModel tab })
+        if (sender is not FrameworkElement { DataContext: TabViewModel tab })
         {
-            ViewModel.CloseTab(tab);
+            return;
         }
+
+        if (tab.HasOpenTransaction)
+        {
+            var consequence = tab.IsRunning
+                ? "The running query will be stopped and the transaction rolled back. Nothing it changed will be saved."
+                : "The transaction will be rolled back. Nothing it changed will be saved.";
+
+            var dialog = new ContentDialog
+            {
+                Title = tab.TransactionSummary,
+                XamlRoot = XamlRoot,
+                Content = new TextBlock
+                {
+                    Text = $"Close “{tab.Title}”?\n\n{consequence}",
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                DefaultButton = ContentDialogButton.Close,
+                PrimaryButtonText = "Roll back and close",
+                CloseButtonText = "Cancel",
+            };
+
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+        }
+
+        await ViewModel.CloseTabAsync(tab);
     }
 
     private void TabItem_PointerEntered(object sender, PointerRoutedEventArgs e)

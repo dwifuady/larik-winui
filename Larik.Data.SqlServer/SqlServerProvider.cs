@@ -1,3 +1,4 @@
+using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using Larik.Data;
@@ -173,6 +174,54 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         {
             // Schema is a completion nicety; a failure must not break the session.
             return [];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public bool SupportsTransactions => true;
+
+    public async Task<SessionTransactionState> GetTransactionStateAsync(CancellationToken cancellationToken = default)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var command = _connection!.CreateCommand();
+            command.CommandText = "SELECT @@TRANCOUNT, XACT_STATE();";
+            command.CommandTimeout = 5;
+
+            await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
+            return await reader.ReadAsync(cancellationToken)
+                ? new SessionTransactionState(
+                    Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture),
+                    Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture))
+                : SessionTransactionState.None;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public Task CommitTransactionAsync(CancellationToken cancellationToken = default) =>
+        ExecuteControlAsync("COMMIT TRANSACTION;", cancellationToken);
+
+    public Task RollbackTransactionAsync(CancellationToken cancellationToken = default) =>
+        ExecuteControlAsync("ROLLBACK TRANSACTION;", cancellationToken);
+
+    private async Task ExecuteControlAsync(string sql, CancellationToken cancellationToken)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var command = _connection!.CreateCommand();
+            command.CommandText = sql;
+            command.CommandTimeout = 30;
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
         finally
         {
