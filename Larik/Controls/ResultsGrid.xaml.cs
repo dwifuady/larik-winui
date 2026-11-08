@@ -61,9 +61,17 @@ public sealed partial class ResultsGrid : UserControl
 
     // Cell preview: the full value of the focused cell, which the grid itself ellipsizes.
     private const int PreviewCharacterLimit = 100_000;
+    private const double MinPreviewWidth = 240;
+    private const double MaxPreviewWidth = 720;
+    private const double GridReserveWidth = 320;
     private bool _previewOpen;
     private int _previewRow = -1;
     private int _previewColumn = -1;
+    private CellFormat _previewFormat = CellFormat.Auto;
+    private string _previewCopyText = string.Empty;
+    private bool _resizingPreview;
+    private double _previewResizeStartX;
+    private double _previewResizeStartWidth;
 
     /// <summary>Per-result scroll/selection state, so each result tab remembers where it was.</summary>
     private sealed class ResultViewState
@@ -762,19 +770,21 @@ public sealed partial class ResultsGrid : UserControl
         _previewOpen = true;
         _previewRow = row;
         _previewColumn = column;
-        CellPreview.Visibility = Visibility.Visible;
+        PreviewHost.Visibility = Visibility.Visible;
 
         var layout = _layout.Columns[column];
         var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
         var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-
-        CellPreviewTitle.Text = layout.Name;
-        CellPreviewSubtitle.Text = string.IsNullOrWhiteSpace(layout.DataType)
+        var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
             ? $"row {_rows[row].Index + 1}"
             : $"{layout.DataType} · row {_rows[row].Index + 1}";
 
+        CellPreviewTitle.Text = layout.Name;
+
         if (value is null)
         {
+            _previewCopyText = string.Empty;
+            CellPreviewSubtitle.Text = subtitle;
             CellPreviewValue.Text = "NULL";
             CellPreviewValue.Foreground = muted;
             CellPreviewFooter.Text = string.Empty;
@@ -783,21 +793,40 @@ public sealed partial class ResultsGrid : UserControl
 
         if (value.Length == 0)
         {
+            _previewCopyText = string.Empty;
+            CellPreviewSubtitle.Text = subtitle;
             CellPreviewValue.Text = "\"\"";
             CellPreviewValue.Foreground = muted;
             CellPreviewFooter.Text = "Empty string";
             return;
         }
 
-        // A single 10 MB cell would make the TextBlock the slowest thing in the window; the copy
-        // button still hands over the whole value.
-        CellPreviewValue.Text = value.Length > PreviewCharacterLimit
-            ? value[..PreviewCharacterLimit]
-            : value;
+        var formatted = CellContentFormatter.Format(value, _previewFormat);
+        _previewCopyText = formatted.Text;
+
+        CellPreviewSubtitle.Text = formatted.Kind is CellFormat.Json or CellFormat.Xml
+            ? $"{subtitle} · {formatted.Kind.ToString().ToUpperInvariant()}"
+            : subtitle;
+
+        // A single multi-megabyte cell would make the TextBlock the slowest thing in the window;
+        // the copy button still hands over the whole formatted value.
+        var display = formatted.Text.Length > PreviewCharacterLimit
+            ? formatted.Text[..PreviewCharacterLimit]
+            : formatted.Text;
+
+        CellPreviewValue.Text = display;
         CellPreviewValue.Foreground = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
-        CellPreviewFooter.Text = value.Length > PreviewCharacterLimit
-            ? $"Showing first {PreviewCharacterLimit:N0} of {value.Length:N0} characters — Copy copies all"
-            : $"{value.Length:N0} characters";
+
+        var footer = formatted.Text.Length > PreviewCharacterLimit
+            ? $"Showing first {PreviewCharacterLimit:N0} of {formatted.Text.Length:N0} characters — Copy copies all"
+            : $"{formatted.Text.Length:N0} characters";
+
+        if (formatted.Error is { } error)
+        {
+            footer = $"{footer} · {error}";
+        }
+
+        CellPreviewFooter.Text = footer;
     }
 
     private void HideCellPreview()
@@ -810,7 +839,8 @@ public sealed partial class ResultsGrid : UserControl
         _previewOpen = false;
         _previewRow = -1;
         _previewColumn = -1;
-        CellPreview.Visibility = Visibility.Collapsed;
+        _previewCopyText = string.Empty;
+        PreviewHost.Visibility = Visibility.Collapsed;
         CellPreviewValue.Text = string.Empty;
         CellPreviewFooter.Text = string.Empty;
     }
@@ -829,17 +859,13 @@ public sealed partial class ResultsGrid : UserControl
 
     private void CopyPreview_Click(object sender, RoutedEventArgs e)
     {
-        if (!_previewOpen || _previewRow < 0 || _previewRow >= _rows.Count)
+        if (!_previewOpen)
         {
             return;
         }
 
-        var value = _previewColumn < _rows[_previewRow].Cells.Count
-            ? _rows[_previewRow].Cells[_previewColumn] ?? string.Empty
-            : string.Empty;
-
         var package = new DataPackage();
-        package.SetText(value);
+        package.SetText(_previewCopyText);
 
         try
         {
@@ -870,6 +896,76 @@ public sealed partial class ResultsGrid : UserControl
         HideCellPreview();
         Focus(FocusState.Programmatic);
     }
+
+    private void SetPreviewFormat(CellFormat format)
+    {
+        _previewFormat = format;
+        PreviewFormatLabel.Text = format switch
+        {
+            CellFormat.Json => "JSON",
+            CellFormat.Xml => "XML",
+            CellFormat.Plain => "Plain",
+            _ => "Auto",
+        };
+
+        if (_previewOpen)
+        {
+            ShowCellPreview(_previewRow, _previewColumn);
+        }
+    }
+
+    private void FormatAuto_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Auto);
+
+    private void FormatJson_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Json);
+
+    private void FormatXml_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Xml);
+
+    private void FormatPlain_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Plain);
+
+    // ---------------------------------------------------------------- preview resize
+
+    private void PreviewResizeHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _resizingPreview = true;
+        _previewResizeStartWidth = CellPreview.ActualWidth;
+        _previewResizeStartX = e.GetCurrentPoint(this).Position.X;
+        PreviewResizeHandle.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingPreview)
+        {
+            return;
+        }
+
+        var x = e.GetCurrentPoint(this).Position.X;
+        CellPreview.Width = Math.Clamp(
+            _previewResizeStartWidth - (x - _previewResizeStartX),
+            MinPreviewWidth,
+            MaxPreviewWidthForControl());
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingPreview)
+        {
+            return;
+        }
+
+        _resizingPreview = false;
+        PreviewResizeHandle.ReleasePointerCapture(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e) =>
+        _resizingPreview = false;
+
+    /// <summary>The preview never squeezes the grid below a usable width.</summary>
+    private double MaxPreviewWidthForControl() =>
+        Math.Max(MinPreviewWidth, Math.Min(MaxPreviewWidth, ActualWidth - GridReserveWidth));
 
     // ---------------------------------------------------------------- clipboard
 

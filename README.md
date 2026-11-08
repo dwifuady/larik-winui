@@ -321,8 +321,12 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
   **cell preview** beside the grid with the full, untruncated value (the grid ellipsizes cells),
-  the column type and row number, explicit NULL/empty states and a copy button; arrow keys keep it
-  in step with the focused cell, and Esc or its close button dismisses it. Ctrl+C copies the
+  the column type and row number, explicit NULL/empty states and a copy button. Arrow keys keep it
+  in step with the focused cell; Esc or its close button dismisses it. JSON and XML values are
+  auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector overrides the guess
+  (invalid input falls back to the raw text with a note), Copy takes the formatted value, and the
+  panel's left edge can be dragged between 240 and 720 px while the grid keeps a usable width.
+  Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
   context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
   writes the whole result (not the selection) through the Windows save picker, where the file type
