@@ -426,8 +426,8 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 | Area | State |
 |---|---|
 | PostgreSQL / MongoDB | Not implemented. This seam exists so they are additive. |
-| Completion model | SQL-clause-shaped and token-based; still T-SQL-biased in its alias/CTE heuristics. Keyword/function/table-context lists come from the dialect. |
-| Schema-qualified completion | `TableSchema.Schema` exists but `FindTable`/`NormalizeIdentifier` still strip qualification. |
+| Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. A PostgreSQL/MySQL provider should promote those into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
+| Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `public.users AS u`); SQL Server reads `sys.schemas`. Views/routines are not in the schema model, so only base tables complete. |
 | Statement splitting | Dollar quotes, `E'...'`, `::` and `$1` are not in `SqlLanguageOptions` yet. T-SQL `GO n` repeat counts are parsed but not expanded. |
 | Formatter | `SqlFormatter` is app-owned and keyword-based; not dialect-aware. |
 | Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. |
