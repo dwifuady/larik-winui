@@ -65,6 +65,7 @@ public sealed partial class ResultsGrid : UserControl
     private const double MaxPreviewWidth = 720;
     private const double GridReserveWidth = 320;
     private bool _previewOpen;
+    private bool _previewRequested;
     private int _previewRow = -1;
     private int _previewColumn = -1;
     private CellFormat _previewFormat = CellFormat.Auto;
@@ -162,6 +163,13 @@ public sealed partial class ResultsGrid : UserControl
 
         UpdateSelectionVisuals();
         RestoreViewState(state, result);
+
+        // The preview is an inspector, not a per-result dialog: once opened it stays open across
+        // result and query tab switches, showing whatever cell is active in the new context.
+        if (_previewRequested && _hasSelection)
+        {
+            ShowCellPreview(_focusRow, _focusColumn);
+        }
     }
 
     private void Clear()
@@ -558,7 +566,7 @@ public sealed partial class ResultsGrid : UserControl
                 e.Handled = true;
                 break;
             case VirtualKey.Escape when _previewOpen:
-                HideCellPreview();
+                CloseCellPreview();
                 e.Handled = true;
                 break;
         }
@@ -753,7 +761,7 @@ public sealed partial class ResultsGrid : UserControl
 
         if (_previewOpen && _previewRow == _focusRow && _previewColumn == _focusColumn)
         {
-            HideCellPreview();
+            CloseCellPreview();
             return;
         }
 
@@ -767,6 +775,7 @@ public sealed partial class ResultsGrid : UserControl
             return;
         }
 
+        _previewRequested = true;
         _previewOpen = true;
         _previewRow = row;
         _previewColumn = column;
@@ -845,6 +854,13 @@ public sealed partial class ResultsGrid : UserControl
         CellPreviewFooter.Text = string.Empty;
     }
 
+    /// <summary>User closed the pane: it stays closed across results until opened again.</summary>
+    private void CloseCellPreview()
+    {
+        _previewRequested = false;
+        HideCellPreview();
+    }
+
     /// <summary>Keeps the panel in step with the focused cell while the user arrows around.</summary>
     private void RefreshPreviewIfOpen()
     {
@@ -893,7 +909,7 @@ public sealed partial class ResultsGrid : UserControl
 
     private void ClosePreview_Click(object sender, RoutedEventArgs e)
     {
-        HideCellPreview();
+        CloseCellPreview();
         Focus(FocusState.Programmatic);
     }
 

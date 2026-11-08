@@ -322,7 +322,9 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
   **cell preview** beside the grid with the full, untruncated value (the grid ellipsizes cells),
   the column type and row number, explicit NULL/empty states and a copy button. Arrow keys keep it
-  in step with the focused cell; Esc or its close button dismisses it. JSON and XML values are
+  in step with the focused cell; it stays open while switching result or query tabs (showing the
+  active cell in the new context, and returning to the cell you left), and Esc or its close button
+  turns it off until you open it again. JSON and XML values are
   auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector overrides the guess
   (invalid input falls back to the raw text with a note), Copy takes the formatted value, and the
   panel's left edge can be dragged between 240 and 720 px while the grid keeps a usable width.
