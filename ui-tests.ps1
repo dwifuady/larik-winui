@@ -657,6 +657,17 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'typing a schema narrows table suggestions without repeating it' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from dbo.' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'orders').matchCount -gt 0) 'schema-qualified table is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -eq 'select * from dbo.orders AS o') "the typed schema was repeated or the alias was lost: '$((Get-EditorText))'"
+    }
+
     Test-UI 'join condition is suggested after ON' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'

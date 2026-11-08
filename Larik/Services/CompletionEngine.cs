@@ -144,16 +144,36 @@ public static partial class CompletionEngine
 
         if (start > 0 && text[start - 1] == '.')
         {
+            // The qualifier may be bare (t) or quoted the way the dialect writes it ([dbo], "dbo").
             var dot = start - 1;
             var qStart = dot;
-            while (qStart > 0 && IsWordChar(text[qStart - 1]))
+            var closer = qStart > 0 ? text[qStart - 1] : '\0';
+
+            if (closer is ']' or '"')
             {
+                var opener = closer == ']' ? '[' : '"';
                 qStart--;
+                while (qStart > 0 && text[qStart - 1] != opener)
+                {
+                    qStart--;
+                }
+
+                if (qStart > 0)
+                {
+                    qStart--;
+                }
+            }
+            else
+            {
+                while (qStart > 0 && IsWordChar(text[qStart - 1]))
+                {
+                    qStart--;
+                }
             }
 
             if (qStart < dot)
             {
-                qualifier = text[qStart..dot];
+                qualifier = NormalizeIdentifier(text[qStart..dot]);
             }
         }
 
@@ -208,8 +228,9 @@ public static partial class CompletionEngine
         var last = words[^1].ToUpperInvariant().TrimEnd('.');
         var combined = words.Length > 1 ? $"{words[^2]} {last}".ToUpperInvariant() : last;
 
-        // "FROM dbo." / "WHERE a." end in a qualifier; the clause is decided by the word before it.
-        if (words[^1].EndsWith('.') && words.Length > 1)
+        // "FROM dbo.orders", "FROM dbo." and "WHERE a.b" all carry a qualifier in the last token,
+        // so the clause is decided by the word before it.
+        if (words.Length > 1 && words[^1].Contains('.'))
         {
             var previous = words[^2].ToUpperInvariant();
             if (tableContext.Contains(previous))
