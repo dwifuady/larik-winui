@@ -256,13 +256,17 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   dialect's quoting — `[dbo].[Promotion] AS [p]` on SQL Server (plus a `no alias` variant); typing a
   schema (`FROM dbo.`) narrows the list and is not repeated in the insert. After
   `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
-  statement's columns through their aliases (`c.full_name`), offers join conditions (declared
-  foreign keys first, then `xxx_id`/shared-column heuristics — `o.customer_id = c.id`), and the
+  statement's columns through their aliases (`c.full_name`) — scoped to the tables of the statement,
+  even when the FROM clause sits below the caret, which is how `SELECT t.` lists only `t`'s table —
+  suggests join conditions after `ON` only (not after `WHERE`), offers the clause continuations
+  (`GROUP BY`, `HAVING`, `ORDER BY`, `UNION`, `OPTION`) after a predicate, and the
   built-in functions (`COUNT()`, caret inside); after `UPDATE x SET` and `INSERT INTO x (` only that
   table's columns are offered (with ` = ` for SET); `DECLARE`d `@variables`, `USE` databases and
   CTEs complete too — a CTE takes its columns from an explicit list, its SELECT aliases, or the
   source table when it selects `*`, and shadows a real table of the same name. Elsewhere it mixes
-  snippets, keywords and schema.
+  snippets, keywords and schema. Ranking follows what was typed: a keyword or table that *starts*
+  with the word beats a snippet that merely contains it (`wher` leads with `WHERE`, not the `selw`
+  snippet), and keyword matches keep the dialect's declared order instead of sorting alphabetically.
 - **Snippet manager (Settings)**: the gear in the query toolbar opens a Settings page with a
   **Snippets** section modelled on the desktop app's `SnippetsDialog`: search and category filters,
   a built-in/custom badge, and an editor for the trigger, name, category, description and expansion

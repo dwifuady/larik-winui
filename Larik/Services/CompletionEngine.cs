@@ -291,7 +291,7 @@ public static partial class CompletionEngine
             return [];
         }
 
-        var statement = text[start..caret];
+        var statement = text[start..StatementEnd(text, caret)];
         var references = new List<TableReference>();
         foreach (Match match in TableReferencePattern().Matches(statement))
         {
@@ -581,9 +581,17 @@ public static partial class CompletionEngine
                 }
 
                 AddVariables(results, request.Variables, needle);
-                AddJoinConditions(results, request, needle);
+
+                // Join conditions belong to the ON clause. After WHERE they would paper over the
+                // predicate the user is actually writing.
+                if (string.Equals(request.Keyword, "ON", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddJoinConditions(results, request, needle);
+                }
+
                 AddScopedColumns(results, request, needle);
                 AddCteColumns(results, request, needle);
+                AddContinuationClauses(results, request, needle);
                 AddFunctions(results, needle, request.Dialect?.Functions);
                 break;
 
@@ -704,6 +712,10 @@ public static partial class CompletionEngine
                 CaretOffset = expanded.Caret,
                 Selection = expanded.Selection,
                 RankSort = triggerMatch ? 0 : 1,
+
+                // A trigger prefix is what the user is typing; a name substring is a search
+                // fallback and must not outrank a keyword/table that actually starts with it.
+                MatchRank = triggerMatch ? 0 : 1,
             });
         }
     }
@@ -713,14 +725,56 @@ public static partial class CompletionEngine
         string needle,
         IReadOnlyList<string>? keywords)
     {
-        foreach (var keyword in (keywords ?? Keywords).Where(keyword => Matches(keyword, needle)))
+        var source = keywords ?? Keywords;
+        for (var index = 0; index < source.Count; index++)
         {
+            var keyword = source[index];
+            if (!Matches(keyword, needle))
+            {
+                continue;
+            }
+
             results.Add(new CompletionItem
             {
                 Label = keyword,
                 Detail = "keyword",
                 Kind = CompletionKind.Keyword,
                 InsertText = keyword,
+
+                // The dialect declares its keywords in reading order (SELECT, FROM, WHERE, ...);
+                // keeping that order beats sorting matches alphabetically.
+                RankSort = index,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Clauses that can follow a predicate. Offered while writing one (after WHERE/ON/HAVING) and
+    /// ranked below columns, so ORDER BY / GROUP BY are reachable without pushing columns down.
+    /// </summary>
+    private static readonly HashSet<string> ContinuationClauses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GROUP BY", "HAVING", "ORDER BY", "UNION", "UNION ALL", "OPTION",
+    };
+
+    private static void AddContinuationClauses(List<CompletionItem> results, CompletionRequest request, string needle)
+    {
+        var source = request.Dialect?.Keywords ?? Keywords;
+        for (var index = 0; index < source.Count; index++)
+        {
+            var keyword = source[index];
+            if (!ContinuationClauses.Contains(keyword) || !Matches(keyword, needle))
+            {
+                continue;
+            }
+
+            results.Add(new CompletionItem
+            {
+                Label = keyword,
+                Detail = "clause",
+                Kind = CompletionKind.Keyword,
+                InsertText = keyword,
+                RankSort = index,
             });
         }
     }
@@ -1132,7 +1186,8 @@ public static partial class CompletionEngine
 
     private static IReadOnlyList<CompletionItem> Finish(List<CompletionItem> results, int max) =>
         results
-            .OrderBy(item => item.Rank)
+            .OrderBy(item => item.MatchRank)
+            .ThenBy(item => item.Rank)
             .ThenBy(item => item.RankSort)
             .ThenBy(item => item.Label.Length)
             .ThenBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
@@ -1186,6 +1241,16 @@ public static partial class CompletionEngine
 
     private static int StatementStart(string text, int caret) =>
         caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
+
+    /// <summary>
+    /// The end of the statement under the caret: its next semicolon, or the document end. Aliases
+    /// and FROM/JOIN below the caret must still count — the SELECT list is written above the FROM.
+    /// </summary>
+    private static int StatementEnd(string text, int caret)
+    {
+        var index = text.IndexOf(';', Math.Clamp(caret, 0, text.Length));
+        return index < 0 ? text.Length : index;
+    }
 
     /// <summary>Columns a CTE exposes, best effort from its body when no column list is given.</summary>
     private static TableSchema BuildCte(

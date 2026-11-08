@@ -140,6 +140,13 @@ public sealed partial class CompletionItem : ObservableObject
     /// <summary>Secondary sort inside a kind (0 = exact trigger prefix).</summary>
     public int RankSort { get; init; }
 
+    /// <summary>
+    /// Sort key before <see cref="Rank"/>: 0 means the item matches what is being typed directly
+    /// (a keyword/table prefix, a snippet trigger), higher values are weaker matches such as a
+    /// snippet whose *name* merely contains the word. Keeps "wher" showing WHERE above a SNIP.
+    /// </summary>
+    public int MatchRank { get; init; }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HighlightBrush))]
     public partial bool IsSelected { get; set; }
