@@ -116,25 +116,20 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     public Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default) =>
         RequireSession().GetDatabasesAsync(cancellationToken);
 
-    public Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default) =>
-        RequireSession().GetSchemaAsync(database, cancellationToken);
+    /// <summary>
+    /// Creates an unopened session for a query tab. Each tab owns its session, so transactions,
+    /// temp tables and <c>SET</c> options stay local to that tab. The workspace keeps only the
+    /// control session used for connection state and the database list.
+    /// </summary>
+    public IDatabaseConnection CreateSession()
+    {
+        if (Provider is null)
+        {
+            throw new InvalidOperationException($"No database provider is loaded for '{ProviderId}'.");
+        }
 
-    public Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default) =>
-        RequireSession().ExecuteAsync(sql, database, cancellationToken);
-
-    public Task<QueryResult> ExecuteAsync(
-        string sql,
-        string? database,
-        QueryExecutionOptions options,
-        CancellationToken cancellationToken = default) =>
-        RequireSession().ExecuteAsync(sql, database, options, cancellationToken);
-
-    public Task<IReadOnlyList<QueryResult>> ExecuteBatchAsync(
-        string sql,
-        string? database,
-        QueryExecutionOptions options,
-        CancellationToken cancellationToken = default) =>
-        RequireSession().ExecuteBatchAsync(sql, database, options, cancellationToken);
+        return Provider.CreateConnection(Profile);
+    }
 
     /// <summary>Swaps the provider/profile (from the connection dialog). Closes any live session.</summary>
     public async Task ReconfigureAsync(string providerId, ConnectionProfile profile)

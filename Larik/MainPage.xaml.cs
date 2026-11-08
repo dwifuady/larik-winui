@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.UI.ViewManagement;
@@ -51,6 +52,9 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+
+        // Settings is pushed onto the same frame; keep the shell (and its live session) alive.
+        NavigationCacheMode = NavigationCacheMode.Required;
         Loaded += OnLoaded;
 
         // Two-finger horizontal trackpad swipes over the rail move between workspaces. The
@@ -109,6 +113,9 @@ public sealed partial class MainPage : Page
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) =>
         ViewModel.ToggleSidebarCommand.Execute(null);
+
+    private void Settings_Click(object sender, RoutedEventArgs e) =>
+        Frame.Navigate(typeof(SettingsPage));
 
     // ---------------------------------------------------------------- workspace switching
 
@@ -282,14 +289,17 @@ public sealed partial class MainPage : Page
         var text = SqlEditor.Text;
         var selection = SqlEditor.Selection;
 
-        string sql;
+        IReadOnlyList<string> batches;
         if (!selection.IsEmpty)
         {
-            sql = text.Substring(selection.Start, selection.Length);
+            batches = SqlStatementParser.SplitBatches(
+                text.Substring(selection.Start, selection.Length));
         }
         else if (all)
         {
-            sql = text;
+            // F5 may contain GO: SQL Server does not understand it (it is an SSMS/sqlcmd
+            // separator), so split into real server batches before sending.
+            batches = SqlStatementParser.SplitBatches(text);
         }
         else
         {
@@ -299,10 +309,10 @@ public sealed partial class MainPage : Page
                 SqlEditor.Select(statement);
             }
 
-            sql = text.Substring(statement.Start, statement.Length);
+            batches = [text.Substring(statement.Start, statement.Length)];
         }
 
-        await ViewModel.RunSqlAsync(sql, append);
+        await ViewModel.RunBatchesAsync(batches, append);
     }
 
     private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);
@@ -321,12 +331,45 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void TabClose_Click(object sender, RoutedEventArgs e)
+    private async void TabClose_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: TabViewModel tab })
+        if (sender is not FrameworkElement { DataContext: TabViewModel tab })
         {
-            ViewModel.CloseTab(tab);
+            return;
         }
+
+        await CloseTabWithConfirmationAsync(tab);
+    }
+
+    private async Task CloseTabWithConfirmationAsync(TabViewModel tab)
+    {
+        if (tab.HasOpenTransaction)
+        {
+            var consequence = tab.IsRunning
+                ? "The running query will be stopped and the transaction rolled back. Nothing it changed will be saved."
+                : "The transaction will be rolled back. Nothing it changed will be saved.";
+
+            var dialog = new ContentDialog
+            {
+                Title = tab.TransactionSummary,
+                XamlRoot = XamlRoot,
+                Content = new TextBlock
+                {
+                    Text = $"Close “{tab.Title}”?\n\n{consequence}",
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                DefaultButton = ContentDialogButton.Close,
+                PrimaryButtonText = "Roll back and close",
+                CloseButtonText = "Cancel",
+            };
+
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+        }
+
+        await ViewModel.CloseTabAsync(tab);
     }
 
     /// <summary>Right-click a tab for inline rename, pin and close; the menu is built per tab.</summary>
@@ -362,7 +405,7 @@ public sealed partial class MainPage : Page
             Text = "Close tab",
             Icon = new FontIcon { Glyph = "\uE711" },
         };
-        close.Click += (_, _) => ViewModel.CloseTab(tab);
+        close.Click += async (_, _) => await CloseTabWithConfirmationAsync(tab);
         flyout.Items.Add(close);
 
         if (args.TryGetPosition(target, out var position))

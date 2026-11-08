@@ -13,6 +13,7 @@ public partial class StudioViewModel : ObservableObject
 {
     private readonly CancellationTokenSource _lifetime = new();
     private readonly StudioStore _store = new();
+    private readonly SnippetLibrary _snippets = SnippetLibrary.Current;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _archiveTimer;
     private int _queryCounter;
@@ -44,6 +45,7 @@ public partial class StudioViewModel : ObservableObject
         RefreshArchiveView();
 
         Spaces.CollectionChanged += (_, _) => ScheduleSave();
+        _snippets.Changed += (_, _) => OnPropertyChanged(nameof(Snippets));
         PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab))
@@ -160,7 +162,7 @@ public partial class StudioViewModel : ObservableObject
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 
     public IReadOnlyList<SnippetDef> Snippets =>
-        SnippetCatalog.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
+        _snippets.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
 
     /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
     public IReadOnlyList<TableSchema> Tables => _schema;
@@ -187,6 +189,21 @@ public partial class StudioViewModel : ObservableObject
 
         if (ActiveSpace.Connection.IsConnected)
         {
+            if (ActiveSpace.Tabs.FirstOrDefault(tab => tab.IsRunning) is { } running)
+            {
+                StatusText = $"Stop the query in {running.Title} before disconnecting.";
+                return;
+            }
+
+            var openTransactions = ActiveSpace.Tabs.Count(tab => tab.HasOpenTransaction);
+            if (openTransactions > 0)
+            {
+                StatusText = openTransactions == 1
+                    ? "Roll back the open transaction before disconnecting."
+                    : $"Roll back the {openTransactions} open transactions before disconnecting.";
+                return;
+            }
+
             await DisconnectSpaceAsync(ActiveSpace);
         }
         else
@@ -307,6 +324,13 @@ public partial class StudioViewModel : ObservableObject
         }
 
         var wasActive = ReferenceEquals(ActiveTab, tab);
+
+        // Closing/archiving disposes the tab's own server session. CloseTabAsync already awaited
+        // this; a second call is a no-op. Auto-archive reaches here without an await, so this
+        // best-effort close keeps the connection (and any transaction) from leaking.
+        tab.Session.Cancel();
+        _ = tab.CloseSessionAsync(CancellationToken.None);
+
         var entry = new ArchivedTabViewModel(
             tab.Id,
             space.Id,
@@ -571,6 +595,24 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
+        if (ActiveSpace.Tabs.Any(tab => tab.IsRunning))
+        {
+            StatusText = "Stop the running query before changing the connection.";
+            return;
+        }
+
+        if (ActiveSpace.Tabs.Any(tab => tab.HasOpenTransaction))
+        {
+            StatusText = "Roll back open transactions before changing the connection.";
+            return;
+        }
+
+        // Existing tab sessions belong to the old profile; close them before the profile swaps.
+        foreach (var tab in ActiveSpace.Tabs)
+        {
+            await tab.CloseSessionAsync(CancellationToken.None);
+        }
+
         var previousProvider = ActiveSpace.Connection.Provider;
         var previousProviderId = ActiveSpace.Connection.ProviderId;
 
@@ -596,21 +638,54 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>
     /// Runs SQL the shell resolved from the editor (a selection, the statement under the caret,
-    /// or the whole document) on the active tab. The tab pins the database and the target result,
-    /// so switching tabs or spaces while the query runs cannot retarget it.
+    /// or the whole document) on the active tab. The tab pins the database, its own session and
+    /// the target result, so switching tabs or spaces while the query runs cannot retarget it.
     /// </summary>
-    public async Task RunSqlAsync(string sql, bool append = false)
+    public Task RunSqlAsync(string sql, bool append = false) => RunBatchesAsync([sql], append);
+
+    /// <summary>
+    /// Runs one or more GO-delimited batches in order on the tab's own session. Semicolons stay
+    /// inside a batch, so declared variables and temp tables keep their scope exactly as they do
+    /// when SQL Server receives a native batch; <c>GO</c> starts a new server batch.
+    /// </summary>
+    public async Task RunBatchesAsync(IReadOnlyList<string> batches, bool append = false)
     {
         var tab = ActiveTab;
         var space = ActiveSpace;
-        if (tab is null || space is null || IsBusy)
+        if (tab is null || space is null)
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(sql))
+        if (IsBusy)
         {
-            StatusText = "Nothing to run";
+            StatusText = "A connection change is in progress.";
+            return;
+        }
+
+        if (tab.Session.IsRunning)
+        {
+            tab.StatusText = "This tab is already running a query.";
+            if (ReferenceEquals(tab, ActiveTab))
+            {
+                StatusText = tab.StatusText;
+            }
+
+            return;
+        }
+
+        var executable = batches
+            .Where(batch => !string.IsNullOrWhiteSpace(batch))
+            .ToList();
+
+        if (executable.Count == 0)
+        {
+            tab.StatusText = "Nothing to run";
+            if (ReferenceEquals(tab, ActiveTab))
+            {
+                StatusText = tab.StatusText;
+            }
+
             return;
         }
 
@@ -622,11 +697,7 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        var upper = sql.ToUpperInvariant();
-        var mutates = upper.Contains("UPDATE ") || upper.Contains("DELETE ") || upper.Contains("TRUNCATE ");
-        var guarded = upper.Contains("WHERE");
-
-        if (mutates && !guarded)
+        if (executable.Any(HasUnguardedMutation))
         {
             ApplyResults(tab, [QueryResult.Error(
                 "Refused: this statement modifies rows without a WHERE clause.",
@@ -634,26 +705,118 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        IsBusy = true;
-        StatusText = "Running…";
+        tab.StatusText = "Running…";
+        if (ReferenceEquals(tab, ActiveTab))
+        {
+            StatusText = tab.StatusText;
+        }
+
         try
         {
-            // The provider applies the row cap while reading and returns one result per result set.
-            var results = await space.Connection.ExecuteBatchAsync(
-                sql,
-                DatabaseNameFor(space, tab),
-                QueryExecutionOptions.Default,
-                _lifetime.Token);
+            var results = new List<QueryResult>();
+            var database = DatabaseNameFor(space, tab);
+            for (var index = 0; index < executable.Count; index++)
+            {
+                // Only the first batch is re-targeted: a USE in one GO batch must carry into the
+                // next, exactly as it does in an SSMS query window. A new run resets the session
+                // to the tab's database again.
+                // The provider applies the row cap while reading and returns one result per
+                // result set. Each session is the tab's own, including its transaction.
+                var batchResults = await tab.Session.ExecuteBatchAsync(
+                    executable[index],
+                    index == 0 ? database : null,
+                    QueryExecutionOptions.Default,
+                    _lifetime.Token);
+
+                results.AddRange(batchResults);
+
+                // A GO-delimited script stops at the first failed batch, like the native batch
+                // does inside SQL Server. The tab keeps the error and whatever succeeded before it.
+                if (batchResults.Any(result => result.IsError))
+                {
+                    break;
+                }
+            }
+
             ApplyResults(tab, results, append);
+        }
+        catch (OperationCanceledException)
+        {
+            ApplyResults(tab, [QueryResult.Error("Cancelled.", TimeSpan.Zero)], append, "Cancelled");
         }
         catch (Exception ex)
         {
             ApplyResults(tab, [QueryResult.Error(ex.Message, TimeSpan.Zero)], append);
         }
-        finally
+    }
+
+    [RelayCommand]
+    private async Task CommitTransactionAsync()
+    {
+        if (ActiveTab is not { } tab)
         {
-            IsBusy = false;
+            return;
         }
+
+        try
+        {
+            await tab.Session.CommitAsync(_lifetime.Token);
+            tab.StatusText = "Transaction committed";
+        }
+        catch (Exception ex)
+        {
+            tab.StatusText = $"Commit failed: {ex.Message}";
+        }
+
+        if (ReferenceEquals(tab, ActiveTab))
+        {
+            StatusText = tab.StatusText;
+        }
+    }
+
+    [RelayCommand]
+    private async Task RollbackTransactionAsync()
+    {
+        if (ActiveTab is not { } tab)
+        {
+            return;
+        }
+
+        try
+        {
+            await tab.Session.RollbackAsync(_lifetime.Token);
+            tab.StatusText = "Transaction rolled back";
+        }
+        catch (Exception ex)
+        {
+            tab.StatusText = $"Rollback failed: {ex.Message}";
+        }
+
+        if (ReferenceEquals(tab, ActiveTab))
+        {
+            StatusText = tab.StatusText;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelRun()
+    {
+        if (ActiveTab is not { } tab || !tab.IsRunning)
+        {
+            return;
+        }
+
+        tab.Session.Cancel();
+        tab.StatusText = "Cancelling…";
+        StatusText = tab.StatusText;
+    }
+
+    /// <summary>The deliberately conservative safety net, applied per GO batch.</summary>
+    private static bool HasUnguardedMutation(string sql)
+    {
+        var upper = sql.ToUpperInvariant();
+        var mutates = upper.Contains("UPDATE ") || upper.Contains("DELETE ") || upper.Contains("TRUNCATE ");
+        return mutates && !upper.Contains("WHERE");
     }
 
     [RelayCommand]
@@ -675,6 +838,7 @@ public partial class StudioViewModel : ObservableObject
         string? status = null)
     {
         tab.ApplyResults(results, append);
+        tab.StatusText = status ?? DescribeRun(results, append);
 
         if (!ReferenceEquals(tab, ActiveTab))
         {
@@ -682,7 +846,7 @@ public partial class StudioViewModel : ObservableObject
         }
 
         SyncResultsMirror(tab);
-        StatusText = status ?? DescribeRun(results, append);
+        StatusText = tab.StatusText;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -696,11 +860,12 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveTab.SelectResult(result);
         SyncResultsMirror(ActiveTab);
-        StatusText = result.Result.IsError
+        ActiveTab.StatusText = result.Result.IsError
             ? "Error"
             : result.Result.Rows.Count > 0
                 ? $"{result.Result.Rows.Count} rows returned"
                 : result.Result.Message;
+        StatusText = ActiveTab.StatusText;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -714,13 +879,14 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveTab.CloseResult(result);
         SyncResultsMirror(ActiveTab);
-        StatusText = ActiveTab.ActiveResult is not { } active
+        ActiveTab.StatusText = ActiveTab.ActiveResult is not { } active
             ? "No results"
             : active.Result.IsError
                 ? "Error"
                 : active.Result.Rows.Count > 0
                     ? $"{active.Result.Rows.Count} rows returned"
                     : active.Result.Message;
+        StatusText = ActiveTab.StatusText;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -845,6 +1011,12 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
+        if (ActiveTab is { HasOpenTransaction: true })
+        {
+            StatusText = "Commit or roll back the transaction before switching databases.";
+            return;
+        }
+
         ApplyDatabase(database);
 
         if (ActiveTab is not null)
@@ -866,6 +1038,7 @@ public partial class StudioViewModel : ObservableObject
         {
             ActiveTab = null;
             SyncResultMirror(null);
+            StatusText = "Ready";
             return;
         }
 
@@ -885,6 +1058,10 @@ public partial class StudioViewModel : ObservableObject
         }
 
         SyncResultMirror(tab);
+
+        // A run can finish while another tab is active; this restores that tab's own status
+        // instead of leaving the shell stuck on "Running…".
+        StatusText = string.IsNullOrWhiteSpace(tab.StatusText) ? "Ready" : tab.StatusText;
         ActiveTabChanged?.Invoke(this, EventArgs.Empty);
         ScheduleSave();
     }
@@ -929,9 +1106,14 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    public void CloseTab(TabViewModel tab)
+    public async Task CloseTabAsync(TabViewModel tab)
     {
         var space = tab.Space;
+
+        // The tab owns its session: stop a running query and roll back any open transaction
+        // before the tab disappears.
+        tab.Session.Cancel();
+        await tab.CloseSessionAsync(CancellationToken.None);
 
         // Closing is now non-destructive: the tab moves to the archive page and can be restored.
         if (!ArchiveTab(tab, notify: false, allowLast: true))
@@ -1354,6 +1536,13 @@ public partial class StudioViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            // Each tab owns a session, so disconnecting the workspace must close them all.
+            foreach (var tab in space.Tabs)
+            {
+                await tab.CloseSessionAsync(CancellationToken.None);
+                tab.StatusText = "Disconnected";
+            }
+
             await space.Connection.DisconnectAsync(_lifetime.Token);
             space.UpdateDatabases([]);
             _schemaCache.Clear();
@@ -1400,7 +1589,7 @@ public partial class StudioViewModel : ObservableObject
 
         try
         {
-            var schema = await space.Connection.GetSchemaAsync(database, _lifetime.Token);
+            var schema = await tab.Session.GetSchemaAsync(database, _lifetime.Token);
             _schemaCache[key] = schema;
 
             if (ReferenceEquals(space, ActiveSpace)

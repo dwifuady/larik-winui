@@ -18,8 +18,11 @@ C:\dev\larik-winui\
 │   ├── Models/StudioModels.cs    # Snippet, CompletionItem
 │   ├── Services/
 │   │   ├── SnippetCatalog.cs     # built-in snippets ported 1:1 from src-tauri/src/storage/snippets.rs
+│   │   ├── SnippetStore.cs       # SQLite snippets table (built-ins + user-defined, enabled + dialect scope)
+│   │   ├── SnippetLibrary.cs     # live snippet set shared by completion and the settings page
 │   │   ├── CompletionEngine.cs   # clause-aware completion, ${cursor}/${1:placeholder} expansion
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
+│   │   ├── QuerySession.cs       # one persistent server session per query tab
 │   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, archive, app_state (no passwords)
 │   │   ├── SecretStore.cs        # Windows Credential Manager for provider password fields
 │   │   └── StudioColors.cs       # space palette + active-tab tint
@@ -27,6 +30,7 @@ C:\dev\larik-winui\
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
 │   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
+│   ├── SettingsPage.xaml(.cs)    # settings shell + snippet manager (create/edit/enable/reset/delete)
 │   └── MainPage.xaml(.cs)        # shell, results grid, connection dialog
 └── ui-tests.ps1                  # UI Automation checks (incl. a real SQL Server round trip)
 ```
@@ -58,7 +62,9 @@ connection + tabs + editor, a
 workspace starts disconnected until the status-bar action connects it, a new query asks for its
 database, the picker and result grid follow the active tab (and each tab restores its own result),
 a batch opens one result tab per statement, Ctrl+Enter replaces the active result tab, Ctrl+\
-appends a new one, each result remembers its scroll row across result/query tab switches, a
+appends a new one, a transaction opened in one tab does not leak into another tab and shows the
+`TXN` / Commit / Roll back guard, F5 splits `GO` into separate server batches, Stop cancels a
+running `WAITFOR`, each result remembers its scroll row across result/query tab switches, a
 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
 results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
 Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the provider's
@@ -115,6 +121,12 @@ are needed, so a new provider only has to stop its own reader/cursor early.
 Server reads native multiple result sets with `NextResultAsync`; the Demo provider splits on `;`.
 Providers that only implement the single-result method still work through a default implementation.
 
+A provider connection is a **session**, not a shared server handle: the shell creates one per query
+tab. Providers that support transactions implement `SupportsTransactions`,
+`GetTransactionStateAsync`, `CommitTransactionAsync` and `RollbackTransactionAsync`; the default
+interface implementations return "no transaction" and keep older providers working (the shell then
+hides the transaction guard). The SQL Server provider reads `@@TRANCOUNT` and `XACT_STATE()`.
+
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
 `sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
@@ -144,8 +156,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   are never auto-archived. Archive state and the setting live in the same SQLite database as the
   session.
 - **Workspaces, connections and databases**: one space owns exactly one connection; that
-  connection exposes several databases. The rail's top strip carries the workspace switcher, whose
-  chip shows the workspace name and its connection state (dot **and** `Connected`/`Disconnected`) —
+  connection exposes several databases. Each query tab opens its own persistent **session** from
+  that connection, so a transaction, temp table or `SET` option in one tab never leaks into another
+  tab (the same model as SSMS, DBeaver and DataGrip). The rail's top strip carries the workspace
+  switcher, whose chip shows the workspace name and its connection state (dot **and**
+  `Connected`/`Disconnected`) —
   **spaces start disconnected**. Connect from the chip's status bar action or the workspace menu;
   running a query while disconnected is refused with an explicit message. The row beneath the strip
   is a database picker for the active tab, filled from the provider once connected. Switching
@@ -165,9 +180,20 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from the provider with
   timing. **Ctrl+Enter runs only the statement under the caret** and leaves it selected, so the
   run is visible and a second F5 repeats exactly that statement; **F5 runs the whole document**
-  (or just the selection when text is selected). The toolbar Run button follows Ctrl+Enter, and
-  Ctrl+\ runs the current statement into a new result tab. The statement splitter understands
-  strings, quoted identifiers, line/block comments and `GO` batch separators.
+  (or just the selection when text is selected) and splits `GO` into real server batches, because
+  the driver (unlike SSMS/sqlcmd) does not understand `GO`. The toolbar Run button follows
+  Ctrl+Enter, and Ctrl+\ runs the current statement into a new result tab. Run state is per tab:
+  the toolbar disables Run and shows **Stop**, which cancels the command without closing the
+  session. The statement splitter understands strings, quoted identifiers, line/block comments and
+  `GO` separators (including indented `GO`).
+- **Transactions, visibly**: because each tab owns a session, `BEGIN TRAN` / `COMMIT` /
+  `ROLLBACK` behave per tab. After every run the app reads `@@TRANCOUNT` and `XACT_STATE()` and shows
+  a `TXN` badge on the tab plus a status-bar guard ("1 open transaction") with **Commit** and
+  **Roll back**. Switching tabs switches the guard; closing a tab rolls its transaction back;
+  disconnecting, changing the connection or switching database is refused while a transaction is
+  open. Like SSMS, the app stays in SQL Server autocommit and does not wrap a run in a transaction
+  or expose a DBeaver-style autocommit switch. Isolation remains the server default;
+  `SET TRANSACTION ISOLATION LEVEL ...` works, and now only affects the tab that issued it.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
   **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
@@ -182,16 +208,24 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   CTEs complete too — a CTE takes its columns from an explicit list, its SELECT aliases, or the
   source table when it selects `*`, and shadows a real table of the same name. Elsewhere it mixes
   snippets, keywords and schema.
+- **Snippet manager (Settings)**: the gear in the query toolbar opens a Settings page with a
+  **Snippets** section modelled on the desktop app's `SnippetsDialog`: search and category filters,
+  a built-in/custom badge, and an editor for the trigger, name, category, description and expansion
+  content. Built-ins can be edited, disabled and reset to their catalog default but not deleted;
+  custom snippets can be created and deleted. Each snippet can be scoped to **All SQL databases**,
+  **SQL Server** or **PostgreSQL**, and typing the trigger then Tab expands it in the editor. Rows
+  persist in the same SQLite database as the workspace (the `snippets` table, same shape as
+  `src-tauri/src/storage/snippets.rs`), with built-ins seeded by stable id so edits survive upgrades.
 - **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
-  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs` and
-  `app_state` — the same model as `src-tauri/src/storage`, extended with pin state, the inactivity
-  clock and archived tabs — so spaces, connection profiles (non-secret settings), tabs, their SQL,
-  pins and archive history survive a restart. WAL mode, foreign keys with cascade deletes, schema
-  versioned via `PRAGMA user_version` (v2 adds the tab and archive columns/tables in place); a
-  pre-SQLite `studio.json` is imported once. Spaces still start disconnected. Provider-declared
-  password fields are kept in Windows Credential Manager (never in SQLite), so SQL-auth connections
-  reconnect after a restart without re-entering the password. Corrupt state falls back to the seeded
-  spaces.
+  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
+  `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
+  the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
+  tabs, their SQL, pins, archive history and snippet edits survive a restart. WAL mode, foreign keys
+  with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
+  columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
+  disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
+  SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
+  Corrupt state falls back to the seeded spaces.
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
@@ -230,13 +264,15 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Gap | Why / next step |
 |---|---|
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
-| No query cancellation UI | `Run` disables while a statement is in flight; the provider already accepts a `CancellationToken`. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |
 | Current-statement splitting is lexical | Semicolons and `GO` delimit statements outside strings, identifiers and comments, so a `CREATE PROCEDURE` body with inner semicolons still splits. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
-| A failing batch statement stops the server batch | SQL Server executes the batch natively, so the first server error ends the remaining statements. Split-and-execute per statement (as the Tauri drivers do) if every statement must report independently. |
-| Folders, command palette, MCP | Ported later; tab reordering, renaming, pinning and the archive are in place, the remaining organisation features are not. |
-| No snippet editor UI | Catalog is code-defined; the web app's `SnippetsDialog` has no counterpart yet. |
+| A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |
+| `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |
+| No autocommit / manual-commit switch, no isolation dropdown | Deliberately mirrors SSMS for SQL Server: each statement autocommits, `BEGIN TRAN`/`COMMIT` are explicit, and isolation is the server default (`SET TRANSACTION ISOLATION LEVEL` remains available per tab). A DBeaver/DataGrip-style manual-commit mode is a product decision, not a SQL-standard requirement. |
+| App exit has no transaction prompt | Closing one tab or disconnecting is guarded and rolls back; closing the whole app relies on SQL Server rolling back when the process's sessions end. |
+| Folders, command palette, MCP | Ported later; tab reordering, inline rename, pinning and the archive are in place, the remaining organisation features are not. |
+| No snippet import | The manager handles built-ins and custom snippets; DBeaver template XML import from the web app is not ported yet. |
 
 ## WinUI notes worth remembering
 

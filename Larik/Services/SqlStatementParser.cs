@@ -123,7 +123,7 @@ public static class SqlStatementParser
 
             // T-SQL batch separator: a line that contains only GO (with an optional count).
             if ((current == 'G' || current == 'g')
-                && IsLineStart(text, index)
+                && IsBatchSeparatorStart(text, index)
                 && MatchesBatchSeparator(text, index, out var separatorEnd))
             {
                 Emit(index);
@@ -137,6 +137,77 @@ public static class SqlStatementParser
 
         Emit(text.Length);
         return statements;
+    }
+
+    /// <summary>
+    /// Splits editor text only on T-SQL <c>GO</c> batch separators, keeping semicolons inside a
+    /// batch. SQL Server's driver does not understand <c>GO</c>, so F5 must send each returned
+    /// batch separately while preserving the session (temp tables), which a tab-owned connection
+    /// does.
+    /// </summary>
+    public static IReadOnlyList<string> SplitBatches(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return [];
+        }
+
+        var batches = new List<string>();
+        var batchStart = 0;
+        var index = 0;
+
+        while (index < text.Length)
+        {
+            var current = text[index];
+
+            if (current == '\'' || current == '"')
+            {
+                index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            if (current == '[')
+            {
+                index = SkipBracket(text, index);
+                continue;
+            }
+
+            if (current == '-' && index + 1 < text.Length && text[index + 1] == '-')
+            {
+                index = SkipLineComment(text, index + 2);
+                continue;
+            }
+
+            if (current == '/' && index + 1 < text.Length && text[index + 1] == '*')
+            {
+                index = SkipBlockComment(text, index + 2);
+                continue;
+            }
+
+            if ((current == 'G' || current == 'g')
+                && IsBatchSeparatorStart(text, index)
+                && MatchesBatchSeparator(text, index, out var separatorEnd))
+            {
+                AddBatch(text, batchStart, index, batches);
+                batchStart = separatorEnd;
+                index = separatorEnd;
+                continue;
+            }
+
+            index++;
+        }
+
+        AddBatch(text, batchStart, text.Length, batches);
+        return batches;
+    }
+
+    private static void AddBatch(string text, int start, int end, List<string> batches)
+    {
+        var (trimmedStart, length) = TrimSpan(text, start, end);
+        if (length > 0 && HasCode(text, trimmedStart, length))
+        {
+            batches.Add(text.Substring(trimmedStart, length));
+        }
     }
 
     private static (int Start, int Length) TrimSpan(string text, int start, int end)
@@ -261,15 +332,24 @@ public static class SqlStatementParser
         return text.Length;
     }
 
-    private static bool IsLineStart(string text, int index)
+    /// <summary>
+    /// True when only whitespace precedes <paramref name="index"/> on its line, so an indented
+    /// <c>GO</c> still separates batches (SSMS accepts indentation before the separator).
+    /// </summary>
+    private static bool IsBatchSeparatorStart(string text, int index)
     {
-        if (index == 0)
+        var cursor = index - 1;
+        while (cursor >= 0 && text[cursor] is not ('\n' or '\r'))
         {
-            return true;
+            if (!char.IsWhiteSpace(text[cursor]))
+            {
+                return false;
+            }
+
+            cursor--;
         }
 
-        var previous = text[index - 1];
-        return previous is '\n' or '\r';
+        return true;
     }
 
     private static bool MatchesBatchSeparator(string text, int index, out int end)
