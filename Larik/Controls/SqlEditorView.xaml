@@ -53,6 +53,145 @@
             </RichEditBox>
         </Border>
 
+        <!--
+            Find/replace floats over the top of the text instead of pushing it down, so opening it
+            never reflows the document the caret is in. Ctrl+F shows the find row; Ctrl+H opens it
+            with replace revealed.
+        -->
+        <Border
+            x:Name="FindBar"
+            Width="420"
+            Margin="0,10,20,0"
+            Padding="10,8"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="Collapsed">
+            <StackPanel Spacing="6">
+                <Grid ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBox
+                        x:Name="FindBox"
+                        Height="28"
+                        Padding="8,2"
+                        VerticalContentAlignment="Center"
+                        AutomationProperties.Name="Find text"
+                        FontSize="12"
+                        KeyDown="FindBox_KeyDown"
+                        PlaceholderText="Find"
+                        TextChanged="FindBox_TextChanged" />
+
+                    <TextBlock
+                        x:Name="FindCountText"
+                        Grid.Column="1"
+                        MinWidth="58"
+                        VerticalAlignment="Center"
+                        AutomationProperties.LiveSetting="Polite"
+                        FontSize="11"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        TextAlignment="Right" />
+
+                    <Button
+                        Grid.Column="2"
+                        Width="24"
+                        Height="24"
+                        AutomationProperties.Name="Toggle replace"
+                        Click="ToggleReplace_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Replace (Ctrl+H)">
+                        <FontIcon x:Name="ReplaceChevron" FontSize="9" Glyph="&#xE76C;" />
+                    </Button>
+
+                    <Button
+                        Grid.Column="3"
+                        Width="24"
+                        Height="24"
+                        AutomationProperties.Name="Previous match"
+                        Click="FindPrevious_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Previous match (Shift+Enter)">
+                        <FontIcon FontSize="9" Glyph="&#xE70E;" />
+                    </Button>
+
+                    <Button
+                        Grid.Column="4"
+                        Width="24"
+                        Height="24"
+                        AutomationProperties.Name="Next match"
+                        Click="FindNext_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Next match (Enter)">
+                        <FontIcon FontSize="9" Glyph="&#xE70D;" />
+                    </Button>
+
+                    <Button
+                        Grid.Column="5"
+                        Width="24"
+                        Height="24"
+                        AutomationProperties.Name="Close find"
+                        Click="CloseFind_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Close (Esc)">
+                        <FontIcon FontSize="9" Glyph="&#xE711;" />
+                    </Button>
+                </Grid>
+
+                <Grid
+                    x:Name="ReplaceRow"
+                    ColumnSpacing="4"
+                    Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBox
+                        x:Name="ReplaceBox"
+                        Height="28"
+                        Padding="8,2"
+                        VerticalContentAlignment="Center"
+                        AutomationProperties.Name="Replace text"
+                        FontSize="12"
+                        KeyDown="ReplaceBox_KeyDown"
+                        PlaceholderText="Replace with" />
+
+                    <Button
+                        Grid.Column="1"
+                        Height="24"
+                        Padding="8,0"
+                        AutomationProperties.Name="Replace current match"
+                        Click="Replace_Click"
+                        CornerRadius="6"
+                        FontSize="11"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        Content="Replace" />
+
+                    <Button
+                        Grid.Column="2"
+                        Height="24"
+                        Padding="8,0"
+                        AutomationProperties.Name="Replace all matches"
+                        Click="ReplaceAll_Click"
+                        CornerRadius="6"
+                        FontSize="11"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        Content="Replace all" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
         <!--  Completion popup (caret-anchored)  -->
         <Popup
             x:Name="CompletionPopup"

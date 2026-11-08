@@ -5,6 +5,7 @@ using Larik.Services;
 using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -130,6 +131,13 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
     private void SetText(string text)
     {
+        // A different document (tab switch) invalidates both the query's offsets and the bar
+        // itself; the bar belongs to the editor, not to the tab you left.
+        if (FindBar.Visibility == Visibility.Visible)
+        {
+            CloseFind(focusEditor: false);
+        }
+
         _suppressEvents = true;
         try
         {
@@ -357,6 +365,11 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         ApplyHighlighting();
         RaiseTextChanged();
         RaiseCaretChanged();
+
+        if (FindBar.Visibility == Visibility.Visible)
+        {
+            RefreshAfterEdit();
+        }
     }
 
     private int CurrentCaretOffset()
@@ -392,6 +405,11 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         RaiseCaretChanged();
         ScheduleHighlighting();
         EndEdit();
+
+        if (FindBar.Visibility == Visibility.Visible)
+        {
+            RefreshAfterEdit();
+        }
 
         // Inserting a completion can raise a delayed TextChanged after the popup closes. Do not
         // immediately reopen it with the next clause's suggestions; wait for the next real key.
@@ -562,6 +580,368 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
     }
 
+    // ---------------------------------------------------------------- find / replace
+
+    // Match offsets are cached per query; any edit invalidates the list instead of rescanning
+    // while the user types in the editor.
+    private readonly List<int> _matches = [];
+    private int _matchIndex = -1;
+    private int _findOrigin;
+    private bool _matchesDirty = true;
+    private bool _suppressFindUpdates;
+    private string? _findFeedback;
+
+    private string FindQuery => FindBox.Text ?? string.Empty;
+
+    private void OpenFind(bool showReplace)
+    {
+        HideCompletions();
+
+        if (FindBar.Visibility != Visibility.Visible)
+        {
+            // Seed from the selection like every other editor: select a word, Ctrl+F, find it.
+            var selection = Selection;
+            if (!selection.IsEmpty && selection.Length <= 128)
+            {
+                var seed = GetText().Substring(selection.Start, selection.Length)
+                    .Replace('\r', ' ')
+                    .Replace('\n', ' ')
+                    .Trim();
+
+                _suppressFindUpdates = true;
+                FindBox.Text = seed;
+                _suppressFindUpdates = false;
+            }
+
+            _findOrigin = selection.IsEmpty ? CaretOffset : selection.Start;
+        }
+
+        FindBar.Visibility = Visibility.Visible;
+        SetReplaceVisible(showReplace || ReplaceRow.Visibility == Visibility.Visible);
+
+        _findFeedback = null;
+        _matchesDirty = true;
+        SelectFirstMatch();
+        FocusFindBox();
+    }
+
+    private void FocusFindBox()
+    {
+        FindBox.Focus(FocusState.Programmatic);
+        FindBox.SelectAll();
+    }
+
+    private void SetReplaceVisible(bool visible)
+    {
+        ReplaceRow.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        ReplaceChevron.Glyph = visible ? "\uE70D" : "\uE76C";
+    }
+
+    private void CloseFind(bool focusEditor = true)
+    {
+        FindBar.Visibility = Visibility.Collapsed;
+        _matches.Clear();
+        _matchIndex = -1;
+        _matchesDirty = true;
+        _findFeedback = null;
+
+        if (focusEditor)
+        {
+            FocusEditor();
+        }
+    }
+
+    private void EnsureMatches()
+    {
+        if (!_matchesDirty)
+        {
+            return;
+        }
+
+        _matches.Clear();
+        var query = FindQuery;
+        var text = GetText();
+
+        if (query.Length > 0 && text.Length >= query.Length)
+        {
+            var search = 0;
+            var last = text.Length - query.Length;
+            while (search <= last)
+            {
+                var hit = text.IndexOf(query, search, StringComparison.OrdinalIgnoreCase);
+                if (hit < 0)
+                {
+                    break;
+                }
+
+                _matches.Add(hit);
+                search = hit + query.Length;
+            }
+        }
+
+        _matchesDirty = false;
+    }
+
+    private void UpdateFindCount()
+    {
+        var text = _findFeedback
+            ?? (FindQuery.Length == 0
+                ? string.Empty
+                : _matches.Count == 0
+                    ? "No results"
+                    : _matchIndex is >= 0 && _matchIndex < _matches.Count
+                        ? $"{_matchIndex + 1} of {_matches.Count}"
+                        : $"{_matches.Count} matches");
+
+        FindCountText.Text = text;
+        // The count is the accessible feedback; keep the announced name equal to what is shown.
+        AutomationProperties.SetName(FindCountText, text.Length > 0 ? text : "Find matches");
+    }
+
+    private void SelectFirstMatch()
+    {
+        EnsureMatches();
+        if (_matches.Count == 0)
+        {
+            _matchIndex = -1;
+            UpdateFindCount();
+            return;
+        }
+
+        var index = _matches.FindIndex(start => start >= _findOrigin);
+        ShowMatch(index >= 0 ? index : 0);
+    }
+
+    private void ShowMatch(int index)
+    {
+        _matchIndex = Math.Clamp(index, 0, _matches.Count - 1);
+        _findOrigin = _matches[_matchIndex];
+
+        // The real selection is the highlight: it follows the theme/high-contrast selection brush
+        // and cannot fight the syntax colours, which live in the same character format.
+        Select(new EditorSpan(_findOrigin, FindQuery.Length));
+        try
+        {
+            Editor.Document.Selection.ScrollIntoView(PointOptions.None);
+        }
+        catch (Exception)
+        {
+            // Scrolling is cosmetic; RichEdit can reject it while the layout is settling.
+        }
+
+        UpdateFindCount();
+    }
+
+    private void FindNext()
+    {
+        _findFeedback = null;
+        EnsureMatches();
+
+        if (_matches.Count == 0)
+        {
+            _matchIndex = -1;
+            UpdateFindCount();
+            return;
+        }
+
+        ShowMatch(_matchIndex < 0 ? 0 : (_matchIndex + 1) % _matches.Count);
+    }
+
+    private void FindPrevious()
+    {
+        _findFeedback = null;
+        EnsureMatches();
+
+        if (_matches.Count == 0)
+        {
+            _matchIndex = -1;
+            UpdateFindCount();
+            return;
+        }
+
+        ShowMatch(_matchIndex < 0 ? _matches.Count - 1 : (_matchIndex - 1 + _matches.Count) % _matches.Count);
+    }
+
+    /// <summary>Recomputes what changed without moving the caret the user is typing with.</summary>
+    private void RefreshAfterEdit()
+    {
+        _matchesDirty = true;
+        _matchIndex = -1;
+        EnsureMatches();
+        UpdateFindCount();
+    }
+
+    /// <summary>
+    /// Applies a find/replace edit as one undoable step and publishes it like a user edit. The
+    /// control's own TextChanged stays suppressed so the completion popup does not open while
+    /// focus is in the find bar.
+    /// </summary>
+    private void ApplyFindEdit(int caretAnchor, Action apply)
+    {
+        _editAnchor = Math.Max(0, caretAnchor);
+        BeginEdit();
+        _suppressEvents = true;
+        try
+        {
+            apply();
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+
+        EndEdit();
+        HideCompletions();
+        RaiseTextChanged();
+        RaiseCaretChanged();
+        ScheduleHighlighting();
+    }
+
+    /// <summary>RichEdit paragraph marks are CR, so a pasted multi-line replacement must use CR too.</summary>
+    private static string NormalizeInsertion(string text) =>
+        text.Replace("\r\n", "\n").Replace('\n', '\r');
+
+    private void ReplaceCurrent()
+    {
+        _findFeedback = null;
+        EnsureMatches();
+
+        if (_matches.Count == 0)
+        {
+            UpdateFindCount();
+            return;
+        }
+
+        if (_matchIndex < 0 || _matchIndex >= _matches.Count)
+        {
+            // Nothing is highlighted yet: show the next match instead of guessing which one the
+            // user means, then a second press replaces it.
+            FindNext();
+            return;
+        }
+
+        var start = _matches[_matchIndex];
+        var length = FindQuery.Length;
+        var replacement = NormalizeInsertion(ReplaceBox.Text ?? string.Empty);
+
+        ApplyFindEdit(start, () => Editor.Document.GetRange(start, start + length).Text = replacement);
+
+        _findOrigin = start + replacement.Length;
+        _matchesDirty = true;
+        SelectFirstMatch();
+    }
+
+    private void ReplaceAll()
+    {
+        _findFeedback = null;
+        EnsureMatches();
+
+        var query = FindQuery;
+        if (query.Length == 0 || _matches.Count == 0)
+        {
+            UpdateFindCount();
+            return;
+        }
+
+        var starts = _matches.ToArray();
+        var replacement = NormalizeInsertion(ReplaceBox.Text ?? string.Empty);
+
+        // Back to front: replacing later text cannot move the offsets of earlier matches.
+        ApplyFindEdit(starts[0], () =>
+        {
+            for (var i = starts.Length - 1; i >= 0; i--)
+            {
+                Editor.Document.GetRange(starts[i], starts[i] + query.Length).Text = replacement;
+            }
+        });
+
+        _findFeedback = $"Replaced {starts.Length}";
+        _matches.Clear();
+        _matchesDirty = true;
+        _matchIndex = -1;
+        _findOrigin = 0;
+        UpdateFindCount();
+    }
+
+    // ---------------------------------------------------------------- find bar events
+
+    private void FindBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressFindUpdates)
+        {
+            return;
+        }
+
+        _findFeedback = null;
+        _matchesDirty = true;
+        SelectFirstMatch();
+    }
+
+    private void FindBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case VirtualKey.Enter when IsKeyDown(VirtualKey.Shift):
+                FindPrevious();
+                e.Handled = true;
+                break;
+            case VirtualKey.Enter:
+            case VirtualKey.F3:
+                FindNext();
+                e.Handled = true;
+                break;
+            case VirtualKey.Escape:
+                CloseFind();
+                e.Handled = true;
+                break;
+            case VirtualKey.F when IsKeyDown(VirtualKey.Control):
+                // Pressing Ctrl+F again should reselect the query, not close or duplicate it.
+                FindBox.SelectAll();
+                e.Handled = true;
+                break;
+            case VirtualKey.H when IsKeyDown(VirtualKey.Control):
+                SetReplaceVisible(true);
+                ReplaceBox.Focus(FocusState.Programmatic);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void ReplaceBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case VirtualKey.Enter:
+                ReplaceCurrent();
+                e.Handled = true;
+                break;
+            case VirtualKey.Escape:
+                CloseFind();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void ToggleReplace_Click(object sender, RoutedEventArgs e)
+    {
+        var show = ReplaceRow.Visibility != Visibility.Visible;
+        SetReplaceVisible(show);
+        if (show)
+        {
+            ReplaceBox.Focus(FocusState.Programmatic);
+        }
+    }
+
+    private void FindNext_Click(object sender, RoutedEventArgs e) => FindNext();
+
+    private void FindPrevious_Click(object sender, RoutedEventArgs e) => FindPrevious();
+
+    private void CloseFind_Click(object sender, RoutedEventArgs e) => CloseFind();
+
+    private void Replace_Click(object sender, RoutedEventArgs e) => ReplaceCurrent();
+
+    private void ReplaceAll_Click(object sender, RoutedEventArgs e) => ReplaceAll();
+
     // ---------------------------------------------------------------- keyboard
 
     private void Editor_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
@@ -601,6 +981,14 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     return;
                 case VirtualKey.T:
                     CommandRequested?.Invoke(this, EditorCommandKind.NewTab);
+                    e.Handled = true;
+                    return;
+                case VirtualKey.F:
+                    OpenFind(showReplace: false);
+                    e.Handled = true;
+                    return;
+                case VirtualKey.H:
+                    OpenFind(showReplace: true);
                     e.Handled = true;
                     return;
 
@@ -654,6 +1042,37 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     return;
             }
 
+            return;
+        }
+
+        // F3 repeats the last find; with the bar closed it opens it on the first match instead of
+        // skipping one. Shift+F3 walks backwards.
+        if (e.Key == VirtualKey.F3 && FindBar.Visibility == Visibility.Visible)
+        {
+            if (IsKeyDown(VirtualKey.Shift))
+            {
+                FindPrevious();
+            }
+            else
+            {
+                FindNext();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == VirtualKey.F3)
+        {
+            OpenFind(showReplace: false);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == VirtualKey.Escape && FindBar.Visibility == Visibility.Visible)
+        {
+            CloseFind();
+            e.Handled = true;
             return;
         }
 

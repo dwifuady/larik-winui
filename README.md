@@ -69,7 +69,8 @@ workspaces (click and a horizontal trackpad swipe), new-workspace creation is ga
 dialog, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs only the statement
 under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
-syntax highlighting is applied without breaking Ctrl+Z, query and result tabs drag-reorder,
+syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
+replace all rewrites every match as one undo step, query and result tabs drag-reorder,
 `FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
@@ -284,6 +285,13 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
   running a query while another tab is active writes to the tab that started it.
+- **Find and replace**: Ctrl+F opens a compact bar over the top of the editor (Ctrl+H opens it with
+  the replace row revealed); the bar counts matches (`3 of 12`, `No results`) and Enter / Shift+Enter
+  or F3 / Shift+F3 walk them with wrap-around. A selection seeds the query, so select a word and
+  Ctrl+F to find the next occurrence. Matches are shown as real selections, which keeps them on the
+  theme's selection brush (including HighContrast) instead of fighting the syntax colours. Replace
+  and **Replace all** are one undo step each, Esc (or the close button) returns to the text, and
+  switching tabs closes the bar because it belongs to the editor, not the document.
 - **Syntax highlighting**: the active provider's `IEditorLanguage` classifies keywords, functions,
   strings, numbers, variables and comments live with theme-aware tokens (`StudioSyntax*Brush`,
   HighContrast falls back to the system text colour). The editor tokenizes on a 140 ms debounce so

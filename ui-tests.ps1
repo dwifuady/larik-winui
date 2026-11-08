@@ -557,6 +557,52 @@ try {
         Assert-True ((Get-EditorText) -eq 'select 42') 'Ctrl+Y did not redo the typing'
     }
 
+    Test-UI 'Ctrl+F counts and cycles matches' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select customer_id from customers; select customer_id from orders;' -Literal
+        Start-Sleep -Milliseconds 400
+
+        Send-Keys 'ctrl+f'
+        Wait-ForText 'Find text'
+        Send-Keys 'customer_id' -Literal
+        Wait-ForText '1 of 2'
+
+        Send-Keys 'enter'
+        Wait-ForText '2 of 2'
+        Send-Keys 'shift+enter'
+        Wait-ForText '1 of 2'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Find text').matchCount -eq 0) 'Escape left the find bar open'
+        Assert-True ((Get-EditorText) -eq 'select customer_id from customers; select customer_id from orders;') 'finding changed the document'
+    }
+
+    Test-UI 'replace all rewrites every match in one undoable step' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select customer_id from customers; select customer_id from orders;' -Literal
+        Start-Sleep -Milliseconds 400
+
+        Send-Keys 'ctrl+h'
+        Wait-ForText 'Replace text'
+        Send-Keys 'customer_id' -Literal
+        Wait-ForText '1 of 2'
+
+        Focus-Element 'Replace text'
+        Send-Keys 'id' -Literal
+        Click-Element 'Replace all matches'
+        Wait-ForText 'Replaced 2'
+        Assert-True ((Get-EditorText) -eq 'select id from customers; select id from orders;') "replace all produced '$((Get-EditorText))'"
+
+        # One find/replace edit must be one undo step, like typing.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+z'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -eq 'select customer_id from customers; select customer_id from orders;') 'Ctrl+Z did not undo the whole replace-all'
+    }
+
     Test-UI 'FROM suggests every table in the active database' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
