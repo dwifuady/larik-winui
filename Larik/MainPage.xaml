@@ -572,7 +572,7 @@
             x:Name="SchemaPinnedHost"
             Grid.Column="1"
             Width="300"
-            Background="Transparent"
+            Background="{ThemeResource PanelBackgroundBrush}"
             BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
             BorderThickness="0,0,1,0"
             Visibility="Collapsed">
@@ -1273,17 +1273,17 @@
         <Grid
             x:Name="SchemaPeekHost"
             Grid.ColumnSpan="3"
-            Background="#66000000"
+            Background="#73000000"
             Visibility="Collapsed">
             <Border Tapped="SchemaPeekBackdrop_Tapped" />
             <Border
                 Width="620"
                 Height="520"
-                Margin="264,76,0,0"
+                Margin="264,108,0,0"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Background="{ThemeResource PanelBackgroundBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
                 BorderThickness="1"
                 CornerRadius="12">
                 <controls:SchemaBrowser x:Name="SchemaPeek" />
