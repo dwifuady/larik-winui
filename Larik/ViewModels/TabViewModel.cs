@@ -52,6 +52,48 @@ public partial class TabViewModel : ObservableObject
     [ObservableProperty]
     public partial string Content { get; set; }
 
+    /// <summary>
+    /// Pinned tabs are never removed by auto-archive. The flag survives a restart and a restore
+    /// from the archive page.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PinVisibility))]
+    [NotifyPropertyChangedFor(nameof(PinLabel))]
+    [NotifyPropertyChangedFor(nameof(RowHeight))]
+    public partial bool IsPinned { get; set; }
+
+    /// <summary>True while the tab title is edited in place in the rail.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TitleVisibility))]
+    [NotifyPropertyChangedFor(nameof(RenameEditorVisibility))]
+    public partial bool IsRenaming { get; set; }
+
+    /// <summary>Working copy shown by the inline rename editor; only committed on Enter/lost focus.</summary>
+    [ObservableProperty]
+    public partial string DraftTitle { get; set; } = string.Empty;
+
+    /// <summary>Last time this tab was selected or edited; auto-archive measures inactivity from it.</summary>
+    public DateTimeOffset LastAccessedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public Visibility PinVisibility => IsPinned ? Visibility.Visible : Visibility.Collapsed;
+
+    public string PinLabel => IsPinned ? "Unpin tab" : "Pin tab";
+
+    public Visibility TitleVisibility => IsRenaming ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility RenameEditorVisibility => IsRenaming ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Pinned rows sit above the TABS header and are a little more compact, like Arc.</summary>
+    public double RowHeight => IsPinned ? 36 : 42;
+
+    public void BeginRename()
+    {
+        DraftTitle = Title;
+        IsRenaming = true;
+    }
+
+    public void EndRename() => IsRenaming = false;
+
     /// <summary>Result tabs produced by this query tab, in execution order.</summary>
     public ObservableCollection<ResultSetViewModel> Results { get; } = [];
 

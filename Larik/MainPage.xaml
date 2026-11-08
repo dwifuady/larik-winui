@@ -11,6 +11,103 @@
     Background="Transparent"
     mc:Ignorable="d">
 
+    <Page.Resources>
+        <!--  Shared by the pinned section and the normal tab rail.  -->
+        <DataTemplate x:Key="TabItemTemplate" x:DataType="vm:TabViewModel">
+            <Grid
+                Height="{x:Bind RowHeight, Mode=OneWay}"
+                Padding="0,0,4,0"
+                AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
+                Background="{x:Bind ActiveTintBrush, Mode=OneWay}"
+                ContextRequested="TabItem_ContextRequested"
+                CornerRadius="6"
+                DoubleTapped="TabItem_DoubleTapped"
+                PointerEntered="TabItem_PointerEntered"
+                PointerExited="TabItem_PointerExited">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Rectangle
+                    Width="2"
+                    Height="18"
+                    VerticalAlignment="Center"
+                    Fill="{x:Bind AccentBrush, Mode=OneWay}"
+                    Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}"
+                    RadiusX="1"
+                    RadiusY="1" />
+
+                <StackPanel
+                    Grid.Column="1"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Spacing="1">
+                    <Grid ColumnSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <FontIcon
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Glyph="&#xE840;"
+                            ToolTipService.ToolTip="Pinned"
+                            Visibility="{x:Bind PinVisibility, Mode=OneWay}" />
+
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
+                            Foreground="{x:Bind local:MainPage.TabTitleBrush(IsActive), Mode=OneWay}"
+                            Text="{x:Bind Title, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis"
+                            Visibility="{x:Bind TitleVisibility, Mode=OneWay}" />
+
+                        <TextBox
+                            x:Name="TabTitleEditor"
+                            Grid.Column="1"
+                            Height="20"
+                            MinHeight="0"
+                            Padding="3,0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Tab name"
+                            Background="{ThemeResource HairlineSubtleBrush}"
+                            BorderThickness="0"
+                            CornerRadius="3"
+                            FontSize="12"
+                            IsSpellCheckEnabled="False"
+                            KeyDown="TabTitleEditor_KeyDown"
+                            LostFocus="TabTitleEditor_LostFocus"
+                            Text="{x:Bind DraftTitle, Mode=OneWay}"
+                            Visibility="{x:Bind RenameEditorVisibility, Mode=OneWay}" />
+                    </Grid>
+                    <TextBlock
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="{x:Bind Subtitle, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis"
+                        Visibility="{x:Bind SubtitleVisibility, Mode=OneWay}" />
+                </StackPanel>
+
+                <Button
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Close tab"
+                    Click="TabClose_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Close tab · kept in archive"
+                    Visibility="{x:Bind CloseButtonVisibility, Mode=OneWay}">
+                    <FontIcon FontSize="9" Glyph="&#xE711;" />
+                </Button>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Enter" Modifiers="Control" Invoked="RunStatementAccelerator_Invoked" />
         <KeyboardAccelerator Key="F5" Invoked="RunAllAccelerator_Invoked" />
@@ -36,6 +133,8 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="48" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
@@ -222,8 +321,29 @@
                     </Grid>
                 </Button>
 
+                <!--  Pinned tabs: their own section above the TABS header, like Arc.  -->
+                <ListView
+                    x:Name="PinnedTabsList"
+                    Grid.Row="2"
+                    MaxHeight="220"
+                    Padding="0,4,0,2"
+                    AllowDrop="True"
+                    AutomationProperties.Name="Pinned tabs"
+                    CanDragItems="True"
+                    CanReorderItems="True"
+                    DragItemsCompleted="PinnedTabsList_DragItemsCompleted"
+                    IsItemClickEnabled="True"
+                    ItemClick="TabsList_ItemClick"
+                    ItemContainerStyle="{StaticResource StudioTabItemStyle}"
+                    ItemTemplate="{StaticResource TabItemTemplate}"
+                    ItemsSource="{x:Bind ViewModel.PinnedTabs}"
+                    ReorderMode="Enabled"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                    SelectionMode="None"
+                    Visibility="{x:Bind ViewModel.PinnedTabsVisibility, Mode=OneWay}" />
+
                 <!--  Section header  -->
-                <Grid Grid.Row="2" Margin="18,8,12,2">
+                <Grid Grid.Row="3" Margin="18,6,12,2">
                     <TextBlock
                         VerticalAlignment="Center"
                         CharacterSpacing="120"
@@ -233,18 +353,58 @@
                         Text="TABS" />
                     <Button
                         HorizontalAlignment="Right"
-                        AutomationProperties.Name="New query tab"
-                        Command="{x:Bind ViewModel.NewTabCommand}"
+                        AutomationProperties.Name="Archive"
+                        Command="{x:Bind ViewModel.OpenArchiveCommand}"
                         Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="New query (Ctrl+T)">
-                        <FontIcon FontSize="12" Glyph="&#xE710;" />
+                        ToolTipService.ToolTip="Archive">
+                        <FontIcon FontSize="12" Glyph="&#xE81C;" />
                     </Button>
                 </Grid>
 
-                <!--  Vertical tab list  -->
+                <!--  New tab is a row, not a small + in the header (Arc's rail).  -->
+                <Button
+                    Grid.Row="4"
+                    Height="38"
+                    Margin="4,0,4,2"
+                    Padding="10,0"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    AutomationProperties.Name="New query tab"
+                    Command="{x:Bind ViewModel.NewTabCommand}"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="New query (Ctrl+T)">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <FontIcon
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Glyph="&#xE710;" />
+
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            Text="New tab" />
+
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="Ctrl+T" />
+                    </Grid>
+                </Button>
+
+                <!--  Unpinned vertical tab list  -->
                 <ListView
                     x:Name="TabsList"
-                    Grid.Row="3"
+                    Grid.Row="5"
                     Padding="0,0,0,8"
                     AllowDrop="True"
                     AutomationProperties.Name="Query tabs"
@@ -254,71 +414,14 @@
                     IsItemClickEnabled="True"
                     ItemClick="TabsList_ItemClick"
                     ItemContainerStyle="{StaticResource StudioTabItemStyle}"
-                    ItemsSource="{x:Bind ViewModel.Tabs}"
+                    ItemTemplate="{StaticResource TabItemTemplate}"
+                    ItemsSource="{x:Bind ViewModel.UnpinnedTabs}"
                     ReorderMode="Enabled"
-                    SelectionMode="None">
-                    <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="vm:TabViewModel">
-                            <Grid
-                                Height="42"
-                                Padding="0,0,4,0"
-                                AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
-                                Background="{x:Bind ActiveTintBrush, Mode=OneWay}"
-                                CornerRadius="6"
-                                PointerEntered="TabItem_PointerEntered"
-                                PointerExited="TabItem_PointerExited">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-
-                                <Rectangle
-                                    Width="2"
-                                    Height="18"
-                                    VerticalAlignment="Center"
-                                    Fill="{x:Bind AccentBrush, Mode=OneWay}"
-                                    Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}"
-                                    RadiusX="1"
-                                    RadiusY="1" />
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    Margin="8,0,0,0"
-                                    VerticalAlignment="Center"
-                                    Spacing="1">
-                                    <TextBlock
-                                        FontSize="12"
-                                        FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
-                                        Foreground="{x:Bind local:MainPage.TabTitleBrush(IsActive), Mode=OneWay}"
-                                        Text="{x:Bind Title, Mode=OneWay}"
-                                        TextTrimming="CharacterEllipsis" />
-                                    <TextBlock
-                                        FontSize="10"
-                                        Foreground="{ThemeResource StudioTextMutedBrush}"
-                                        Text="{x:Bind Subtitle, Mode=OneWay}"
-                                        TextTrimming="CharacterEllipsis"
-                                        Visibility="{x:Bind SubtitleVisibility, Mode=OneWay}" />
-                                </StackPanel>
-
-                                <Button
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    AutomationProperties.Name="Close tab"
-                                    Click="TabClose_Click"
-                                    Style="{StaticResource StudioIconButtonStyle}"
-                                    ToolTipService.ToolTip="Close tab"
-                                    Visibility="{x:Bind CloseButtonVisibility, Mode=OneWay}">
-                                    <FontIcon FontSize="9" Glyph="&#xE711;" />
-                                </Button>
-                            </Grid>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+                    SelectionMode="None" />
 
                 <!--  Workspace indicator: one dot per workspace, the active one ringed. The row is also a switcher.  -->
                 <Grid
-                    Grid.Row="4"
+                    Grid.Row="6"
                     Padding="12,8"
                     BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                     BorderThickness="0,1,0,0">
@@ -673,6 +776,349 @@
                         Text="{x:Bind ViewModel.CaretText, Mode=OneWay}" />
                 </StackPanel>
             </Grid>
+
+            <!--  ============ ARCHIVE / HISTORY PAGE ============  -->
+            <Grid
+                x:Name="ArchivePage"
+                Grid.Row="1"
+                Grid.RowSpan="5"
+                Padding="24,12,24,18"
+                Background="{ThemeResource StudioBackgroundBrush}"
+                RowSpacing="14"
+                Visibility="{x:Bind ViewModel.ArchiveVisibility, Mode=OneWay}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid ColumnSpacing="12">
+                    <StackPanel
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <Button
+                            AutomationProperties.Name="Back to workspace"
+                            Command="{x:Bind ViewModel.CloseArchiveCommand}"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Back to workspace">
+                            <FontIcon FontSize="11" Glyph="&#xE72B;" />
+                        </Button>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="20"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            Text="Archive" />
+                        <Border
+                            Padding="8,2"
+                            VerticalAlignment="Center"
+                            Background="{ThemeResource HairlineSubtleBrush}"
+                            CornerRadius="10">
+                            <TextBlock
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="{x:Bind ViewModel.ArchiveCountLabel, Mode=OneWay}" />
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="6">
+                        <TextBox
+                            x:Name="ArchiveSearchBox"
+                            Width="220"
+                            AutomationProperties.Name="Search archive"
+                            PlaceholderText="Search history"
+                            TextChanged="ArchiveSearch_TextChanged" />
+                        <Button
+                            Padding="10,5"
+                            AutomationProperties.Name="Clear archive"
+                            Click="ArchiveClearAll_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Delete every archived tab"
+                            Visibility="{x:Bind ViewModel.ArchiveClearVisibility, Mode=OneWay}">
+                            <TextBlock FontSize="11" Text="Clear all" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!--  Auto-archive controls: the n in "archive after n days".  -->
+                <Border
+                    Grid.Row="1"
+                    Padding="14,10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <ToggleSwitch
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Auto archive inactive tabs"
+                                IsOn="{x:Bind ViewModel.AutoArchiveEnabled, Mode=TwoWay}"
+                                OffContent="Auto-archive"
+                                OnContent="Auto-archive" />
+
+                            <NumberBox
+                                Grid.Column="1"
+                                Width="110"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Archive after days"
+                                LargeChange="5"
+                                Maximum="3650"
+                                Minimum="1"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Compact"
+                                Value="{x:Bind ViewModel.AutoArchiveDays, Mode=TwoWay}" />
+
+                            <TextBlock
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                FontSize="11"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="days without use" />
+
+                            <Button
+                                Grid.Column="3"
+                                Padding="10,5"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Archive inactive tabs now"
+                                Command="{x:Bind ViewModel.ArchiveInactiveNowCommand}"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Run the inactivity sweep now">
+                                <TextBlock FontSize="11" Text="Run now" />
+                            </Button>
+                        </Grid>
+
+                        <TextBlock
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="{x:Bind ViewModel.AutoArchiveDescription, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="2">
+                    <ListView
+                        x:Name="ArchivedTabsList"
+                        Padding="0"
+                        AutomationProperties.Name="Archived tabs"
+                        ItemsSource="{x:Bind ViewModel.VisibleArchivedTabs}"
+                        SelectionMode="None">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,0,0,6" />
+                                <Setter Property="MinHeight" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ArchivedTabViewModel">
+                                <Border
+                                    Padding="14,10"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Rectangle
+                                            Width="2"
+                                            Height="38"
+                                            VerticalAlignment="Center"
+                                            Fill="{x:Bind AccentBrush}"
+                                            RadiusX="1"
+                                            RadiusY="1" />
+
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Spacing="2">
+                                            <Grid ColumnSpacing="6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <FontIcon
+                                                    VerticalAlignment="Center"
+                                                    FontSize="10"
+                                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                                    Glyph="&#xE840;"
+                                                    ToolTipService.ToolTip="Pinned"
+                                                    Visibility="{x:Bind PinVisibility}" />
+
+                                                <TextBlock
+                                                    Grid.Column="1"
+                                                    FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                                    Text="{x:Bind Title}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </Grid>
+                                            <TextBlock
+                                                FontSize="10"
+                                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                                Text="{x:Bind ContextLine}"
+                                                TextTrimming="CharacterEllipsis" />
+                                            <TextBlock
+                                                Margin="0,2,0,0"
+                                                FontFamily="{StaticResource StudioMonoFont}"
+                                                FontSize="11"
+                                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                                Text="{x:Bind Preview}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <TextBlock
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            FontSize="10"
+                                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                                            Text="{x:Bind AgeLabel}" />
+
+                                        <StackPanel
+                                            Grid.Column="3"
+                                            VerticalAlignment="Center"
+                                            Orientation="Horizontal"
+                                            Spacing="4">
+                                            <Button
+                                                Padding="10,5"
+                                                AutomationProperties.Name="{x:Bind RestoreName}"
+                                                Click="ArchiveRestore_Click"
+                                                Style="{StaticResource StudioIconButtonStyle}"
+                                                ToolTipService.ToolTip="Restore this tab">
+                                                <TextBlock FontSize="11" Text="Restore" />
+                                            </Button>
+                                            <Button
+                                                Padding="7,5"
+                                                AutomationProperties.Name="{x:Bind DeleteName}"
+                                                Click="ArchiveDelete_Click"
+                                                Style="{StaticResource StudioIconButtonStyle}"
+                                                ToolTipService.ToolTip="Delete from archive">
+                                                <FontIcon FontSize="10" Glyph="&#xE74D;" />
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <StackPanel
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="6"
+                        Visibility="{x:Bind ViewModel.ArchiveEmptyVisibility, Mode=OneWay}">
+                        <FontIcon
+                            HorizontalAlignment="Center"
+                            FontSize="26"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Glyph="&#xE81C;" />
+                        <TextBlock
+                            HorizontalAlignment="Center"
+                            FontSize="13"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                            Text="No archived tabs" />
+                        <TextBlock
+                            MaxWidth="360"
+                            HorizontalAlignment="Center"
+                            FontSize="11"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="Tabs you archive — or that auto-archive after their inactive days — are kept here. Pinned tabs are never auto-archived."
+                            TextAlignment="Center"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!--  ============ NEW TAB COMMAND PALETTE ============  -->
+        <Grid
+            x:Name="NewTabPalette"
+            Grid.ColumnSpan="2"
+            Background="#66000000"
+            KeyDown="NewTabPalette_KeyDown"
+            Visibility="Collapsed">
+            <Border Tapped="NewTabPaletteBackdrop_Tapped" />
+
+            <Border
+                Width="520"
+                MaxHeight="460"
+                Margin="0,96,0,0"
+                Padding="12"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBox
+                        x:Name="NewTabSearchBox"
+                        AutomationProperties.Name="New tab database search"
+                        KeyDown="NewTabSearchBox_KeyDown"
+                        PlaceholderText="Search databases…"
+                        TextChanged="NewTabSearchBox_TextChanged" />
+
+                    <ListView
+                        x:Name="NewTabDatabaseList"
+                        Grid.Row="1"
+                        MaxHeight="320"
+                        Padding="0"
+                        AutomationProperties.Name="New query database"
+                        IsItemClickEnabled="True"
+                        ItemClick="NewTabDatabaseList_ItemClick"
+                        SelectionMode="Single">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="MinHeight" Value="0" />
+                                <Setter Property="Padding" Value="10,7" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                    </ListView>
+
+                    <TextBlock
+                        x:Name="NewTabPaletteMessage"
+                        Grid.Row="2"
+                        FontSize="11"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        TextWrapping="Wrap"
+                        Visibility="Collapsed" />
+
+                    <TextBlock
+                        Grid.Row="3"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="Type to filter · Enter opens · Esc closes" />
+                </Grid>
+            </Border>
         </Grid>
 
     </Grid>

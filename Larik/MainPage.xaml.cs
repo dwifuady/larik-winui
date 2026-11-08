@@ -39,7 +39,8 @@ public sealed partial class MainPage : Page
     private double _splitStartHeight;
     private double _splitTotalHeight;
 
-    private bool _newTabDialogOpen;
+    private bool _newTabPaletteOpen;
+    private List<string> _paletteDatabases = [];
 
     public StudioViewModel ViewModel { get; } = new();
 
@@ -95,6 +96,7 @@ public sealed partial class MainPage : Page
             ViewModel.NewTabRequested += ViewModel_NewTabRequested;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
             _lastSpaceIndex = ActiveSpaceIndex();
+            ViewModel.StartBackgroundMaintenance();
         }
 
         // The caption lives inside the content column (the rail runs full height), so the page owns the drag region.
@@ -327,6 +329,209 @@ public sealed partial class MainPage : Page
         }
     }
 
+    /// <summary>Right-click a tab for inline rename, pin and close; the menu is built per tab.</summary>
+    private void TabItem_ContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    {
+        if (sender is not FrameworkElement target || target.DataContext is not TabViewModel tab)
+        {
+            return;
+        }
+
+        var flyout = new MenuFlyout();
+
+        var rename = new MenuFlyoutItem
+        {
+            Text = "Rename",
+            Icon = new FontIcon { Glyph = "\uE8AC" },
+        };
+        rename.Click += (_, _) => BeginInlineRename(tab, target);
+        flyout.Items.Add(rename);
+
+        var pin = new MenuFlyoutItem
+        {
+            Text = tab.PinLabel,
+            Icon = new FontIcon { Glyph = "\uE840" },
+        };
+        pin.Click += (_, _) => ViewModel.TogglePin(tab);
+        flyout.Items.Add(pin);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var close = new MenuFlyoutItem
+        {
+            Text = "Close tab",
+            Icon = new FontIcon { Glyph = "\uE711" },
+        };
+        close.Click += (_, _) => ViewModel.CloseTab(tab);
+        flyout.Items.Add(close);
+
+        if (args.TryGetPosition(target, out var position))
+        {
+            flyout.ShowAt(target, position);
+        }
+        else
+        {
+            flyout.ShowAt(target);
+        }
+
+        args.Handled = true;
+    }
+
+    /// <summary>Double-clicking a tab title is the quick path to renaming it in place.</summary>
+    private void TabItem_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement container && container.DataContext is TabViewModel tab)
+        {
+            BeginInlineRename(tab, container);
+            e.Handled = true;
+        }
+    }
+
+    private void BeginInlineRename(TabViewModel tab, FrameworkElement container)
+    {
+        if (!tab.IsRenaming)
+        {
+            tab.BeginRename();
+        }
+
+        // The editor is only visible after the tab has re-rendered, so focus it next tick.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var editor = FindDescendant<TextBox>(container, "TabTitleEditor");
+            if (editor is null)
+            {
+                return;
+            }
+
+            editor.Focus(FocusState.Programmatic);
+            editor.SelectAll();
+        });
+    }
+
+    private void TabTitleEditor_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is not TextBox box || box.DataContext is not TabViewModel tab)
+        {
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            CommitInlineRename(tab, box.Text);
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CancelInlineRename(tab);
+            e.Handled = true;
+        }
+    }
+
+    private void TabTitleEditor_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox box
+            && box.DataContext is TabViewModel tab
+            && tab.IsRenaming)
+        {
+            CommitInlineRename(tab, box.Text);
+        }
+    }
+
+    private void CommitInlineRename(TabViewModel tab, string text)
+    {
+        if (!tab.IsRenaming)
+        {
+            return;
+        }
+
+        tab.EndRename();
+        ViewModel.RenameTab(tab, text);
+    }
+
+    private void CancelInlineRename(TabViewModel tab)
+    {
+        if (!tab.IsRenaming)
+        {
+            return;
+        }
+
+        tab.EndRename();
+        ViewModel.StatusText = "Rename cancelled";
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root, string name)
+        where T : FrameworkElement
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match && match.Name == name)
+            {
+                return match;
+            }
+
+            if (FindDescendant<T>(child, name) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    // ---------------------------------------------------------------- archive / history
+
+    private void ArchiveSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox box)
+        {
+            ViewModel.ArchiveSearch = box.Text;
+        }
+    }
+
+    private void ArchiveRestore_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ArchivedTabViewModel archived })
+        {
+            ViewModel.RestoreArchived(archived);
+        }
+    }
+
+    private void ArchiveDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ArchivedTabViewModel archived })
+        {
+            ViewModel.DeleteArchived(archived);
+        }
+    }
+
+    private async void ArchiveClearAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.HasArchivedTabs)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "Clear archive?",
+            XamlRoot = XamlRoot,
+            Content = new TextBlock
+            {
+                Text = $"Delete all {ViewModel.ArchivedTabCount} archived tab{(ViewModel.ArchivedTabCount == 1 ? string.Empty : "s")}? This cannot be undone.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            DefaultButton = ContentDialogButton.Close,
+            PrimaryButtonText = "Delete all",
+            CloseButtonText = "Cancel",
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            ViewModel.ClearArchive();
+        }
+    }
+
     private void TabItem_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TabViewModel tab })
@@ -345,6 +550,10 @@ public sealed partial class MainPage : Page
 
     /// <summary>The ListView already reordered the rail mirror; persist the same order on the space.</summary>
     private void TabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
+        ViewModel.SyncTabOrder();
+
+    /// <summary>Pinned and normal sections share the same persisted order (pinned first).</summary>
+    private void PinnedTabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
         ViewModel.SyncTabOrder();
 
     /// <summary>The dots at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
@@ -375,6 +584,14 @@ public sealed partial class MainPage : Page
         };
         settings.Click += async (_, _) => await ShowConnectionDialogAsync();
         flyout.Items.Add(settings);
+
+        var archive = new MenuFlyoutItem
+        {
+            Text = "Archive",
+            Icon = new FontIcon { Glyph = "\uE81C" },
+        };
+        archive.Click += (_, _) => ViewModel.OpenArchiveCommand.Execute(null);
+        flyout.Items.Add(archive);
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
@@ -825,103 +1042,154 @@ public sealed partial class MainPage : Page
         await dialog.ShowAsync();
     }
 
-    // ---------------------------------------------------------------- new query
+    // ---------------------------------------------------------------- new query palette
 
-    private async void ViewModel_NewTabRequested(object? sender, EventArgs e)
-    {
-        try
-        {
-            await ShowNewTabDialogAsync();
-        }
-        catch (Exception ex)
-        {
-            ViewModel.StatusText = $"Could not open the new query dialog: {ex.Message}";
-        }
-    }
+    private void ViewModel_NewTabRequested(object? sender, EventArgs e) => ShowNewTabPalette();
 
     /// <summary>
-    /// Every new tab starts with a database choice: completion, the database picker and the
-    /// result grid are per tab, so the tab must know which database it belongs to from day one.
+    /// New tabs start with a database, but the choice is a command palette instead of a dialog:
+    /// type to filter, arrow keys to move, Enter opens. Esc or the backdrop cancels.
     /// </summary>
-    private async Task ShowNewTabDialogAsync()
+    private void ShowNewTabPalette()
     {
-        if (_newTabDialogOpen || ViewModel.ActiveSpace is not { } space)
+        if (ViewModel.ActiveSpace is not { } space)
         {
             return;
         }
 
-        _newTabDialogOpen = true;
-        try
+        var preferred = ViewModel.ActiveTab?.Database ?? space.PreferredDatabase;
+        _paletteDatabases = space.Databases
+            .Select(database => database.Name)
+            .OrderByDescending(name => string.Equals(name, preferred, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _newTabPaletteOpen = true;
+        NewTabSearchBox.Text = string.Empty;
+        ApplyNewTabFilter();
+        NewTabPalette.Visibility = Visibility.Visible;
+
+        DispatcherQueue.TryEnqueue(() =>
         {
-            var databases = space.Databases.Select(database => database.Name).ToList();
-            ComboBox? databaseBox = null;
+            NewTabSearchBox.Focus(FocusState.Programmatic);
+            NewTabSearchBox.SelectAll();
+        });
+    }
 
-            var body = new StackPanel { MinWidth = 320, Spacing = 6 };
-            if (databases.Count > 0)
-            {
-                databaseBox = new ComboBox
-                {
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Header = "Database",
-                    ItemsSource = databases,
-                    PlaceholderText = "Choose a database",
-                };
+    private void HideNewTabPalette()
+    {
+        _newTabPaletteOpen = false;
+        NewTabPalette.Visibility = Visibility.Collapsed;
+    }
 
-                var selected = ViewModel.ActiveTab?.Database;
-                databaseBox.SelectedItem = databases.FirstOrDefault(name =>
-                        string.Equals(name, selected, StringComparison.OrdinalIgnoreCase))
-                    ?? databases.FirstOrDefault(name =>
-                        string.Equals(name, space.PreferredDatabase, StringComparison.OrdinalIgnoreCase))
-                    ?? space.ActiveDatabase?.Name
-                    ?? databases[0];
-                AutomationProperties.SetName(databaseBox, "New query database");
+    private void ApplyNewTabFilter()
+    {
+        var query = NewTabSearchBox.Text.Trim();
+        var matches = _paletteDatabases
+            .Where(name => name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-                body.Children.Add(databaseBox);
-                body.Children.Add(new TextBlock
-                {
-                    Text = "Autocomplete, queries and results stay with this tab's database.",
-                    FontSize = 11,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
-                });
-            }
-            else
-            {
-                body.Children.Add(new TextBlock
-                {
-                    Text = space.Connection.IsConnected
-                        ? "This connection exposes no databases. The tab opens without one."
-                        : "Connect this workspace to choose a database. The tab opens without one.",
-                    FontSize = 12,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
-                });
-            }
-
-            var dialog = new ContentDialog
-            {
-                Title = "New query",
-                XamlRoot = XamlRoot,
-                Content = body,
-                DefaultButton = ContentDialogButton.Primary,
-                PrimaryButtonText = "Create",
-                CloseButtonText = "Cancel",
-            };
-
-            dialog.Opened += (_, _) => databaseBox?.Focus(FocusState.Programmatic);
-            dialog.PrimaryButtonClick += (_, _) =>
-            {
-                var chosen = databaseBox?.SelectedItem as string
-                    ?? ViewModel.ActiveTab?.Database;
-                ViewModel.CreateTab(chosen);
-            };
-
-            await dialog.ShowAsync();
-        }
-        finally
+        NewTabDatabaseList.ItemsSource = matches;
+        if (matches.Count > 0)
         {
-            _newTabDialogOpen = false;
+            NewTabDatabaseList.SelectedIndex = 0;
+            NewTabPaletteMessage.Visibility = Visibility.Collapsed;
+            return;
         }
+
+        NewTabPaletteMessage.Visibility = Visibility.Visible;
+        NewTabPaletteMessage.Text = _paletteDatabases.Count == 0
+            ? ViewModel.ActiveSpace?.Connection.IsConnected == true
+                ? "This connection exposes no databases. Press Enter to open a tab without one."
+                : "Connect this workspace to choose a database. Press Enter to open a tab without one."
+            : $"No database matches \"{query}\".";
+    }
+
+    private void NewTabSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_newTabPaletteOpen)
+        {
+            ApplyNewTabFilter();
+        }
+    }
+
+    private void NewTabSearchBox_KeyDown(object sender, KeyRoutedEventArgs e) =>
+        NewTabPalette_KeyDown(sender, e);
+
+    private void NewTabPalette_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (!_newTabPaletteOpen)
+        {
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            HideNewTabPalette();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            var chosen = NewTabDatabaseList.SelectedItem as string
+                ?? (NewTabDatabaseList.ItemsSource as IEnumerable<string>)?.FirstOrDefault();
+
+            // Keep the palette open when the user typed a query with no matching database.
+            if (chosen is null && _paletteDatabases.Count > 0)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            OpenNewTabPaletteSelection(chosen);
+            e.Handled = true;
+            return;
+        }
+
+        // The search box owns Up/Down; when the list has focus, let ListView move natively.
+        if (NewTabSearchBox.FocusState != FocusState.Unfocused
+            && e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up)
+        {
+            MoveNewTabSelection(e.Key == Windows.System.VirtualKey.Down ? 1 : -1);
+            e.Handled = true;
+        }
+    }
+
+    private void MoveNewTabSelection(int offset)
+    {
+        var count = NewTabDatabaseList.Items.Count;
+        if (count == 0)
+        {
+            return;
+        }
+
+        var index = NewTabDatabaseList.SelectedIndex;
+        NewTabDatabaseList.SelectedIndex = index < 0
+            ? offset > 0 ? 0 : count - 1
+            : (index + offset + count) % count;
+    }
+
+    private void NewTabDatabaseList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is string database)
+        {
+            OpenNewTabPaletteSelection(database);
+        }
+    }
+
+    private void NewTabPaletteBackdrop_Tapped(object sender, TappedRoutedEventArgs e) =>
+        HideNewTabPalette();
+
+    private void OpenNewTabPaletteSelection(string? database)
+    {
+        if (!_newTabPaletteOpen)
+        {
+            return;
+        }
+
+        HideNewTabPalette();
+        ViewModel.CreateTab(database);
     }
 
     // ---------------------------------------------------------------- splitter

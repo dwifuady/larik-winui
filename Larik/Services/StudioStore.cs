@@ -13,6 +13,13 @@ public sealed class StudioState
     public string? ActiveSpaceId { get; set; }
 
     public int QueryCounter { get; set; }
+
+    /// <summary>Archived tabs, newest first. Archived tabs can be restored into their workspace.</summary>
+    public List<ArchivedTabState> ArchivedTabs { get; set; } = [];
+
+    public bool AutoArchiveEnabled { get; set; } = true;
+
+    public int AutoArchiveDays { get; set; } = 30;
 }
 
 /// <summary>One space, including the connection profile it owns (passwords are never stored).</summary>
@@ -45,6 +52,33 @@ public sealed class TabState
     public string Database { get; set; } = string.Empty;
 
     public string Content { get; set; } = string.Empty;
+
+    public bool Pinned { get; set; }
+
+    /// <summary>Last selection/edit time; auto-archive measures inactivity from it.</summary>
+    public DateTimeOffset? LastAccessedAt { get; set; }
+}
+
+/// <summary>A tab kept in the archive/history page after it left its workspace.</summary>
+public sealed class ArchivedTabState
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string SpaceId { get; set; } = string.Empty;
+
+    public string SpaceName { get; set; } = string.Empty;
+
+    public string Color { get; set; } = "#C4B5FD";
+
+    public string Title { get; set; } = string.Empty;
+
+    public string Database { get; set; } = string.Empty;
+
+    public string Content { get; set; } = string.Empty;
+
+    public bool Pinned { get; set; }
+
+    public DateTimeOffset ArchivedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>Reads the pre-SQLite <c>studio.json</c> state once, so upgrades keep their spaces.</summary>
@@ -65,7 +99,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed class StudioStore
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
 #if DEBUG
     private const string DatabaseFileName = "larik-dev.db";
@@ -192,10 +226,24 @@ public sealed class StudioStore
                 title TEXT NOT NULL,
                 database TEXT,
                 content TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                last_accessed_at TEXT,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS archived_tabs (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL,
+                space_name TEXT NOT NULL,
+                color TEXT,
+                title TEXT NOT NULL,
+                database TEXT,
+                content TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                archived_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS app_state (
@@ -206,10 +254,44 @@ public sealed class StudioStore
 
             CREATE INDEX IF NOT EXISTS idx_spaces_sort_order ON spaces(sort_order);
             CREATE INDEX IF NOT EXISTS idx_tabs_space_id ON tabs(space_id, sort_order);
+            CREATE INDEX IF NOT EXISTS idx_archived_tabs_archived_at ON archived_tabs(archived_at DESC);
             """);
+
+        // Version 2 adds pin state, the inactivity clock and the archive table. Existing
+        // version 1 databases keep their rows; the new tab columns are added in place.
+        EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();
+    }
+
+    /// <summary>Adds a column to an existing table when it predates the current schema.</summary>
+    private static void EnsureColumn(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string table,
+        string column,
+        string definition)
+    {
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = $"PRAGMA table_info({table});";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        Execute(
+            connection,
+            transaction,
+            $"ALTER TABLE {table} ADD COLUMN {column} {definition};");
     }
 
     // ---------------------------------------------------------------- read
@@ -226,6 +308,15 @@ public sealed class StudioStore
                 out var counter)
                 ? counter
                 : 0,
+            AutoArchiveEnabled = !bool.TryParse(ReadState(connection, "auto_archive_enabled"), out var enabled)
+                || enabled,
+            AutoArchiveDays = int.TryParse(
+                ReadState(connection, "auto_archive_days"),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var days)
+                ? days
+                : 30,
         };
 
         var spaces = new List<SpaceState>();
@@ -260,6 +351,7 @@ public sealed class StudioStore
         }
 
         state.Spaces = spaces;
+        state.ArchivedTabs = ReadArchivedTabs(connection);
         return state;
     }
 
@@ -285,7 +377,8 @@ public sealed class StudioStore
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, title, COALESCE(database, ''), COALESCE(content, '')
+            SELECT id, title, COALESCE(database, ''), COALESCE(content, ''),
+                   COALESCE(pinned, 0), COALESCE(last_accessed_at, '')
             FROM tabs
             WHERE space_id = $id
             ORDER BY sort_order;
@@ -301,11 +394,57 @@ public sealed class StudioStore
                 Title = reader.GetString(1),
                 Database = reader.GetString(2),
                 Content = reader.GetString(3),
+                Pinned = reader.GetInt64(4) != 0,
+                // A tab saved before the inactivity clock existed counts as used now, so the
+                // first launch after the upgrade does not sweep the whole workspace.
+                LastAccessedAt = ParseTimestamp(reader.GetString(5)),
             });
         }
 
         return tabs;
     }
+
+    private static List<ArchivedTabState> ReadArchivedTabs(SqliteConnection connection)
+    {
+        var tabs = new List<ArchivedTabState>();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, space_id, space_name, COALESCE(color, ''), title,
+                   COALESCE(database, ''), COALESCE(content, ''), COALESCE(pinned, 0),
+                   COALESCE(archived_at, '')
+            FROM archived_tabs
+            ORDER BY archived_at DESC;
+            """;
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            tabs.Add(new ArchivedTabState
+            {
+                Id = reader.GetString(0),
+                SpaceId = reader.GetString(1),
+                SpaceName = reader.GetString(2),
+                Color = reader.GetString(3),
+                Title = reader.GetString(4),
+                Database = reader.GetString(5),
+                Content = reader.GetString(6),
+                Pinned = reader.GetInt64(7) != 0,
+                ArchivedAt = ParseTimestamp(reader.GetString(8)),
+            });
+        }
+
+        return tabs;
+    }
+
+    private static DateTimeOffset ParseTimestamp(string? value) =>
+        DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind | DateTimeStyles.AssumeUniversal,
+            out var parsed)
+            ? parsed
+            : DateTimeOffset.UtcNow;
 
     // ---------------------------------------------------------------- write
 
@@ -352,6 +491,9 @@ public sealed class StudioStore
 
         SetState(connection, transaction, "active_space_id", state.ActiveSpaceId ?? string.Empty);
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
+        SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
+        SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        WriteArchivedTabs(connection, transaction, state.ArchivedTabs);
     }
 
     private static void WriteProfile(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
@@ -381,13 +523,15 @@ public sealed class StudioStore
                 connection,
                 transaction,
                 """
-                INSERT INTO tabs (id, space_id, title, database, content, sort_order)
-                VALUES ($id, $space, $title, $database, $content, $sort)
+                INSERT INTO tabs (id, space_id, title, database, content, pinned, last_accessed_at, sort_order)
+                VALUES ($id, $space, $title, $database, $content, $pinned, $accessed, $sort)
                 ON CONFLICT(id) DO UPDATE SET
                     space_id = excluded.space_id,
                     title = excluded.title,
                     database = excluded.database,
                     content = excluded.content,
+                    pinned = excluded.pinned,
+                    last_accessed_at = excluded.last_accessed_at,
                     sort_order = excluded.sort_order,
                     updated_at = datetime('now');
                 """,
@@ -396,6 +540,8 @@ public sealed class StudioStore
                 ("$title", tab.Title),
                 ("$database", tab.Database),
                 ("$content", tab.Content),
+                ("$pinned", tab.Pinned ? 1 : 0),
+                ("$accessed", (tab.LastAccessedAt ?? DateTimeOffset.UtcNow).ToString("o", CultureInfo.InvariantCulture)),
                 ("$sort", tabOrder++));
         }
 
@@ -403,6 +549,50 @@ public sealed class StudioStore
         foreach (var id in storedTabs.Where(id => !tabIds.Contains(id)))
         {
             Execute(connection, transaction, "DELETE FROM tabs WHERE id = $id;", ("$id", id));
+        }
+    }
+
+    private static void WriteArchivedTabs(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        List<ArchivedTabState> tabs)
+    {
+        var tabIds = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var tab in tabs)
+        {
+            tabIds.Add(tab.Id);
+            Execute(
+                connection,
+                transaction,
+                """
+                INSERT INTO archived_tabs (id, space_id, space_name, color, title, database, content, pinned, archived_at)
+                VALUES ($id, $space, $space_name, $color, $title, $database, $content, $pinned, $archived)
+                ON CONFLICT(id) DO UPDATE SET
+                    space_id = excluded.space_id,
+                    space_name = excluded.space_name,
+                    color = excluded.color,
+                    title = excluded.title,
+                    database = excluded.database,
+                    content = excluded.content,
+                    pinned = excluded.pinned,
+                    archived_at = excluded.archived_at;
+                """,
+                ("$id", tab.Id),
+                ("$space", tab.SpaceId),
+                ("$space_name", tab.SpaceName),
+                ("$color", tab.Color),
+                ("$title", tab.Title),
+                ("$database", tab.Database),
+                ("$content", tab.Content),
+                ("$pinned", tab.Pinned ? 1 : 0),
+                ("$archived", tab.ArchivedAt.ToString("o", CultureInfo.InvariantCulture)));
+        }
+
+        var storedTabs = SelectIds(connection, transaction, "SELECT id FROM archived_tabs;");
+        foreach (var id in storedTabs.Where(id => !tabIds.Contains(id)))
+        {
+            Execute(connection, transaction, "DELETE FROM archived_tabs WHERE id = $id;", ("$id", id));
         }
     }
 

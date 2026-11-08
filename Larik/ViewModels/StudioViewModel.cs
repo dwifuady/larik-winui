@@ -14,6 +14,7 @@ public partial class StudioViewModel : ObservableObject
     private readonly CancellationTokenSource _lifetime = new();
     private readonly StudioStore _store = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _archiveTimer;
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
 
@@ -40,6 +41,8 @@ public partial class StudioViewModel : ObservableObject
 
         ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
 
+        RefreshArchiveView();
+
         Spaces.CollectionChanged += (_, _) => ScheduleSave();
         PropertyChanged += (_, args) =>
         {
@@ -55,8 +58,70 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Tabs of the active space. Mutated in place so the ListView keeps its identity.</summary>
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
+    /// <summary>Pinned tabs of the active space, rendered above the TABS header.</summary>
+    public ObservableCollection<TabViewModel> PinnedTabs { get; } = [];
+
+    /// <summary>Unpinned tabs of the active space, rendered below the new-tab row.</summary>
+    public ObservableCollection<TabViewModel> UnpinnedTabs { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PinnedTabsVisibility))]
+    public partial bool HasPinnedTabs { get; set; }
+
+    public Visibility PinnedTabsVisibility => HasPinnedTabs ? Visibility.Visible : Visibility.Collapsed;
+
     /// <summary>Result tabs of the active query tab.</summary>
     public ObservableCollection<ResultSetViewModel> Results { get; } = [];
+
+    /// <summary>Archived tabs, newest first. Backed by the <c>archived_tabs</c> table.</summary>
+    public ObservableCollection<ArchivedTabViewModel> ArchivedTabs { get; } = [];
+
+    /// <summary>The archive list after the history search filter is applied.</summary>
+    public ObservableCollection<ArchivedTabViewModel> VisibleArchivedTabs { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ArchiveVisibility))]
+    public partial bool IsArchiveOpen { get; set; }
+
+    [ObservableProperty]
+    public partial string ArchiveSearch { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ArchiveEmptyVisibility))]
+    public partial bool HasVisibleArchivedTabs { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ArchiveCountLabel))]
+    [NotifyPropertyChangedFor(nameof(HasArchivedTabs))]
+    [NotifyPropertyChangedFor(nameof(ArchiveClearVisibility))]
+    public partial int ArchivedTabCount { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AutoArchiveDescription))]
+    public partial bool AutoArchiveEnabled { get; set; } = true;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AutoArchiveDescription))]
+    public partial double AutoArchiveDays { get; set; } = 30;
+
+    public Visibility ArchiveVisibility => IsArchiveOpen ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ArchiveEmptyVisibility => HasVisibleArchivedTabs ? Visibility.Collapsed : Visibility.Visible;
+
+    public bool HasArchivedTabs => ArchivedTabCount > 0;
+
+    public Visibility ArchiveClearVisibility => HasArchivedTabs ? Visibility.Visible : Visibility.Collapsed;
+
+    public string ArchiveCountLabel => ArchivedTabCount == 1 ? "1 archived tab" : $"{ArchivedTabCount} archived tabs";
+
+    public string AutoArchiveDescription => AutoArchiveEnabled
+        ? $"Tabs untouched for {EffectiveAutoArchiveDays} days are archived automatically. Pinned tabs are never archived."
+        : "Auto-archive is off. Pinned tabs are never archived.";
+
+    /// <summary>NumberBox can report NaN while its text is cleared; fall back to the default.</summary>
+    private int EffectiveAutoArchiveDays => double.IsFinite(AutoArchiveDays)
+        ? Math.Clamp((int)Math.Round(AutoArchiveDays), 1, 3650)
+        : 30;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ResultTabsVisibility))]
@@ -143,6 +208,308 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
+    // ---------------------------------------------------------------- archive + pinning
+
+    [RelayCommand]
+    private void OpenArchive()
+    {
+        RunAutoArchive();
+        ApplyArchiveFilter();
+        IsArchiveOpen = true;
+    }
+
+    [RelayCommand]
+    private void CloseArchive() => IsArchiveOpen = false;
+
+    [RelayCommand]
+    private void ArchiveInactiveNow()
+    {
+        var count = RunAutoArchive();
+        StatusText = count == 0
+            ? "No inactive tabs to archive"
+            : $"Archived {count} inactive tab{(count == 1 ? string.Empty : "s")}";
+    }
+
+    partial void OnArchiveSearchChanged(string value) => ApplyArchiveFilter();
+
+    partial void OnAutoArchiveEnabledChanged(bool value) => ScheduleSave();
+
+    partial void OnAutoArchiveDaysChanged(double value) => ScheduleSave();
+
+    /// <summary>Renames a tab. An empty name is ignored so a tab never loses its label.</summary>
+    public bool RenameTab(TabViewModel tab, string title)
+    {
+        var trimmed = title.Trim();
+        if (trimmed.Length == 0 || string.Equals(trimmed, tab.Title, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        tab.Title = trimmed;
+        StatusText = $"Renamed tab to {trimmed}";
+        ScheduleSave();
+        return true;
+    }
+
+    public void TogglePin(TabViewModel tab)
+    {
+        var space = tab.Space;
+        var current = space.Tabs.IndexOf(tab);
+        if (current < 0)
+        {
+            return;
+        }
+
+        if (!tab.IsPinned)
+        {
+            tab.IsPinned = true;
+            space.Tabs.Move(current, 0);
+            StatusText = $"Pinned {tab.Title}";
+        }
+        else
+        {
+            tab.IsPinned = false;
+            var target = space.Tabs.Count(candidate => candidate.IsPinned);
+            space.Tabs.Move(current, Math.Clamp(target, 0, space.Tabs.Count - 1));
+            StatusText = $"Unpinned {tab.Title}";
+        }
+
+        tab.LastAccessedAt = DateTimeOffset.UtcNow;
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabSections();
+        }
+
+        ScheduleSave();
+    }
+
+    /// <summary>
+    /// Moves a tab out of its workspace into the archive. Auto-archive always leaves one tab in
+    /// the workspace; closing a tab explicitly may archive the last one, and the caller replaces it.
+    /// </summary>
+    public bool ArchiveTab(TabViewModel tab, bool notify = true, bool allowLast = false)
+    {
+        var space = tab.Space;
+        if (!allowLast && space.Tabs.Count <= 1)
+        {
+            if (notify)
+            {
+                StatusText = "A workspace keeps at least one tab";
+            }
+
+            return false;
+        }
+
+        var index = space.Tabs.IndexOf(tab);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var wasActive = ReferenceEquals(ActiveTab, tab);
+        var entry = new ArchivedTabViewModel(
+            tab.Id,
+            space.Id,
+            space.Name,
+            space.ColorHex,
+            tab.Title,
+            tab.Database,
+            tab.Content,
+            tab.IsPinned,
+            DateTimeOffset.UtcNow);
+
+        ArchivedTabs.Insert(0, entry);
+        if (ReferenceEquals(space.LastActiveTab, tab))
+        {
+            space.LastActiveTab = null;
+        }
+
+        space.Tabs.Remove(tab);
+
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabSections();
+        }
+
+        if (wasActive && ReferenceEquals(space, ActiveSpace) && space.Tabs.Count > 0)
+        {
+            SelectTab(space.Tabs[Math.Clamp(index, 0, space.Tabs.Count - 1)]);
+        }
+
+        RefreshArchiveView();
+        ScheduleSave();
+
+        if (notify)
+        {
+            StatusText = $"Moved {tab.Title} to archive";
+        }
+
+        return true;
+    }
+
+    public void RestoreArchived(ArchivedTabViewModel archived)
+    {
+        if (!ArchivedTabs.Remove(archived))
+        {
+            return;
+        }
+
+        var space = Spaces.FirstOrDefault(candidate => candidate.Id == archived.SpaceId)
+            ?? ActiveSpace
+            ?? Spaces.FirstOrDefault();
+
+        if (space is null)
+        {
+            ArchivedTabs.Insert(0, archived);
+            return;
+        }
+
+        var tab = new TabViewModel(
+            archived.Id,
+            archived.Title,
+            archived.Database,
+            space,
+            archived.Content)
+        {
+            IsPinned = archived.IsPinned,
+            LastAccessedAt = DateTimeOffset.UtcNow,
+        };
+
+        var index = archived.IsPinned ? 0 : space.Tabs.Count(candidate => candidate.IsPinned);
+        space.Tabs.Insert(index, tab);
+
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabSections();
+            SelectTab(tab);
+        }
+
+        RefreshArchiveView();
+        ScheduleSave();
+        StatusText = $"Restored {archived.Title} to {space.Name}";
+    }
+
+    public void DeleteArchived(ArchivedTabViewModel archived)
+    {
+        if (ArchivedTabs.Remove(archived))
+        {
+            RefreshArchiveView();
+            ScheduleSave();
+            StatusText = $"Deleted archived tab {archived.Title}";
+        }
+    }
+
+    public void ClearArchive()
+    {
+        if (ArchivedTabs.Count == 0)
+        {
+            return;
+        }
+
+        var count = ArchivedTabs.Count;
+        ArchivedTabs.Clear();
+        RefreshArchiveView();
+        ScheduleSave();
+        StatusText = $"Cleared {count} archived tab{(count == 1 ? string.Empty : "s")}";
+    }
+
+    /// <summary>
+    /// Runs the inactivity sweep. Pinned tabs and the tab the user is looking at are never
+    /// archived, and a workspace always keeps at least one tab.
+    /// </summary>
+    public int RunAutoArchive()
+    {
+        if (!AutoArchiveEnabled)
+        {
+            return 0;
+        }
+
+        var days = EffectiveAutoArchiveDays;
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-days);
+        var archived = 0;
+
+        foreach (var space in Spaces.ToList())
+        {
+            foreach (var tab in space.Tabs.ToList())
+            {
+                if (space.Tabs.Count <= 1)
+                {
+                    break;
+                }
+
+                if (tab.IsPinned
+                    || ReferenceEquals(tab, ActiveTab)
+                    || tab.LastAccessedAt > cutoff)
+                {
+                    continue;
+                }
+
+                if (ArchiveTab(tab, notify: false))
+                {
+                    archived++;
+                }
+            }
+        }
+
+        if (archived > 0)
+        {
+            RefreshArchiveView();
+            ScheduleSave();
+            StatusText = $"Archived {archived} inactive tab{(archived == 1 ? string.Empty : "s")}";
+        }
+
+        return archived;
+    }
+
+    /// <summary>Starts the launch sweep and the hourly inactivity check.</summary>
+    public void StartBackgroundMaintenance()
+    {
+        RunAutoArchive();
+
+        if (_archiveTimer is not null)
+        {
+            return;
+        }
+
+        var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (queue is null)
+        {
+            return;
+        }
+
+        _archiveTimer = queue.CreateTimer();
+        _archiveTimer.Interval = TimeSpan.FromHours(1);
+        _archiveTimer.IsRepeating = true;
+        _archiveTimer.Tick += (_, _) => RunAutoArchive();
+        _archiveTimer.Start();
+    }
+
+    private void RefreshArchiveView()
+    {
+        ArchivedTabCount = ArchivedTabs.Count;
+        ApplyArchiveFilter();
+    }
+
+    private void ApplyArchiveFilter()
+    {
+        var query = ArchiveSearch?.Trim();
+
+        VisibleArchivedTabs.Clear();
+        foreach (var tab in ArchivedTabs)
+        {
+            if (string.IsNullOrEmpty(query)
+                || tab.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || tab.SpaceName.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || tab.Database.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || tab.Content.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                VisibleArchivedTabs.Add(tab);
+            }
+        }
+
+        HasVisibleArchivedTabs = VisibleArchivedTabs.Count > 0;
+    }
+
     /// <summary>Creates and activates a tab bound to <paramref name="databaseName"/> (null = unbound).</summary>
     public TabViewModel CreateTab(string? databaseName)
     {
@@ -155,10 +522,11 @@ public partial class StudioViewModel : ObservableObject
             space,
             string.Empty);
 
-        space.Tabs.Add(tab);
+        // A new tab opens above the other unpinned tabs, like Arc's new-tab row.
+        space.Tabs.Insert(space.Tabs.Count(existing => existing.IsPinned), tab);
         if (ReferenceEquals(space, ActiveSpace))
         {
-            Tabs.Add(tab);
+            RefreshTabSections();
         }
 
         SelectTab(tab);
@@ -421,11 +789,7 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveSpace = space;
 
-        Tabs.Clear();
-        foreach (var item in space.Tabs)
-        {
-            Tabs.Add(item);
-        }
+        RefreshTabSections();
 
         var target = tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault();
         SelectTab(target);
@@ -511,6 +875,8 @@ public partial class StudioViewModel : ObservableObject
         }
 
         ActiveTab = tab;
+        tab.LastAccessedAt = DateTimeOffset.UtcNow;
+        IsArchiveOpen = false;
 
         if (ActiveSpace is not null && ReferenceEquals(tab.Space, ActiveSpace))
         {
@@ -520,6 +886,7 @@ public partial class StudioViewModel : ObservableObject
 
         SyncResultMirror(tab);
         ActiveTabChanged?.Invoke(this, EventArgs.Empty);
+        ScheduleSave();
     }
 
     /// <summary>Points the space's database context at the tab's database and reloads completion.</summary>
@@ -565,10 +932,12 @@ public partial class StudioViewModel : ObservableObject
     public void CloseTab(TabViewModel tab)
     {
         var space = tab.Space;
-        var index = space.Tabs.IndexOf(tab);
 
-        space.Tabs.Remove(tab);
-        Tabs.Remove(tab);
+        // Closing is now non-destructive: the tab moves to the archive page and can be restored.
+        if (!ArchiveTab(tab, notify: false, allowLast: true))
+        {
+            return;
+        }
 
         if (space.Tabs.Count == 0)
         {
@@ -579,26 +948,58 @@ public partial class StudioViewModel : ObservableObject
                 space,
                 string.Empty);
 
-            space.Tabs.Add(replacement);
-            Tabs.Add(replacement);
-            SelectTab(replacement);
-            return;
+            space.Tabs.Insert(0, replacement);
+            if (ReferenceEquals(space, ActiveSpace))
+            {
+                RefreshTabSections();
+                SelectTab(replacement);
+            }
         }
 
-        if (ActiveTab != tab)
+        StatusText = $"Closed {tab.Title} · moved to archive";
+    }
+
+    /// <summary>Rebuilds the pinned and unpinned rail sections from the active space.</summary>
+    private void RefreshTabSections()
+    {
+        Tabs.Clear();
+        PinnedTabs.Clear();
+        UnpinnedTabs.Clear();
+
+        if (ActiveSpace is { } space)
         {
-            return;
+            foreach (var tab in space.Tabs)
+            {
+                Tabs.Add(tab);
+                (tab.IsPinned ? PinnedTabs : UnpinnedTabs).Add(tab);
+            }
         }
 
-        SelectTab(space.Tabs[Math.Clamp(index, 0, space.Tabs.Count - 1)]);
+        HasPinnedTabs = PinnedTabs.Count > 0;
+    }
+
+    /// <summary>Moves every pinned tab to the front, preserving their relative order.</summary>
+    private static void NormalizePinnedOrder(SpaceViewModel space)
+    {
+        var target = 0;
+        foreach (var tab in space.Tabs.Where(candidate => candidate.IsPinned).ToList())
+        {
+            var current = space.Tabs.IndexOf(tab);
+            if (current != target)
+            {
+                space.Tabs.Move(current, target);
+            }
+
+            target++;
+        }
     }
 
     /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
     public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
 
     /// <summary>
-    /// The rail's ListView owns the drag gesture and reorders its mirror collection. Write that
-    /// order back to the space (the persisted source of truth) without rebuilding the list.
+    /// The rail's two ListViews own the drag gesture and reorder their section. Rebuild the
+    /// persisted order as pinned section + unpinned section, without disturbing the lists.
     /// </summary>
     public void SyncTabOrder()
     {
@@ -607,14 +1008,26 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        for (var target = 0; target < Tabs.Count; target++)
+        var ordered = PinnedTabs.Concat(UnpinnedTabs).ToList();
+        if (ordered.Count != space.Tabs.Count)
         {
-            var tab = Tabs[target];
-            var current = space.Tabs.IndexOf(tab);
+            return;
+        }
+
+        for (var target = 0; target < ordered.Count; target++)
+        {
+            var current = space.Tabs.IndexOf(ordered[target]);
             if (current >= 0 && current != target)
             {
                 space.Tabs.Move(current, target);
             }
+        }
+
+        // The sections already reflect the drag; only the full mirror needs rebuilding.
+        Tabs.Clear();
+        foreach (var tab in ordered)
+        {
+            Tabs.Add(tab);
         }
 
         ScheduleSave();
@@ -657,6 +1070,8 @@ public partial class StudioViewModel : ObservableObject
     {
         ActiveSpaceId = ActiveSpace?.Id,
         QueryCounter = _queryCounter,
+        AutoArchiveEnabled = AutoArchiveEnabled,
+        AutoArchiveDays = EffectiveAutoArchiveDays,
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -672,7 +1087,21 @@ public partial class StudioViewModel : ObservableObject
                 Title = tab.Title,
                 Database = tab.Database,
                 Content = tab.Content,
+                Pinned = tab.IsPinned,
+                LastAccessedAt = tab.LastAccessedAt,
             }).ToList(),
+        }).ToList(),
+        ArchivedTabs = ArchivedTabs.Select(tab => new ArchivedTabState
+        {
+            Id = tab.Id,
+            SpaceId = tab.SpaceId,
+            SpaceName = tab.SpaceName,
+            Color = tab.ColorHex,
+            Title = tab.Title,
+            Database = tab.Database,
+            Content = tab.Content,
+            Pinned = tab.IsPinned,
+            ArchivedAt = tab.ArchivedAt,
         }).ToList(),
     };
 
@@ -730,6 +1159,8 @@ public partial class StudioViewModel : ObservableObject
     private void Restore(StudioState state)
     {
         _queryCounter = Math.Max(0, state.QueryCounter);
+        AutoArchiveEnabled = state.AutoArchiveEnabled;
+        AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);
 
         foreach (var spaceState in state.Spaces)
         {
@@ -760,7 +1191,11 @@ public partial class StudioViewModel : ObservableObject
                     tabState.Title,
                     tabState.Database,
                     space,
-                    tabState.Content));
+                    tabState.Content)
+                {
+                    IsPinned = tabState.Pinned,
+                    LastAccessedAt = tabState.LastAccessedAt ?? DateTimeOffset.UtcNow,
+                });
             }
 
             if (space.Tabs.Count == 0)
@@ -768,10 +1203,33 @@ public partial class StudioViewModel : ObservableObject
                 space.Tabs.Add(new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty));
             }
 
+            // Pin state existed before the pinned section; normalise old sessions so pinned
+            // tabs occupy the front of the persisted order.
+            NormalizePinnedOrder(space);
+
             space.LastActiveTab = space.Tabs.FirstOrDefault(tab => tab.Id == spaceState.ActiveTabId) ?? space.Tabs[0];
             LoadSecrets(space);
             TrackSpace(space);
             Spaces.Add(space);
+        }
+
+        foreach (var archived in state.ArchivedTabs)
+        {
+            var color = string.IsNullOrWhiteSpace(archived.Color)
+                ? Spaces.FirstOrDefault(space => space.Id == archived.SpaceId)?.ColorHex
+                    ?? StudioColors.Palette[ArchivedTabs.Count % StudioColors.Palette.Length]
+                : archived.Color;
+
+            ArchivedTabs.Add(new ArchivedTabViewModel(
+                archived.Id,
+                archived.SpaceId,
+                archived.SpaceName,
+                color,
+                archived.Title,
+                archived.Database,
+                archived.Content,
+                archived.Pinned,
+                archived.ArchivedAt));
         }
 
         var active = Spaces.FirstOrDefault(space => space.Id == state.ActiveSpaceId) ?? Spaces[0];
@@ -812,6 +1270,16 @@ public partial class StudioViewModel : ObservableObject
         tab.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(TabViewModel.Content) or nameof(TabViewModel.Title) or nameof(TabViewModel.Database))
+            {
+                if (args.PropertyName == nameof(TabViewModel.Content))
+                {
+                    tab.LastAccessedAt = DateTimeOffset.UtcNow;
+                }
+
+                ScheduleSave();
+            }
+
+            if (args.PropertyName == nameof(TabViewModel.IsPinned))
             {
                 ScheduleSave();
             }
