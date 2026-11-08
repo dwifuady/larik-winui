@@ -31,11 +31,14 @@ It parks and restores `%LOCALAPPDATA%\Larik` state.
 ## Architecture in one paragraph
 
 `Larik.Data` (net10.0, zero package references, no WinUI types) owns the contracts:
-`IDatabaseProvider`, `IDatabaseConnection`, `QueryResult`, `TableSchema`, `ProviderSetting`, and the
-editor-language seam (`IEditorLanguage`, `ISqlDialect`, `SqlLanguage`). `DatabaseProviderCatalog`
-discovers provider implementations from referenced assemblies and Plugins folders. `Larik` (WinUI)
-owns the shell, editor surface, completion engine, snippet store and UI. `Larik.Data.SqlServer` owns
-everything T-SQL: connection/execution, schema introspection and the T-SQL editor language.
+`IDatabaseProvider`, `IDatabaseConnection`, `QueryResult`, `TableSchema`, `ProviderSetting`,
+`SessionTransactionState`, and the editor-language seam (`IEditorLanguage`, `ISqlDialect`,
+`SqlLanguage`). `DatabaseProviderCatalog` discovers provider implementations from referenced
+assemblies and Plugins folders. `Larik` (WinUI) owns the shell, editor surface, completion engine,
+snippet store and UI. Each query tab owns one `IDatabaseConnection` through
+`Larik/Services/QuerySession.cs`; the workspace keeps only a control session for connection state
+and the database list. `Larik.Data.SqlServer` owns everything T-SQL: connection/execution, schema
+introspection, transaction introspection and the T-SQL editor language.
 
 ## Hard rules
 
@@ -61,6 +64,10 @@ everything T-SQL: connection/execution, schema introspection and the T-SQL edito
    a `user_version` migration path. New provider data goes in `ConnectionProfile.Values`.
 8. Follow the existing style: file-scoped namespaces, nullable enabled, `[ObservableProperty]` on
    **partial properties** (not fields — MVVMTK0045 under WinRT/AOT), comments that explain *why*.
+9. **A connection is a session.** The shell creates one `IDatabaseConnection` per query tab. Keep
+   temp tables, `SET` options and transaction state on that instance, never in a shared static or a
+   workspace-level handle. Implement the optional transaction members only when the engine can map
+   its state truthfully.
 
 ## Where things live
 
@@ -69,6 +76,7 @@ everything T-SQL: connection/execution, schema introspection and the T-SQL edito
 | Add a database provider | `docs/PROVIDERS.md` |
 | Understand the editor seam | `Larik/Editor/IEditorSurface.cs`, `Larik.Data/EditorLanguage.cs` |
 | Change highlighting/splitting | `Larik.Data/SqlLanguage.cs`, provider dialect |
+| Per-tab session / transactions | `Larik/Services/QuerySession.cs`, `Larik/ViewModels/TabViewModel.cs` |
 | Change completion | `Larik/Services/CompletionEngine.cs`, `StudioCompletionSource.cs` |
 | Connection UI | `ProviderSetting` in `Larik.Data/Contracts.cs`, `MainPage.xaml.cs` dialog |
 | Persistence | `Larik/Services/StudioStore.cs` |
@@ -80,7 +88,8 @@ everything T-SQL: connection/execution, schema introspection and the T-SQL edito
 
 1. New assembly targeting `net10.0`, referencing `Larik.Data` (and the client library, e.g. Npgsql).
 2. Implement `IDatabaseProvider` (Id, DisplayName, Dialect, Settings, CreateConnection).
-3. Implement `IDatabaseConnection` (open/close, databases, execute/batch, schema, row caps).
+3. Implement `IDatabaseConnection` (open/close, databases, execute/batch, schema, row caps, and the
+   optional transaction members if the engine supports interactive transactions).
 4. Implement an editor language: `ISqlDialect` + `SqlLanguage` for SQL engines, or
    `IEditorLanguage` for non-SQL engines (MongoDB). Return it from
    `IDatabaseProvider.EditorLanguage`.

@@ -20,18 +20,25 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
 | `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `GeneratedQuery`. |
 | `TableSchema` / `ForeignKeySchema` | Table name, optional `Schema`, columns, primary key, foreign keys (with `ReferencedSchema`). |
 | `QueryExecutionOptions` | `MaxRows` with a 5,000 default / 100,000 ceiling. |
-| `IEditorLanguage` | `Id`, `Tokenize`, `Split`, `StatementAt`. Non-SQL engines implement this. |
+| `SessionTransactionState` | `TransactionCount`, `XactState`, `HasTransaction`, `IsDoomed`, `CanCommit`, `CanRollback`. |
+| `IEditorLanguage` | `Id`, `Tokenize`, `Split`, `SplitBatches`, `StatementAt`. Non-SQL engines implement this. |
 | `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `QuoteIdentifier`. |
 | `SqlLanguage` / `SqlLanguageOptions` | Reusable SQL lexer/splitter; provider assemblies subclass it. |
 
-`IDatabaseConnection` already uses default interface members for the row-cap overload and
-`ExecuteBatchAsync`, so providers written against an older contract keep compiling and running.
+`IDatabaseConnection` already uses default interface members for the row-cap overload,
+`ExecuteBatchAsync` and the transaction members, so providers written against an older contract keep
+compiling and running.
+
+**A connection is a session, not a shared server handle.** `ConnectionViewModel.CreateSession()` is
+called once per query tab; the workspace keeps only a control session for connection state and the
+database list. Providers must keep per-tab state (temp tables, `SET` options, an open transaction) on
+the `IDatabaseConnection` instance they return.
 
 ### A minimal provider
 
@@ -199,7 +206,52 @@ reintroduce a global SQL splitter in `Larik`.
 
 ---
 
-## 4. Schema metadata
+## 4. Sessions and transactions
+
+The shell creates one `IDatabaseConnection` per query tab (`ConnectionViewModel.CreateSession()`),
+opens it lazily, and keeps it for the tab's lifetime. The workspace's own connection is only the
+control session used for connection state and the database list. Consequences:
+
+- A transaction, temp table, `SET` option or isolation level belongs to the tab that issued it.
+- F5 sends one `ExecuteBatchAsync` call per editor batch on the tab's session, so a `GO` boundary
+  starts a new server batch while the session — and its `USE`, temp tables and transaction — carries
+  across.
+- The shell refuses to switch database, change the connection profile or disconnect while a tab has
+  an open transaction; closing a tab prompts to roll it back (and stops a running query first).
+- `QuerySession` refreshes the transaction state after every batch in a `finally`, even when the
+  batch failed or was cancelled, so the guard never reflects stale server state.
+
+### Transaction contract
+
+```csharp
+bool SupportsTransactions => false;
+
+Task<SessionTransactionState> GetTransactionStateAsync(CancellationToken ct = default) =>
+    Task.FromResult(SessionTransactionState.None);
+
+Task CommitTransactionAsync(CancellationToken ct = default) =>
+    throw new NotSupportedException("This provider does not support transactions.");
+
+Task RollbackTransactionAsync(CancellationToken ct = default) =>
+    throw new NotSupportedException("This provider does not support transactions.");
+```
+
+- Leaving `SupportsTransactions` false (the default) is correct for engines without interactive
+  transactions. The shell hides the guard, and `BEGIN`/`COMMIT` are then ordinary SQL text.
+- When true, return the session's current state from `GetTransactionStateAsync`:
+  `TransactionCount > 0` means open, `XactState == 1` means committable, `XactState < 0` means
+  doomed/aborted and rollback-only. SQL Server reads `@@TRANCOUNT` and `XACT_STATE()`.
+- PostgreSQL has no nested transactions: map `BEGIN` to count 1, an aborted transaction to
+  `XactState = -1`, and (optionally) detect `idle in transaction` via `pg_stat_activity`. Savepoints
+  remain SQL text; the shell only offers a whole-transaction commit/rollback.
+- MongoDB can opt in later with the same members if multi-document transactions are supported; for
+  a first plugin, leaving the defaults is fine.
+- The transaction guard is per tab, not global. Never share one physical connection between
+  sessions unless the engine's transaction state is genuinely per connection and you can map it.
+
+---
+
+## 5. Schema metadata
 
 ```csharp
 new TableSchema
@@ -224,12 +276,14 @@ completion learns about it.
 
 ---
 
-## 5. Result details
+## 6. Result details
 
 - Stop reading at `QueryExecutionOptions.EffectiveMaxRows + 1`; set `IsTruncated` and `RowLimit`.
   The default is 5,000 rows; the ceiling is 100,000.
-- `ExecuteBatchAsync` returns one `QueryResult` per result set. Return one per statement even if
-  only one has columns.
+- `ExecuteBatchAsync` returns one `QueryResult` per result set. The shell calls it once per editor
+  batch (see §4), so a provider must keep session state on the connection instance rather than
+  assuming a fresh connection per call.
+- Return one result per statement even if only one has columns.
 - `QueryResult.Error` is the shape for a statement error (the grid shows the message and timing).
 - `QueryResult.GeneratedQuery` is for engines that translate user text. Example: a MongoDB provider
   compiling a SQL `SELECT` to an aggregation pipeline can report the pipeline it actually ran. The
@@ -237,7 +291,7 @@ completion learns about it.
 
 ---
 
-## 6. Plugin discovery today
+## 7. Plugin discovery today
 
 `DatabaseProviderCatalog.Initialize` scans:
 
@@ -268,7 +322,7 @@ manifest, unload) only when third-party plugins are actually expected.
 
 ---
 
-## 7. Blueprint: PostgreSQL (built-in next)
+## 8. Blueprint: PostgreSQL (built-in next)
 
 1. New project `Larik.Data.Postgres` (`net10.0`), reference `Larik.Data` and `Npgsql`.
 2. `PostgresProvider : IDatabaseProvider` — `Id = "postgres"`, `Dialect = "postgres"`,
@@ -283,7 +337,11 @@ manifest, unload) only when third-party plugins are actually expected.
    - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema` and
      `ForeignKeySchema.ReferencedSchema`;
    - row caps and cancellation;
-   - `ExecuteBatchAsync` may split on `;` only outside strings/comments/dollar quotes.
+   - `ExecuteBatchAsync` may split on `;` only outside strings/comments/dollar quotes;
+   - transactions: `SupportsTransactions => true`, `GetTransactionStateAsync` mapping
+     `TransactionStatus`/`idle in transaction`, and commit/rollback executed on the current
+     per-database connection. Remember the shell refreshes state after every batch, including a
+     failed one.
 4. `PostgresDialect : SqlLanguage, ISqlDialect` — keywords, functions, `"` quoting, no `GO`, no
    `@` variables. Add dollar-quote support to `SqlLanguageOptions` when you get there.
 5. Register in `Larik/App.xaml.cs` (`typeof(PostgresProvider).Assembly`) and reference the project
@@ -295,7 +353,7 @@ provider-driven `ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`
 
 ---
 
-## 8. Blueprint: MongoDB (plugin)
+## 9. Blueprint: MongoDB (plugin)
 
 MongoDB is **not** a SQL dialect. The reference Tauri app (`C:\dev\larik-sql-studio`) demonstrates
 the shape:
@@ -335,12 +393,16 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 
 ---
 
-## 9. Checklist for a new provider
+## 10. Checklist for a new provider
 
 - [ ] Assembly targets `net10.0`; references `Larik.Data` only at the contract boundary.
 - [ ] `Id` is stable (stored in `spaces.provider_id`); `Dialect` matches snippet scopes.
 - [ ] `Settings` covers every connection field; secrets use `ProviderSettingKind.Password`.
 - [ ] `CreateConnection` returns a fresh session; `OpenAsync` fails fast with a useful message.
+- [ ] Per-tab state (temp tables, `SET`, transactions) lives on that instance, not in a shared field.
+- [ ] If the engine supports interactive transactions, implement `SupportsTransactions`,
+      `GetTransactionStateAsync`, `CommitTransactionAsync` and `RollbackTransactionAsync`; otherwise
+      leave the defaults.
 - [ ] `GetDatabasesAsync` works for a least-privileged login.
 - [ ] `ExecuteAsync` honours `EffectiveMaxRows`, sets `IsTruncated`/`RowLimit`, and reports errors via
       `QueryResult.Error`.
@@ -357,7 +419,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 
 ---
 
-## 10. Known gaps (honest list)
+## 11. Known gaps (honest list)
 
 | Area | State |
 |---|---|
@@ -372,5 +434,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 | Non-SQL completion | No contributor seam yet (see MongoDB blueprint). |
 | Plugin isolation | `Assembly.LoadFrom` in the default context; no unload, no dependency resolver, no manifest. |
 | Trimming | Release uses `PublishTrimmed`; no `TrimmerRootAssembly` for `Larik.Data` yet. |
-| Transactions | There is no transaction contract member. Statements are executed independently; `BEGIN`/`COMMIT` are ordinary SQL text. |
+| Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it; other providers keep the defaults until they map their own state. |
+| App exit | Closing a tab or disconnecting rolls back; closing the whole app relies on the server rolling back when its sessions end. There is no app-exit prompt. |
+| A failing statement stops the rest of its `GO` batch | SQL Server executes a `GO` batch natively, so the first server error ends the remaining statements in that batch. The shell already sends each `GO` batch separately; split-and-execute per statement as well if every statement must report independently. |
 | `GeneratedQuery` UI | Field exists; no result-tab bar yet. |
