@@ -10,9 +10,15 @@ C:\dev\larik-winui\
 ├── Larik.slnx                    # solution (app + provider assemblies)
 ├── Larik.Data/                   # provider contracts + catalog + Demo provider (net10.0)
 │   ├── Contracts.cs              # IDatabaseProvider, IDatabaseConnection, QueryResult, settings schema
+│   ├── EditorLanguage.cs         # IEditorLanguage/ISqlDialect, QueryToken, StatementSpan
+│   ├── SqlLanguage.cs            # shared SQL lexer/splitter + generic fallback
 │   ├── DatabaseProviderCatalog.cs# discovers providers from assemblies + Plugins folders
 │   └── Demo/DemoProvider.cs      # in-memory provider (sample workspaces + UI tests)
 ├── Larik.Data.SqlServer/         # SQL Server provider on Microsoft.Data.SqlClient
+│   └── TSqlDialect.cs            # T-SQL editor language (keywords, quoting, GO, splitting)
+├── Larik.Data.Tests/             # editor-language golden tests (net10.0, xUnit)
+├── docs/PROVIDERS.md             # provider handbook (contracts, blueprints, gaps)
+├── AGENTS.md                     # repo rules + build/verify guide for contributors/AI agents
 ├── Larik/                        # WinUI 3 app (net10.0-windows10.0.26100.0, WASDK 2.6)
 │   ├── Themes/StudioTheme.xaml   # DESIGN.md tokens as Light/Dark/HighContrast brushes
 │   ├── Models/StudioModels.cs    # Snippet, CompletionItem
@@ -27,7 +33,7 @@ C:\dev\larik-winui\
 │   │   ├── SecretStore.cs        # Windows Credential Manager for provider password fields
 │   │   └── StudioColors.cs       # space palette + active-tab tint
 │   ├── ViewModels/               # Studio / Space / Connection / Database / Tab / ArchivedTab
-│   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
+│   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, language, completion, commands
 │   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
 │   ├── SettingsPage.xaml(.cs)    # settings shell + snippet manager (create/edit/enable/reset/delete)
@@ -45,6 +51,8 @@ winapp run . --detach --json     # builds, registers a debug identity, launches
 ## Verify
 
 ```powershell
+dotnet build Larik.slnx
+dotnet test Larik.Data.Tests\Larik.Data.Tests.csproj
 cd C:\dev\larik-winui\Larik
 powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
 ```
@@ -92,8 +100,9 @@ public sealed class PostgresProvider : IDatabaseProvider
 }
 ```
 
-The app never references a specific provider. `DatabaseProviderCatalog` finds implementations in
-the app's referenced provider assemblies plus every DLL dropped into:
+The shell and editor never reference a specific provider; only the composition root lists the
+built-in assemblies. `DatabaseProviderCatalog` finds implementations in the app's referenced
+provider assemblies plus every DLL dropped into:
 
 - `<app dir>\Plugins`
 - `%LOCALAPPDATA%\Larik\Plugins` (where user-installed plugins belong; the MSIX install folder is read-only)
@@ -102,6 +111,16 @@ The connection dialog builds its form from `ProviderSetting` (text/password/numb
 new provider gets a working configuration UI with no app changes. Providers are trusted code:
 only drop DLLs you have built or reviewed. Load failures are reported in the dialog instead of
 crashing the app.
+
+### Editor languages
+
+A provider also owns how its text is painted and split. Return an `ISqlDialect` for a SQL engine or
+a plain `IEditorLanguage` for a non-SQL engine from `IDatabaseProvider.EditorLanguage`; null means
+the generic SQL fallback. The seam covers tokenizing on the typing debounce, statement boundaries
+for Ctrl+Enter/F5, and the keyword/function/table-context lists used by completion. SQL Server's
+`TSqlDialect` is the reference implementation. Adding PostgreSQL or MongoDB means a new provider
+assembly, not an editor change; [`docs/PROVIDERS.md`](docs/PROVIDERS.md) has the blueprints and the
+contract-compatibility rules.
 
 `TableSchema` also carries `PrimaryKey` and `ForeignKeys`. Providers that report them get
 foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes` and
@@ -184,8 +203,8 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the driver (unlike SSMS/sqlcmd) does not understand `GO`. The toolbar Run button follows
   Ctrl+Enter, and Ctrl+\ runs the current statement into a new result tab. Run state is per tab:
   the toolbar disables Run and shows **Stop**, which cancels the command without closing the
-  session. The statement splitter understands strings, quoted identifiers, line/block comments and
-  `GO` separators (including indented `GO`).
+  session. The active provider's editor language owns tokenizing and boundaries; T-SQL understands
+  strings, quoted identifiers, line/block comments and `GO` separators (including indented `GO`).
 - **Transactions, visibly**: because each tab owns a session, `BEGIN TRAN` / `COMMIT` /
   `ROLLBACK` behave per tab. After every run the app reads `@@TRANCOUNT` and `XACT_STATE()` and shows
   a `TXN` badge on the tab plus a status-bar guard ("1 open transaction") with **Commit** and
@@ -242,18 +261,19 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
   running a query while another tab is active writes to the tab that started it.
-- **Syntax highlighting**: keywords, functions, strings, numbers, variables and comments are
-  coloured live with theme-aware tokens (`StudioSyntax*Brush`, HighContrast falls back to the
-  system text colour). The editor tokenizes on a 140 ms debounce so typing never waits for a
-  repaint. Character formatting is kept out of the undo stack: the surface owns text snapshots, so
-  Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than colours.
+- **Syntax highlighting**: the active provider's `IEditorLanguage` classifies keywords, functions,
+  strings, numbers, variables and comments live with theme-aware tokens (`StudioSyntax*Brush`,
+  HighContrast falls back to the system text colour). The editor tokenizes on a 140 ms debounce so
+  typing never waits for a repaint. Character formatting is kept out of the undo stack: the surface
+  owns text snapshots, so Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than
+  colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with connection + `Ln/Col`, splitter between editor and results.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
-  (text, caret, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`, `FocusEditor`),
-  so the editor can be swapped for a WebView2/Monaco island without changing the rail, tabs,
-  spaces, toolbar or results. `Services/StudioCompletionSource.cs` bridges snippets + schema into
-  whichever surface is mounted.
+  (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
+  `FocusEditor`), so the editor can be swapped for a WebView2/Monaco island without changing the
+  rail, tabs, spaces, toolbar or results. `Services/StudioCompletionSource.cs` bridges snippets +
+  schema + the active dialect into whichever surface is mounted.
 - **Native chrome**: the window uses a `MicaBackdrop`; the rail, toolbar and status bar are
   transparent so they read as one chrome surface with the title bar, and only real content sits on
   Fluent card brushes (`CardBackgroundFillColorDefaultBrush`). Falls back to the design's solid
@@ -263,9 +283,9 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 
 | Gap | Why / next step |
 |---|---|
-| Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB are drop-in assemblies (see above), not app changes. |
-| Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Only the MSSQL function list ships. |
-| Current-statement splitting is lexical | Semicolons and `GO` delimit statements outside strings, identifiers and comments, so a `CREATE PROCEDURE` body with inner semicolons still splits. Nested `BEGIN/END` awareness needs the same AST work as completion. |
+| Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB only need new provider assemblies (see above and `docs/PROVIDERS.md`), not app changes. |
+| Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
+| Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |

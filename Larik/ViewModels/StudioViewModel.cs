@@ -164,6 +164,13 @@ public partial class StudioViewModel : ObservableObject
     public IReadOnlyList<SnippetDef> Snippets =>
         _snippets.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
 
+    /// <summary>
+    /// Editor language of the active workspace, used for highlighting, statement runs and
+    /// completion metadata. Falls back to generic SQL when there is no provider.
+    /// </summary>
+    public IEditorLanguage ActiveLanguage =>
+        ActiveSpace?.Connection.EditorLanguage ?? GenericSqlLanguage.Default;
+
     /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
     public IReadOnlyList<TableSchema> Tables => _schema;
 
@@ -627,6 +634,7 @@ public partial class StudioViewModel : ObservableObject
         ClearSchema();
         ActiveSpace.UpdateDatabases([]);
         OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveLanguage));
         StatusText = $"{ActiveSpace.Name} → {ActiveSpace.Connection.ProviderName}";
         ScheduleSave();
 
@@ -966,6 +974,7 @@ public partial class StudioViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveLanguage));
         OnPropertyChanged(nameof(ActiveSpace));
     }
 
@@ -1641,6 +1650,7 @@ public partial class StudioViewModel : ObservableObject
 
         // Snippets are scoped per dialect, which the connection decides.
         OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveLanguage));
     }
 
     private void Seed()

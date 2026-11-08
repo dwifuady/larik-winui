@@ -1,3 +1,4 @@
+using Larik.Data;
 using Larik.Models;
 
 namespace Larik.Editor;
@@ -31,9 +32,13 @@ public readonly record struct EditorSpan(int Start, int Length)
 
 /// <summary>
 /// The text window the editor is asking about. Implementations pass the document and the caret
-/// offset rather than a pre-parsed word, so every surface shares one context extraction.
+/// offset rather than a pre-parsed word, so every surface shares one context extraction. The
+/// language lets a provider-specific surface answer with its own keywords.
 /// </summary>
-public sealed record CompletionQuery(string DocumentText, int CaretOffset);
+public sealed record CompletionQuery(
+    string DocumentText,
+    int CaretOffset,
+    IEditorLanguage? Language = null);
 
 /// <summary>What the shell knows that the editor needs in order to suggest anything.</summary>
 public interface IEditorCompletionSource
@@ -72,6 +77,13 @@ public interface IEditorSurface
 
     /// <summary>Supplies snippets/keywords/schema. The shell swaps this when the space or schema changes.</summary>
     IEditorCompletionSource? CompletionSource { get; set; }
+
+    /// <summary>
+    /// The active editor language: tokens for highlighting, spans for statement runs and (for SQL)
+    /// dialect metadata for completion. The shell resolves this from the active connection; the
+    /// surface falls back to generic SQL when it has nothing better.
+    /// </summary>
+    IEditorLanguage EditorLanguage { get; set; }
 
     /// <summary>Raised for user edits only.</summary>
     event EventHandler? TextChanged;

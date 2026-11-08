@@ -130,6 +130,13 @@ public sealed class QueryResult
 
     public int? RowLimit { get; init; }
 
+    /// <summary>
+    /// The native query actually executed, when a provider compiles the user's text into something
+    /// else (for example a MongoDB aggregation pipeline compiled from a SQL SELECT). Null when the
+    /// executed text is what the user wrote.
+    /// </summary>
+    public string? GeneratedQuery { get; init; }
+
     public static QueryResult Error(string message, TimeSpan elapsed, string? database = null) => new()
     {
         Columns = [],
@@ -149,12 +156,23 @@ public sealed record ForeignKeySchema(
     string Constraint,
     string Column,
     string ReferencedTable,
-    string ReferencedColumn);
+    string ReferencedColumn)
+{
+    /// <summary>
+    /// Schema of the referenced table, when the engine has schemas. An init property rather than a
+    /// constructor parameter on purpose: external providers built against the four-argument
+    /// constructor keep working.
+    /// </summary>
+    public string? ReferencedSchema { get; init; }
+}
 
 /// <summary>Tables and columns, used to feed completion after a connection opens.</summary>
 public sealed class TableSchema
 {
     public required string Name { get; init; }
+
+    /// <summary>Schema the table lives in ("dbo", "public"), when the engine has schemas.</summary>
+    public string? Schema { get; init; }
 
     public required IReadOnlyList<string> Columns { get; init; }
 
@@ -168,6 +186,13 @@ public sealed class TableSchema
 /// <summary>
 /// A database provider (SQL Server today, PostgreSQL or MongoDB later). Implement this in a
 /// separate assembly and drop it into the Plugins folder — no app changes required.
+/// <para>
+/// Contract compatibility rule: this interface is loaded by plugins built against older versions,
+/// so changes are ADD-ONLY and every added member needs a default implementation (see
+/// <see cref="EditorLanguage"/> and <see cref="IDatabaseConnection.ExecuteBatchAsync"/>). Never
+/// rename or remove a member, and never add positional parameters to contract records; add nullable
+/// init properties instead. Breaking these rules makes previously working plugins fail at runtime.
+/// </para>
 /// </summary>
 public interface IDatabaseProvider
 {
@@ -181,6 +206,13 @@ public interface IDatabaseProvider
 
     /// <summary>Fields the configuration UI renders for this provider.</summary>
     IReadOnlyList<ProviderSetting> Settings { get; }
+
+    /// <summary>
+    /// The editor language this provider owns: tokenizing, statement splitting and (for SQL)
+    /// completion metadata. Null means the host's generic SQL fallback, which is the historical
+    /// behaviour, so providers written before this member existed keep working unchanged.
+    /// </summary>
+    IEditorLanguage? EditorLanguage => null;
 
     IDatabaseConnection CreateConnection(ConnectionProfile profile);
 }
