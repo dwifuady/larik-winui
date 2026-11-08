@@ -40,7 +40,12 @@ public partial class StudioViewModel : ObservableObject
             SelectSpace(Spaces[0]);
         }
 
-        ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
+        // The empty results pane names the next action. It only does so while the workspace is
+        // disconnected: a hint that says "Connect…" next to a connected rail is dishonest.
+        if (ActiveSpace?.IsConnected != true)
+        {
+            ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
+        }
 
         RefreshArchiveView();
 
@@ -133,6 +138,7 @@ public partial class StudioViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SidebarVisibility))]
+    [NotifyPropertyChangedFor(nameof(ContextBadgeVisibility))]
     public partial bool IsSidebarOpen { get; set; }
 
     [ObservableProperty]
@@ -158,6 +164,12 @@ public partial class StudioViewModel : ObservableObject
     public partial bool IsBusy { get; set; }
 
     public Visibility SidebarVisibility => IsSidebarOpen ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// The toolbar repeats the rail's database badge only when the rail is hidden; showing both at
+    /// once is the same fact twice, which is what made the chrome feel noisy.
+    /// </summary>
+    public Visibility ContextBadgeVisibility => IsSidebarOpen ? Visibility.Collapsed : Visibility.Visible;
 
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 
@@ -594,54 +606,101 @@ public partial class StudioViewModel : ObservableObject
         return space;
     }
 
-    /// <summary>Applies provider + profile from the connection dialog, then connects.</summary>
-    public async Task ApplyConnectionSettingsAsync(string providerId, ConnectionProfile profile, bool connect)
+    /// <summary>
+    /// Saves a workspace as one object: its name, colour and connection (a workspace owns exactly
+    /// one connection, so editing one is editing the other). The connection is rebuilt only when it
+    /// actually changed, so renaming never drops a live session; when it did change, the workspace
+    /// on screen reconnects. Returns null on success, or the reason the edit was refused.
+    /// </summary>
+    public async Task<string?> ApplyWorkspaceSettingsAsync(
+        SpaceViewModel space,
+        string name,
+        string colorHex,
+        string providerId,
+        ConnectionProfile profile)
     {
-        if (ActiveSpace is null)
+        RenameSpace(space, name);
+        if (!string.IsNullOrWhiteSpace(colorHex))
         {
-            return;
+            space.ColorHex = colorHex;
         }
 
-        if (ActiveSpace.Tabs.Any(tab => tab.IsRunning))
+        var connectionChanged = !ConnectionMatches(space.Connection, providerId, profile);
+        var isActive = ReferenceEquals(space, ActiveSpace);
+
+        if (connectionChanged)
         {
-            StatusText = "Stop the running query before changing the connection.";
-            return;
+            if (space.Tabs.Any(tab => tab.IsRunning))
+            {
+                return "Stop the running query before changing the connection.";
+            }
+
+            if (space.Tabs.Any(tab => tab.HasOpenTransaction))
+            {
+                return "Roll back open transactions before changing the connection.";
+            }
+
+            // Existing tab sessions belong to the old profile; close them before the profile swaps.
+            foreach (var tab in space.Tabs)
+            {
+                await tab.CloseSessionAsync(CancellationToken.None);
+            }
+
+            var previousProvider = space.Connection.Provider;
+            var previousProviderId = space.Connection.ProviderId;
+
+            await space.Connection.ReconfigureAsync(providerId, profile);
+            if (!string.Equals(previousProviderId, providerId, StringComparison.OrdinalIgnoreCase))
+            {
+                DeleteSecrets(space, previousProvider);
+            }
+
+            PersistSecrets(space);
+            space.UpdateDatabases([]);
+            _schemaCache.Clear();
+            StatusText = $"{space.Name} → {space.Connection.ProviderName}";
         }
 
-        if (ActiveSpace.Tabs.Any(tab => tab.HasOpenTransaction))
-        {
-            StatusText = "Roll back open transactions before changing the connection.";
-            return;
-        }
-
-        // Existing tab sessions belong to the old profile; close them before the profile swaps.
-        foreach (var tab in ActiveSpace.Tabs)
-        {
-            await tab.CloseSessionAsync(CancellationToken.None);
-        }
-
-        var previousProvider = ActiveSpace.Connection.Provider;
-        var previousProviderId = ActiveSpace.Connection.ProviderId;
-
-        await ActiveSpace.Connection.ReconfigureAsync(providerId, profile);
-        if (!string.Equals(previousProviderId, providerId, StringComparison.OrdinalIgnoreCase))
-        {
-            DeleteSecrets(ActiveSpace, previousProvider);
-        }
-
-        PersistSecrets(ActiveSpace);
-        _schemaCache.Clear();
-        ClearSchema();
-        ActiveSpace.UpdateDatabases([]);
-        OnPropertyChanged(nameof(Snippets));
-        OnPropertyChanged(nameof(ActiveLanguage));
-        StatusText = $"{ActiveSpace.Name} → {ActiveSpace.Connection.ProviderName}";
         ScheduleSave();
 
-        if (connect)
+        if (!isActive)
         {
-            await ConnectSpaceAsync(ActiveSpace);
+            // Editing a workspace you are not in must not change what is on screen, so it stays
+            // disconnected until it is selected and connected from there.
+            return null;
         }
+
+        if (connectionChanged)
+        {
+            ClearSchema();
+            OnPropertyChanged(nameof(Snippets));
+            OnPropertyChanged(nameof(ActiveLanguage));
+
+            // New connection settings imply using them: the workspace on screen reconnects.
+            await ConnectSpaceAsync(space);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Fills the provider's password fields from the credential store so the settings form shows the
+    /// value the connection will actually use; an untouched password is then saved unchanged.
+    /// </summary>
+    public void PrepareConnectionEdit(SpaceViewModel space) => LoadSecrets(space);
+
+    /// <summary>True when the connection already holds exactly this provider and profile.</summary>
+    private static bool ConnectionMatches(ConnectionViewModel connection, string providerId, ConnectionProfile profile)
+    {
+        if (!string.Equals(connection.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
+            || connection.Profile.Values.Count != profile.Values.Count)
+        {
+            return false;
+        }
+
+        return profile.Values.All(pair =>
+            connection.Profile.Values.TryGetValue(pair.Key, out var current)
+            && string.Equals(current, pair.Value, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1007,6 +1066,23 @@ public partial class StudioViewModel : ObservableObject
         {
             ActiveSpace.ColorHex = hex;
         }
+    }
+
+    /// <summary>
+    /// Renames a workspace from the switcher. A blank name is ignored so the rail never loses the
+    /// label that identifies it; <see cref="TrackSpace"/> persists the change.
+    /// </summary>
+    public bool RenameSpace(SpaceViewModel space, string name)
+    {
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0 || string.Equals(trimmed, space.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        space.Name = trimmed;
+        StatusText = $"Renamed workspace to {trimmed}";
+        return true;
     }
 
     /// <summary>
@@ -1494,6 +1570,12 @@ public partial class StudioViewModel : ObservableObject
 
             if (ReferenceEquals(space, ActiveSpace))
             {
+                // The "connect first" hint is no longer true once the connection is open.
+                if (ResultMessage.StartsWith("Connect the workspace", StringComparison.Ordinal))
+                {
+                    ResultMessage = string.Empty;
+                }
+
                 if (ActiveTab is { } tab)
                 {
                     // Keep the tab's database when the server still exposes it; otherwise adopt
@@ -1524,7 +1606,8 @@ public partial class StudioViewModel : ObservableObject
                 }
             }
 
-            StatusText = $"Connected · {space.Connection.Endpoint} · {databases.Count} databases";
+            var databaseLabel = databases.Count == 1 ? "1 database" : $"{databases.Count} databases";
+            StatusText = $"Connected · {space.Connection.Endpoint} · {databaseLabel}";
         }
         catch (Exception ex)
         {

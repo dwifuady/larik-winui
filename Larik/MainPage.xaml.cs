@@ -4,15 +4,16 @@ using Larik.Editor;
 using Larik.Services;
 using Larik.ViewModels;
 using Microsoft.UI.Composition.SystemBackdrops;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
-using Windows.Foundation;
 using Windows.UI.ViewManagement;
 
 namespace Larik;
@@ -636,86 +637,283 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void SpaceSwitcher_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// The workspace panel. Its one job is switching, so the current workspace's identity controls
+    /// stay at the top (colour), then its connection, then the list, then creation. It also opens
+    /// from the toolbar badge while the rail is collapsed, which is why the connection action is
+    /// repeated here: the rail is not always on screen to carry it.
+    /// </summary>
+    private void SpaceSwitcher_Click(object sender, RoutedEventArgs e) => ShowWorkspaceFlyout(SpaceSwitcherButton);
+
+    private void ContextBadge_Click(object sender, RoutedEventArgs e) => ShowWorkspaceFlyout(ContextBadgeButton);
+
+    private void ShowWorkspaceFlyout(FrameworkElement anchor)
     {
-        var flyout = new MenuFlyout();
+        var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var panel = new StackPanel { MinWidth = 288, Spacing = 2 };
 
-        // The connection belongs to the active workspace, so its actions live with the workspace menu.
-        var toggle = new MenuFlyoutItem
+        var flyout = new Flyout
         {
-            Text = ViewModel.ActiveSpace?.Connection.ConnectionActionLabel ?? "Connect",
-            Command = ViewModel.ToggleConnectionCommand,
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft,
+            ShouldConstrainToRootBounds = true,
         };
-        flyout.Items.Add(toggle);
 
-        var settings = new MenuFlyoutItem
+        if (ViewModel.ActiveSpace is { } active)
         {
-            Text = "Connection settings…",
-            Icon = new FontIcon { Glyph = "\uE713" },
-        };
-        settings.Click += async (_, _) => await ShowConnectionDialogAsync();
-        flyout.Items.Add(settings);
+            // The host detail the rail trims away; it says what Connect would connect to.
+            panel.Children.Add(new TextBlock
+            {
+                Margin = new Thickness(12, 8, 12, 6),
+                FontSize = 10,
+                Foreground = mutedBrush,
+                Text = active.Connection.StatusLine,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
 
-        var archive = new MenuFlyoutItem
+            // The one action for the line above it. Identity and connection settings live on the
+            // workspace's own row (the pencil), so this panel never grows a second editor.
+            panel.Children.Add(CreateFlyoutAction(
+                "\uE7E8",
+                active.Connection.ConnectionActionLabel,
+                async () =>
+                {
+                    flyout.Hide();
+                    await ViewModel.ToggleConnectionCommand.ExecuteAsync(null);
+                }));
+        }
+
+        panel.Children.Add(CreateFlyoutSeparator());
+        panel.Children.Add(new TextBlock
         {
-            Text = "Archive",
-            Icon = new FontIcon { Glyph = "\uE81C" },
-        };
-        archive.Click += (_, _) => ViewModel.OpenArchiveCommand.Execute(null);
-        flyout.Items.Add(archive);
-
-        flyout.Items.Add(new MenuFlyoutSeparator());
+            Margin = new Thickness(12, 6, 12, 2),
+            CharacterSpacing = 120,
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = mutedBrush,
+            Text = "WORKSPACES",
+        });
 
         foreach (var space in ViewModel.Spaces)
         {
-            var item = new RadioMenuFlyoutItem
+            panel.Children.Add(CreateWorkspaceRow(space, flyout));
+        }
+
+        panel.Children.Add(CreateFlyoutSeparator());
+        panel.Children.Add(CreateFlyoutAction("\uE710", "New workspace", async () =>
+        {
+            flyout.Hide();
+            await ShowWorkspaceDialogAsync();
+        }));
+
+        flyout.Content = panel;
+        flyout.ShowAt(anchor);
+    }
+
+    /// <summary>A workspace row: click to switch, the pencil renames it in place.</summary>
+    private FrameworkElement CreateWorkspaceRow(SpaceViewModel space, Flyout flyout)
+    {
+        var primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
+        var accentBrush = (Brush)Application.Current.Resources["StudioAccentBrush"];
+        var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
+
+        var content = new Grid { ColumnSpacing = 8 };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var dot = new Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Fill = space.AccentBrush,
+        };
+
+        var name = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 12,
+            FontWeight = space.IsActive ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = space.IsActive ? primaryBrush : secondaryBrush,
+            Text = space.Name,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var check = new FontIcon
+        {
+            FontSize = 10,
+            Foreground = accentBrush,
+            Glyph = "\uE73E",
+            Visibility = space.IsActive ? Visibility.Visible : Visibility.Collapsed,
+        };
+
+        Grid.SetColumn(name, 1);
+        Grid.SetColumn(check, 2);
+        content.Children.Add(dot);
+        content.Children.Add(name);
+        content.Children.Add(check);
+
+        var switchButton = new Button
+        {
+            Height = 36,
+            Padding = new Thickness(10, 0, 10, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = content,
+            Style = iconStyle,
+        };
+
+        AutomationProperties.SetName(switchButton, space.Name);
+        ToolTipService.SetToolTip(switchButton, space.TooltipText);
+        switchButton.Click += (_, _) =>
+        {
+            flyout.Hide();
+            ViewModel.SelectSpace(space);
+        };
+
+        var edit = new Button
+        {
+            Width = 28,
+            Height = 36,
+            Padding = new Thickness(0),
+            Opacity = 0.8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = new FontIcon { FontSize = 10, Glyph = "\uE70F" },
+            Style = iconStyle,
+        };
+
+        AutomationProperties.SetName(edit, $"Edit {space.Name}");
+        ToolTipService.SetToolTip(edit, "Workspace settings");
+        edit.Click += async (_, _) =>
+        {
+            flyout.Hide();
+            await ShowWorkspaceDialogAsync(space);
+        };
+
+        var inner = new Grid { Height = 36, ColumnSpacing = 2 };
+        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        inner.Children.Add(switchButton);
+        Grid.SetColumn(edit, 1);
+        inner.Children.Add(edit);
+
+        // Arc marks the active workspace with its tint, not only a check mark. The tint covers the
+        // edit affordance too so the row reads as one object, and never sits in the switch hit area.
+        var row = new Border
+        {
+            Margin = new Thickness(4, 0, 4, 0),
+            Background = space.IsActive ? space.ActiveTintBrush : null,
+            Child = inner,
+            CornerRadius = new CornerRadius(6),
+        };
+        return row;
+    }
+
+    private static Border CreateFlyoutSeparator() => new()
+    {
+        Height = 1,
+        Margin = new Thickness(8, 4, 8, 4),
+        Background = (Brush)Application.Current.Resources["HairlineBrush"],
+    };
+
+    private Button CreateFlyoutAction(string glyph, string label, Func<Task> action)
+    {
+        var button = new Button
+        {
+            Padding = new Thickness(10, 7, 10, 7),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Style = (Style)Application.Current.Resources["StudioIconButtonStyle"],
+            Content = new StackPanel
             {
-                Text = $"{space.Name} ({space.Connection.ProviderName})",
-                GroupName = "workspace",
-                IsChecked = space.IsActive,
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children =
+                {
+                    new FontIcon { FontSize = 11, Glyph = glyph },
+                    new TextBlock { FontSize = 12, Text = label },
+                },
+            },
+        };
+
+        AutomationProperties.SetName(button, label.TrimEnd('…'));
+        button.Click += async (_, _) => await action();
+        return button;
+    }
+
+    /// <summary>
+    /// One palette strip, used by the workspace editor. The ring marks the current colour so the
+    /// state is visible without opening anything.
+    /// </summary>
+    private static StackPanel CreateColourSwatches(string selectedHex, Action<string> changed)
+    {
+        const double dotSize = 16;
+        const double ringSize = dotSize + 8;
+        var rings = new Dictionary<string, Ellipse>(StringComparer.OrdinalIgnoreCase);
+        var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
+        var ringBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+
+        void Select(string hex)
+        {
+            foreach (var ring in rings)
+            {
+                ring.Value.Visibility = string.Equals(ring.Key, hex, StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+
+        for (var index = 0; index < StudioColors.Palette.Length; index++)
+        {
+            var hex = StudioColors.Palette[index];
+            var ring = new Ellipse
+            {
+                Width = ringSize,
+                Height = ringSize,
+                Stroke = ringBrush,
+                StrokeThickness = 1.5,
+                Visibility = Visibility.Collapsed,
             };
 
-            item.Click += (_, _) => ViewModel.SelectSpace(space);
-            flyout.Items.Add(item);
-        }
-
-        // The active workspace's identity colour, one level down in the menu that owns the workspace.
-        if (ViewModel.ActiveSpace is { } activeSpace)
-        {
-            var colours = new MenuFlyoutSubItem { Text = "Workspace colour" };
-            for (var index = 0; index < StudioColors.Palette.Length; index++)
+            var dot = new Ellipse
             {
-                var hex = StudioColors.Palette[index];
-                var swatch = new RadioMenuFlyoutItem
-                {
-                    Text = StudioColors.PaletteNames[index],
-                    GroupName = "workspace-colour",
-                    IsChecked = string.Equals(hex, activeSpace.ColorHex, StringComparison.OrdinalIgnoreCase),
-                    Icon = new PathIcon
-                    {
-                        Data = new EllipseGeometry { Center = new Point(6, 6), RadiusX = 5, RadiusY = 5 },
-                        Foreground = StudioColors.Brush(hex),
-                    },
-                };
+                Width = dotSize,
+                Height = dotSize,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Fill = StudioColors.Brush(hex),
+            };
 
-                swatch.Click += (_, _) => ViewModel.SetWorkspaceColor(hex);
-                colours.Items.Add(swatch);
-            }
+            var swatchGrid = new Grid { Width = ringSize, Height = ringSize };
+            swatchGrid.Children.Add(ring);
+            swatchGrid.Children.Add(dot);
 
-            flyout.Items.Add(colours);
+            var swatch = new Button
+            {
+                Width = ringSize + 4,
+                Height = ringSize + 4,
+                Padding = new Thickness(0),
+                Content = swatchGrid,
+                Style = iconStyle,
+            };
+
+            var paletteName = StudioColors.PaletteNames[index];
+            AutomationProperties.SetName(swatch, $"Colour {paletteName}");
+            ToolTipService.SetToolTip(swatch, paletteName);
+            swatch.Click += (_, _) =>
+            {
+                Select(hex);
+                changed(hex);
+            };
+
+            rings[hex] = ring;
+            swatches.Children.Add(swatch);
         }
 
-        flyout.Items.Add(new MenuFlyoutSeparator());
-
-        var newSpace = new MenuFlyoutItem
-        {
-            Text = "New workspace",
-            Icon = new FontIcon { Glyph = "\uE710" },
-        };
-        newSpace.Click += async (_, _) => await ShowConnectionDialogAsync(creating: true);
-        flyout.Items.Add(newSpace);
-
-        flyout.ShowAt(SpaceSwitcherButton, new Point(0, 40));
+        Select(selectedHex);
+        return swatches;
     }
 
     private async void DatabaseList_ItemClick(object sender, ItemClickEventArgs e)
@@ -729,34 +927,30 @@ public sealed partial class MainPage : Page
         DatabaseSelectorButton.Flyout?.Hide();
     }
 
-    private async void ConnectionSettings_Click(object sender, RoutedEventArgs e)
-    {
-        DatabaseSelectorButton.Flyout?.Hide();
-        await ShowConnectionDialogAsync();
-    }
-
-    // ---------------------------------------------------------------- connection settings
+    // ---------------------------------------------------------------- workspace settings
 
     /// <summary>
-    /// The provider-driven connection form. Create mode also collects the workspace name and
-    /// colour, and nothing exists until the user chooses Create &amp; connect: Cancel or closing
-    /// the dialog leaves the workspace list untouched.
+    /// The workspace editor. A workspace is its name, colour and single connection, so one dialog
+    /// covers all three. Create mode (no <paramref name="editing"/>) starts from a ready name and
+    /// colour and creates nothing until confirmed; edit mode is the same form, prefilled, and can
+    /// be opened from any row in the switcher without leaving the current workspace.
     /// </summary>
-    private async Task ShowConnectionDialogAsync(bool creating = false)
+    private async Task ShowWorkspaceDialogAsync(SpaceViewModel? editing = null)
     {
-        var space = ViewModel.ActiveSpace;
-        if (!creating && space is null)
-        {
-            return;
-        }
-
+        var creating = editing is null;
         var providers = DatabaseProviderCatalog.Providers;
         if (providers.Count == 0)
         {
             return;
         }
 
-        var connection = creating ? null : space!.Connection;
+        if (editing is not null)
+        {
+            // Show the passwords the connection will actually use; empty boxes would save blank.
+            ViewModel.PrepareConnectionEdit(editing);
+        }
+
+        var connection = editing?.Connection;
         var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
         var dangerBrush = StudioColors.Danger;
         var successBrush = StudioColors.Success;
@@ -917,119 +1111,57 @@ public sealed partial class MainPage : Page
         }
 
         FrameworkElement content = form;
-        TextBox? nameBox = null;
-        var selectedColour = StudioColors.Palette[ViewModel.Spaces.Count % StudioColors.Palette.Length];
+        var selectedColour = editing?.ColorHex
+            ?? StudioColors.Palette[ViewModel.Spaces.Count % StudioColors.Palette.Length];
 
-        if (creating)
+        // Name and colour are always part of the form: a workspace is identified by them, and
+        // editing one is editing the other. The default is ready to accept.
+        var nameBox = new TextBox
         {
-            // The default name and colour are ready to accept; changing them is optional.
-            nameBox = new TextBox
-            {
-                Text = $"Space {ViewModel.Spaces.Count + 1}",
-                PlaceholderText = "Workspace name",
-            };
-            AutomationProperties.SetName(nameBox, "Workspace name");
+            Text = creating ? $"Space {ViewModel.Spaces.Count + 1}" : editing!.Name,
+            PlaceholderText = "Workspace name",
+        };
+        AutomationProperties.SetName(nameBox, "Workspace name");
 
-            var nameGroup = new StackPanel { Spacing = 4 };
-            nameGroup.Children.Add(new TextBlock { Text = "Name", FontSize = 11 });
-            nameGroup.Children.Add(nameBox);
+        var nameGroup = new StackPanel { Spacing = 4 };
+        nameGroup.Children.Add(new TextBlock { Text = "Name", FontSize = 11 });
+        nameGroup.Children.Add(nameBox);
 
-            var rings = new Dictionary<string, Ellipse>(StringComparer.OrdinalIgnoreCase);
-            var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            var swatchStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
-            var ringBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        var swatches = CreateColourSwatches(selectedColour, hex => selectedColour = hex);
 
-            void SelectColour(string hex)
-            {
-                selectedColour = hex;
-                foreach (var ring in rings)
-                {
-                    ring.Value.Visibility = string.Equals(ring.Key, hex, StringComparison.OrdinalIgnoreCase)
-                        ? Visibility.Visible
-                        : Visibility.Collapsed;
-                }
-            }
+        var colourGroup = new StackPanel { Spacing = 4 };
+        colourGroup.Children.Add(new TextBlock { Text = "Colour", FontSize = 11 });
+        colourGroup.Children.Add(swatches);
 
-            for (var index = 0; index < StudioColors.Palette.Length; index++)
-            {
-                var hex = StudioColors.Palette[index];
-                var ring = new Ellipse
-                {
-                    Width = 24,
-                    Height = 24,
-                    Stroke = ringBrush,
-                    StrokeThickness = 1.5,
-                    Visibility = Visibility.Collapsed,
-                };
+        var header = new StackPanel { Spacing = 12 };
+        header.Children.Add(nameGroup);
+        header.Children.Add(colourGroup);
 
-                var dot = new Ellipse
-                {
-                    Width = 16,
-                    Height = 16,
-                    Fill = StudioColors.Brush(hex),
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                };
-
-                var swatchGrid = new Grid { Width = 24, Height = 24 };
-                swatchGrid.Children.Add(ring);
-                swatchGrid.Children.Add(dot);
-
-                var swatch = new Button
-                {
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Content = swatchGrid,
-                    Style = swatchStyle,
-                };
-                AutomationProperties.SetName(swatch, $"Colour {StudioColors.PaletteNames[index]}");
-                ToolTipService.SetToolTip(swatch, StudioColors.PaletteNames[index]);
-                swatch.Click += (_, _) => SelectColour(hex);
-
-                rings[hex] = ring;
-                swatches.Children.Add(swatch);
-            }
-
-            SelectColour(selectedColour);
-
-            var colourGroup = new StackPanel { Spacing = 4 };
-            colourGroup.Children.Add(new TextBlock { Text = "Colour", FontSize = 11 });
-            colourGroup.Children.Add(swatches);
-
-            var header = new StackPanel { Spacing = 12 };
-            header.Children.Add(nameGroup);
-            header.Children.Add(colourGroup);
-
-            var root = new Grid { MinWidth = 360, RowSpacing = 16 };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            Grid.SetRow(header, 0);
-            Grid.SetRow(form, 1);
-            root.Children.Add(header);
-            root.Children.Add(form);
-            content = root;
-        }
+        var root = new Grid { MinWidth = 360, RowSpacing = 16 };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Grid.SetRow(header, 0);
+        Grid.SetRow(form, 1);
+        root.Children.Add(header);
+        root.Children.Add(form);
+        content = root;
 
         var dialog = new ContentDialog
         {
-            Title = creating ? "New workspace" : "Connection",
+            Title = creating ? "New workspace" : "Workspace settings",
             XamlRoot = XamlRoot,
             Content = content,
             DefaultButton = ContentDialogButton.Primary,
-            PrimaryButtonText = creating ? "Create & connect" : "Save & connect",
+            PrimaryButtonText = creating ? "Create & connect" : "Save",
             SecondaryButtonText = "Test",
             CloseButtonText = "Cancel",
         };
 
-        if (creating)
+        dialog.Opened += (_, _) =>
         {
-            dialog.Opened += (_, _) =>
-            {
-                nameBox!.Focus(FocusState.Programmatic);
-                nameBox.SelectAll();
-            };
-        }
+            nameBox.Focus(FocusState.Programmatic);
+            nameBox.SelectAll();
+        };
 
         providerBox.SelectionChanged += (_, _) =>
         {
@@ -1088,7 +1220,7 @@ public sealed partial class MainPage : Page
             {
                 // Nothing exists before this point: cancelling or closing the dialog created nothing.
                 var created = ViewModel.CreateSpace(
-                    nameBox?.Text ?? string.Empty,
+                    nameBox.Text,
                     selectedColour,
                     provider.Id,
                     BuildProfile());
@@ -1101,7 +1233,20 @@ public sealed partial class MainPage : Page
             var deferral = args.GetDeferral();
             try
             {
-                await ViewModel.ApplyConnectionSettingsAsync(provider.Id, BuildProfile(), connect: true);
+                var refusal = await ViewModel.ApplyWorkspaceSettingsAsync(
+                    editing!,
+                    nameBox.Text,
+                    selectedColour,
+                    provider.Id,
+                    BuildProfile());
+
+                if (refusal is not null)
+                {
+                    // Keep the form open so the reason is visible next to the fields, not behind them.
+                    args.Cancel = true;
+                    status.Foreground = dangerBrush;
+                    status.Text = refusal;
+                }
             }
             finally
             {
