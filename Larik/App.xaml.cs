@@ -1,6 +1,7 @@
 using Larik.Data;
 using Larik.Data.Demo;
 using Larik.Data.SqlServer;
+using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
@@ -46,15 +47,16 @@ public partial class App : Application
     {
         InitializeComponent();
 
+        // Runs before the workspace store is constructed: the WinUI build keeps its own database
+        // beside the Tauri app's, and carries over only its own pre-separation file.
+        LarikPaths.MigrateLegacyState();
+
         // Providers are discovered, not hard-coded: built-in assemblies plus any plugin DLL
         // dropped in the app's or the user's Plugins folder.
         DatabaseProviderCatalog.Initialize(
             [typeof(DemoProvider).Assembly, typeof(SqlServerProvider).Assembly],
             Path.Combine(AppContext.BaseDirectory, "Plugins"),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Larik",
-                "Plugins"));
+            LarikPaths.PluginsDirectory);
     }
 
     /// <summary>

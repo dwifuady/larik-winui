@@ -88,7 +88,7 @@ workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
 or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
 
-The suite parks the `%LOCALAPPDATA%\Larik` SQLite files (database + WAL sidecars) before
+The suite parks the `%LOCALAPPDATA%\Larik WinUI` SQLite files (database + WAL sidecars) before
 launching, so it always starts from the seeded workspaces, and restores the tester's files when it
 finishes.
 
@@ -112,7 +112,7 @@ built-in assemblies. `DatabaseProviderCatalog` finds implementations in the app'
 provider assemblies plus every DLL dropped into:
 
 - `<app dir>\Plugins`
-- `%LOCALAPPDATA%\Larik\Plugins` (where user-installed plugins belong; the MSIX install folder is read-only)
+- `%LOCALAPPDATA%\Larik WinUI\Plugins` (where user-installed plugins belong; the MSIX install folder is read-only)
 
 The connection dialog builds its form from `ProviderSetting` (text/password/number/boolean), so a
 new provider gets a working configuration UI with no app changes. Providers are trusted code:
@@ -251,8 +251,8 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   **SQL Server** or **PostgreSQL**, and typing the trigger then Tab expands it in the editor. Rows
   persist in the same SQLite database as the workspace (the `snippets` table, same shape as
   `src-tauri/src/storage/snippets.rs`), with built-ins seeded by stable id so edits survive upgrades.
-- **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
-  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
+- **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik WinUI\larik-winui.db`
+  (`larik-winui-dev.db` in Debug builds) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
   `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
   tabs, their SQL, pins, archive history and snippet edits survive a restart. WAL mode, foreign keys
@@ -260,7 +260,14 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
   SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
-  Corrupt state falls back to the seeded spaces.
+  Corrupt state falls back to the seeded spaces. The store is deliberately **separate from the Tauri
+  app's** (`%APPDATA%\larik\larik-sql-studio\data\larik.db`): the two schemas share table names but
+  not versions, so the WinUI build keeps its own file and the two apps install and run side by side.
+  The first launch after this split copies the WinUI build's older `%LOCALAPPDATA%\Larik` database
+  (and `studio.json`) forward once, without touching the Tauri store. Windows may redirect a
+  packaged (MSIX) build's writes into
+  `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\Larik WinUI` — standard MSIX
+  AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their

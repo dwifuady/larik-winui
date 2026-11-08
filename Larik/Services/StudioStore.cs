@@ -90,8 +90,9 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 
 /// <summary>
 /// The workspace session persisted between launches, in the same shape as the desktop app's
-/// storage (spaces / tabs / app_state). Lives in <c>%LOCALAPPDATA%\Larik\larik.db</c>
-/// (<c>larik-dev.db</c> for debug builds, like the Tauri version).
+/// storage (spaces / tabs / app_state). Lives in <c>%LOCALAPPDATA%\Larik WinUI\larik-winui.db</c>
+/// (<c>larik-winui-dev.db</c> for debug builds) so the WinUI port and the Tauri app never open
+/// each other's incompatible store.
 /// <para>
 /// Writes are best-effort: a broken or unreadable database falls back to the seeded spaces
 /// instead of failing the launch. Provider-declared password fields are never written.

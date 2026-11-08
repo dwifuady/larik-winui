@@ -443,7 +443,7 @@
                         <TextBlock
                             FontSize="12"
                             Foreground="{ThemeResource StudioTextMutedBrush}"
-                            Text="WinUI 3 port of the Larik SQL Studio desktop app."
+                            Text="WinUI 3 port of the desktop app. This build keeps its own database, so it installs and runs beside the Tauri app."
                             TextWrapping="Wrap" />
 
                         <TextBlock
@@ -464,7 +464,8 @@
                                 <TextBlock
                                     FontSize="11"
                                     Foreground="{ThemeResource StudioTextSecondaryBrush}"
-                                    Text="Workspaces, tabs and snippets are stored in this SQLite database:" />
+                                    Text="Workspaces, tabs and snippets are stored in this SQLite database. It is separate from the Tauri app's store and never opened by it:"
+                                    TextWrapping="Wrap" />
                                 <TextBlock
                                     x:Name="DatabasePathText"
                                     FontFamily="{StaticResource StudioMonoFont}"

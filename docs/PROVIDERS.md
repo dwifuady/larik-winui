@@ -298,7 +298,7 @@ completion learns about it.
 - every assembly passed by the app's composition root (`Larik/App.xaml.cs`), currently Demo and SQL
   Server;
 - `<app dir>\Plugins`;
-- `%LOCALAPPDATA%\Larik\Plugins`.
+- `%LOCALAPPDATA%\Larik WinUI\Plugins`.
 
 It instantiates every public, non-abstract type implementing `IDatabaseProvider` with a
 parameterless constructor, dedupes by `Id` (first wins), and surfaces load errors in the connection
@@ -312,7 +312,7 @@ Current limitations, by design for now:
 | Every `*.dll` in the folder is loaded | Native or unrelated DLLs are touched; failures are reported as provider load problems. |
 | No manifest or contract-version check | Compatibility relies on the add-only rule in §2. |
 | `%LOCALAPPDATA%` is user-writable | A dropped DLL is trusted code running in-process. Only install plugins you trust. |
-| The folder is not auto-created | Create `%LOCALAPPDATA%\Larik\Plugins` before dropping a DLL. |
+| The folder is not auto-created | Create `%LOCALAPPDATA%\Larik WinUI\Plugins` before dropping a DLL. |
 | Release builds are trimmed | `Larik.Data` has no explicit trimmer root yet. Reflection-only members could be trimmed in a published build; validate plugins against a published build, not just Debug. |
 
 **Recommendation:** first-party engines (PostgreSQL next) ship as built-in project references in
@@ -413,7 +413,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] Splitting handles strings, quoted identifiers, comments and the engine's terminator.
 - [ ] Tests: token/split golden cases, caret semantics, schema mapping, row cap.
 - [ ] Built-in: add the project reference and `typeof(...).Assembly` in `App.xaml.cs`.
-      Plugin: create `%LOCALAPPDATA%\Larik\Plugins` and drop the DLL plus dependencies.
+      Plugin: create `%LOCALAPPDATA%\Larik WinUI\Plugins` and drop the DLL plus dependencies.
 - [ ] Run `dotnet build Larik.slnx`, `dotnet test Larik.Data.Tests\Larik.Data.Tests.csproj`, and the
       UI regression suite.
 

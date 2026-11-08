@@ -17,7 +17,7 @@
   <mp:PhoneIdentity PhoneProductId="5F1C2F1B-E63A-4681-A08C-189E9C4C2781" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>Larik</DisplayName>
+    <DisplayName>Larik SQL Studio</DisplayName>
     <PublisherDisplayName>AppPublisher</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <uap10:PackageIntegrity>
@@ -39,8 +39,8 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="Larik"
-        Description="Larik"
+        DisplayName="Larik SQL Studio"
+        Description="Larik SQL Studio"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

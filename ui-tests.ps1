@@ -1,4 +1,4 @@
-﻿# UI checks for the Larik WinUI shell: vertical tabs, spaces, and Tab-accepted snippet completion.
+﻿# UI checks for the Larik SQL Studio shell: vertical tabs, spaces, and Tab-accepted snippet completion.
 # Run from C:\dev\larik-winui\Larik:  powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1
 #
 # The checks are ONE ordered scenario, not independent tests: they connect the seeded workspaces,
@@ -12,34 +12,61 @@ param(
     [Parameter(Mandatory)][ValidateSet('sandbox', 'local')][string]$Target,
     [int]$AppPid = 0,
     [string]$Through = '',
-    [string]$ArtifactDirectory = (Join-Path $PSScriptRoot '..\ui-test-artifacts')
+    [string]$ArtifactDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ArtifactDirectory) { $ArtifactDirectory = Join-Path $RepoRoot 'ui-test-artifacts' }
 $ScopeArgs = @(if ($Target -eq 'sandbox') { '--on'; 'sandbox' })
 $results = [Collections.Generic.List[object]]::new()
 $screenshots = [Collections.Generic.List[string]]::new()
 $script:MainWindow = $null
 $script:ThroughReached = $false
 
-# Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik (larik-dev.db in Debug
-# builds). Park the tester's databases, WAL sidecars included, so every run starts from the
-# seeded spaces; Restore-StudioState puts them back untouched. When attaching to a running app
-# (-AppPid) the state belongs to that app, so leave it alone.
+# Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik WinUI (larik-winui-dev.db in
+# Debug builds). A direct/exe run writes there; the packaged app (winapp run or the installed MSIX)
+# has AppData redirected by MSIX into the package's LocalCache, so both roots are parked. The WinUI
+# build deliberately does not share the Tauri app's store and migrates its own old
+# %LOCALAPPDATA%\Larik database on first launch, so that location is parked too. Every run then
+# starts from the seeded spaces; Restore-StudioState puts the tester's files back untouched. When
+# attaching to a running app (-AppPid) the state belongs to that app, so leave it alone.
 $LaunchedHere = $AppPid -le 0
-$StateDir = Join-Path $env:LOCALAPPDATA 'Larik'
-$StateBases = @('larik-dev.db', 'larik.db') | ForEach-Object { Join-Path $StateDir $_ }
-$StatePath = $StateBases[0]
+$NewStateNames = @('larik-winui-dev.db', 'larik-winui.db')
+$LegacyStateNames = @('larik-dev.db', 'larik.db')
+$StateRoots = @(Join-Path $env:LOCALAPPDATA 'Larik WinUI')
+$LegacyStateRoots = @(Join-Path $env:LOCALAPPDATA 'Larik')
+$Package = $null
+$ManifestPath = Join-Path $RepoRoot 'Larik\Package.appxmanifest'
+if (Test-Path $ManifestPath) {
+    $PackageName = ([xml](Get-Content $ManifestPath -Raw)).Package.Identity.Name
+    $Package = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+if ($Package) {
+    $CacheLocal = Join-Path $env:LOCALAPPDATA "Packages\$($Package.PackageFamilyName)\LocalCache\Local"
+    $StateRoots += Join-Path $CacheLocal 'Larik WinUI'
+    $LegacyStateRoots += Join-Path $CacheLocal 'Larik'
+}
+$StateFiles = @()
+foreach ($root in $StateRoots) {
+    foreach ($name in $NewStateNames) {
+        foreach ($suffix in '', '-wal', '-shm') { $StateFiles += Join-Path $root "$name$suffix" }
+    }
+    $StateFiles += Join-Path $root 'studio.json'
+}
+foreach ($root in $LegacyStateRoots) {
+    foreach ($name in $LegacyStateNames) {
+        foreach ($suffix in '', '-wal', '-shm') { $StateFiles += Join-Path $root "$name$suffix" }
+    }
+    $StateFiles += Join-Path $root 'studio.json'
+}
 $StateMoved = @()
 if ($LaunchedHere) {
-    foreach ($base in $StateBases) {
-        foreach ($suffix in '', '-wal', '-shm') {
-            $path = "$base$suffix"
-            if (Test-Path $path) {
-                Move-Item $path "$path.ui-tests" -Force
-                $StateMoved += $path
-            }
+    foreach ($path in $StateFiles) {
+        if (Test-Path $path) {
+            Move-Item $path "$path.ui-tests" -Force
+            $StateMoved += $path
         }
     }
 }
@@ -47,21 +74,40 @@ if ($LaunchedHere) {
 function Restore-StudioState {
     if (-not $LaunchedHere) { return }
 
-    foreach ($base in $StateBases) {
-        foreach ($suffix in '', '-wal', '-shm') {
-            Remove-Item "$base$suffix" -ErrorAction SilentlyContinue
-        }
+    foreach ($path in $StateFiles) {
+        Remove-Item $path -ErrorAction SilentlyContinue
     }
     foreach ($path in $StateMoved) {
         if (Test-Path "$path.ui-tests") { Move-Item "$path.ui-tests" $path -Force }
     }
 }
 
+# Which database the running app actually writes: the packaged app's LocalCache copy, or the
+# profile path for an unpackaged run. The package can be registered by the launch itself, so the
+# package roots are re-read here rather than only before parking.
+function Get-StateDatabasePath {
+    $roots = @()
+    if ($LaunchedHere) {
+        $roots += @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName 'LocalCache\Local\Larik WinUI' })
+    }
+    $roots += @($StateRoots)
+    foreach ($root in $roots | Select-Object -Unique) {
+        foreach ($name in $NewStateNames) {
+            $candidate = Join-Path $root $name
+            if (Test-Path $candidate) { return $candidate }
+        }
+    }
+    return $null
+}
+
 # The app keeps the SQLite files open and recent writes may sit in the WAL; read both with shared access.
 function Get-StudioStateText {
+    $statePath = Get-StateDatabasePath
+    if (-not $statePath) { return '' }
     $state = ''
     foreach ($suffix in '', '-wal') {
-        $path = "$StatePath$suffix"
+        $path = "$statePath$suffix"
         if (Test-Path $path) {
             $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
             try {
@@ -96,7 +142,11 @@ function Invoke-Ui {
 
 function Get-UiJson {
     param([string[]]$Arguments)
-    (Invoke-Ui $Arguments) -join "`n" | ConvertFrom-Json
+    $data = (Invoke-Ui $Arguments) -join "`n" | ConvertFrom-Json
+    # Windows PowerShell 5.1 emits a top-level JSON array as a single object; unwrap it so callers
+    # can treat the result as a list of windows/matches on every PowerShell version.
+    if ($data -is [System.Array]) { return $data }
+    return $data
 }
 
 function Test-UI {
@@ -801,7 +851,8 @@ try {
     }
 
     Test-UI 'grid cells select and copy like a spreadsheet' {
-        Set-Clipboard -Value ''
+        # A sentinel, not an empty string: Windows PowerShell 5.1's Set-Clipboard rejects ''.
+        Set-Clipboard -Value 'larik-test-clipboard'
         $cell = @((Find-Element 'master').matches) | Where-Object { $_.width -gt 0 -and $_.height -gt 0 } | Select-Object -First 1
         Assert-True ($null -ne $cell) 'the result cell was not found'
         Focus-App
@@ -820,7 +871,8 @@ try {
     }
 
     Test-UI 'Ctrl+Space selects a column and copy carries its header' {
-        Set-Clipboard -Value ''
+        # A sentinel, not an empty string: Windows PowerShell 5.1's Set-Clipboard rejects ''.
+        Set-Clipboard -Value 'larik-test-clipboard'
         Focus-Element 'Results grid'
         Send-Keys 'ctrl+home'
         Send-Keys 'ctrl+space'
@@ -1089,7 +1141,7 @@ try {
 
     Test-UI 'workspace state is saved to disk' {
         Start-Sleep -Milliseconds 900
-        Assert-True (Test-Path $StatePath) 'no workspace database was written'
+        Assert-True ($null -ne (Get-StateDatabasePath)) 'no workspace database was written'
 
         $state = Get-StudioStateText
         Assert-True ($state -match 'Customer totals') 'seeded tabs are missing from the database'
@@ -1114,6 +1166,12 @@ try {
 
         Click-Element 'Settings'
         Wait-ForText 'Snippets' 10
+
+        # The About page names this build's own store, which is what keeps the WinUI app and the
+        # Tauri app installable side by side: neither opens (or migrates) the other's database.
+        Click-Element 'About'
+        Wait-ForText 'larik-winui' 10
+
         Click-Element 'Back'
         Wait-ForText 'Switch workspace' 10
     }
