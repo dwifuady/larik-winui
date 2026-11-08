@@ -251,8 +251,11 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
   **Tab or Enter accepts**, Esc dismisses. In a column list, **Space ticks the highlighted column**
   (column rows carry a checkbox) so several can be picked, and one Tab/Enter inserts them
-  comma-separated (`o.Id, o.Intent, o.Status`); ticking only applies while the word being typed is
-  empty, so a space typed mid-word keeps its normal meaning. Expansion honours `${cursor}`, `${1:placeholder}` (left
+  comma-separated (`o.Id, o.Intent, o.Status`). Picks survive filtering and closing the popup while
+  the caret stays at the same insertion point, so a selection can be built in several passes; moving
+  to another word or statement starts fresh, and accepting clears them. Space only ticks when the
+  word being typed is empty or a pick is already in progress, so a space mid-word is never swallowed.
+  Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
   lists every table in the active database with its schema, and inserts a runnable name in the

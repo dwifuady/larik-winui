@@ -34,6 +34,13 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
 
+    // Space-ticked columns survive filtering and closing the popup while the caret stays at the
+    // same insertion point; accepting the list or moving to another word/statement clears them.
+    private readonly List<PickedColumn> _picks = [];
+    private (int Statement, int Word)? _pickAnchor;
+
+    private readonly record struct PickedColumn(string Key, string InsertText);
+
     // Character formatting (syntax highlighting) is undoable in RichEdit, which would make
     // Ctrl+Z reverse colours instead of text. The surface keeps its own text snapshots and
     // leaves the control's undo stack disabled.
@@ -151,6 +158,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         HideCompletions();
+        ClearPicks();
         ResetHistory(GetText());
         ApplyHighlighting();
         RaiseCaretChanged();
@@ -464,6 +472,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
         _completions = items;
         CompletionList.ItemsSource = items;
+        RestorePicks(items);
         SelectCompletion(0);
         CompletionPopup.IsOpen = true;
         PositionCompletions();
@@ -530,11 +539,11 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         var item = _completions[_selectedIndex];
-        var checkedItems = _completions.Where(candidate => candidate.IsChecked).ToList();
         var text = GetText();
         var caret = Editor.Document.Selection.StartPosition;
         var (start, _, qualifier) = CompletionEngine.ExtractContext(text, caret);
         var afterDot = start > 0 && text[start - 1] == '.';
+        var picks = _pickAnchor is { } anchor && anchor == CurrentPickAnchor() ? _picks : [];
 
         _skipCompletionUpdateOnce = true;
         BeginEdit();
@@ -544,10 +553,11 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             var selection = Editor.Document.Selection;
             selection.SetRange(start, caret);
 
-            if (checkedItems.Count > 0)
+            if (picks.Count > 0)
             {
-                // Space-ticked columns become one comma-separated list, in the order the list shows.
-                var insert = ComposeInsert(checkedItems, qualifier, afterDot);
+                // Picked columns may have been filtered out of the visible list by later typing;
+                // the pick order is the order they were ticked.
+                var insert = ComposeInsert(picks, qualifier, afterDot);
                 selection.Text = insert;
                 var end = start + insert.Length;
                 selection.SetRange(end, end);
@@ -575,6 +585,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         EndEdit();
+        ClearPicks();
         HideCompletions();
         RaiseTextChanged();
         RaiseCaretChanged();
@@ -585,10 +596,10 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     /// Space-ticked columns become one comma-separated list. After a dot (<c>o.</c> + Space) the
     /// list shows bare column names, so every item after the first repeats the qualifier.
     /// </summary>
-    private static string ComposeInsert(IReadOnlyList<CompletionItem> items, string? qualifier, bool afterDot)
+    private static string ComposeInsert(IReadOnlyList<PickedColumn> picks, string? qualifier, bool afterDot)
     {
         var builder = new StringBuilder();
-        for (var index = 0; index < items.Count; index++)
+        for (var index = 0; index < picks.Count; index++)
         {
             if (index > 0)
             {
@@ -596,20 +607,62 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             }
 
             if (afterDot && index > 0 && !string.IsNullOrEmpty(qualifier)
-                && !items[index].InsertText.StartsWith(qualifier + ".", StringComparison.OrdinalIgnoreCase))
+                && !picks[index].InsertText.StartsWith(qualifier + ".", StringComparison.OrdinalIgnoreCase))
             {
                 builder.Append(qualifier).Append('.');
             }
 
-            builder.Append(items[index].InsertText);
+            builder.Append(picks[index].InsertText);
         }
 
         return builder.ToString();
     }
 
+    private static string PickKey(CompletionItem item) => $"{item.InsertText}\u001F{item.Detail}";
+
+    /// <summary>Where the current pick started: its statement and the word being completed.</summary>
+    private (int Statement, int Word) CurrentPickAnchor()
+    {
+        var text = GetText();
+        var caret = CaretOffset;
+        var (word, _, _) = CompletionEngine.ExtractContext(text, caret);
+        return (CompletionEngine.StatementStart(text, caret), word);
+    }
+
+    private void ClearPicks()
+    {
+        _picks.Clear();
+        _pickAnchor = null;
+    }
+
+    /// <summary>
+    /// Re-applies ticks to a rebuilt list. The insertion point is part of the key, so completing a
+    /// different word (or statement) starts fresh instead of resurrecting ticks from elsewhere.
+    /// </summary>
+    private void RestorePicks(IReadOnlyList<CompletionItem> items)
+    {
+        if (_picks.Count == 0)
+        {
+            return;
+        }
+
+        if (_pickAnchor != CurrentPickAnchor())
+        {
+            ClearPicks();
+            return;
+        }
+
+        var keys = new HashSet<string>(_picks.Select(pick => pick.Key), StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items)
+        {
+            item.IsChecked = keys.Contains(PickKey(item));
+        }
+    }
+
     /// <summary>
     /// Space ticks the highlighted column while the list still shows the whole column set (the word
-    /// being typed is empty). A space pressed mid-word keeps its normal meaning and closes the list.
+    /// being typed is empty), or while a pick is already in progress at this insertion point so the
+    /// list can be filtered between picks. Otherwise Space keeps its normal meaning.
     /// </summary>
     private bool CanToggleCheck()
     {
@@ -624,7 +677,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         var (_, word, _) = CompletionEngine.ExtractContext(GetText(), CaretOffset);
-        return word.Length == 0;
+        return word.Length == 0 || _picks.Count > 0;
     }
 
     private void ToggleCheck(int index)
@@ -641,6 +694,24 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         item.IsChecked = !item.IsChecked;
+        var key = PickKey(item);
+
+        if (item.IsChecked)
+        {
+            _pickAnchor ??= CurrentPickAnchor();
+            if (!_picks.Any(pick => string.Equals(pick.Key, key, StringComparison.OrdinalIgnoreCase)))
+            {
+                _picks.Add(new PickedColumn(key, item.InsertText));
+            }
+        }
+        else
+        {
+            _picks.RemoveAll(pick => string.Equals(pick.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (_picks.Count == 0)
+            {
+                _pickAnchor = null;
+            }
+        }
 
         // Keep the list open and walk on, so several columns can be ticked with repeated Space.
         if (index + 1 < _completions.Count)
@@ -659,6 +730,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         var index = _completions.ToList().IndexOf(item);
         if (index >= 0)
         {
+            // Clicking a row means "insert this one", not "insert the ticked set".
+            ClearPicks();
             SelectCompletion(index);
             AcceptCompletion();
         }

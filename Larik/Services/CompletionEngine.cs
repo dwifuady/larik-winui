@@ -1239,8 +1239,8 @@ public static partial class CompletionEngine
     [GeneratedRegex(@"^\[?[\w$#@]+\]?(?:\s*\.\s*\[?[\w$#@]+\]?)*$")]
     private static partial Regex SimpleColumnPattern();
 
-    private static int StatementStart(string text, int caret) =>
-        caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
+    /// <summary>Start of the statement under the caret (after the previous semicolon).</summary>
+    public static int StatementStart(string text, int caret) =>        caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
 
     /// <summary>
     /// The end of the statement under the caret: its next semicolon, or the document end. Aliases
