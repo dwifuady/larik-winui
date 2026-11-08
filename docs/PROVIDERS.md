@@ -20,7 +20,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, plus optional transaction state/commit/rollback. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
 | `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `GeneratedQuery`. |
@@ -270,9 +270,11 @@ new TableSchema
 };
 ```
 
-Completion currently normalizes and matches **bare** table names only. Schema-qualified matching is
-deferred; see the gaps table. Populate `Schema`/`ReferencedSchema` now so the data is available when
-completion learns about it.
+Completion matches a reference either bare or schema-qualified (`[dbo].[users]`, `public.users`)
+against `Schema` + `Name`, and inserts a schema-qualified name in the dialect's quoting
+(`[dbo].[users] AS [u]` for T-SQL). A schema typed before the dot (`FROM public.`) narrows the list
+and is not repeated in the insert. A provider that reports no `Schema` keeps the bare name, so this
+is additive for engines without schemas.
 
 ---
 
@@ -348,8 +350,8 @@ manifest, unload) only when third-party plugins are actually expected.
    from `Larik.csproj`. No shell/editor changes.
 6. Add contract tests: split/token cases, schema mapping, execution/row-cap against a real server.
 
-Still open for PostgreSQL: schema-qualified completion, a `Choice`/`FilePath` setting kind, and
-provider-driven `ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`).
+Still open for PostgreSQL: a `Choice`/`FilePath` setting kind, and provider-driven
+`ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`).
 
 ---
 

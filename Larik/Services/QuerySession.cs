@@ -101,6 +101,33 @@ public sealed class QuerySession
         }
     }
 
+    /// <summary>
+    /// The database the session actually uses, when the provider can tell. A <c>USE</c> inside a
+    /// script changes it; the shell adopts the answer so the next run does not switch back.
+    /// </summary>
+    public async Task<string?> GetCurrentDatabaseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_session is not { State: ConnectionState.Connected })
+            {
+                return null;
+            }
+
+            return await _session.GetCurrentDatabaseAsync(cancellationToken);
+        }
+        catch (Exception)
+        {
+            // The database name is bookkeeping; a failed lookup must not hide the query results.
+            return null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task CommitAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);

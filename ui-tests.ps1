@@ -647,7 +647,14 @@ try {
         Assert-True ((Find-Element 'customers').matchCount -gt 0) 'customers is not suggested'
         Send-Keys 'tab'
         Start-Sleep -Milliseconds 600
-        Assert-True ((Get-EditorText) -eq 'select * from customers AS c') "alias was not appended: '$((Get-EditorText))'"
+        Assert-True ((Get-EditorText) -eq 'select * from dbo.customers AS c') "schema/alias was not appended: '$((Get-EditorText))'"
+
+        # The inserted reference must parse back, or the next alias completion silently dies.
+        Send-Keys ' where c.' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'full_name').matchCount -gt 0) 'columns do not complete after a schema-qualified insert'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
     }
 
     Test-UI 'join condition is suggested after ON' {
@@ -810,6 +817,32 @@ try {
         Click-Element 'RunButton'
         Wait-ForText 'tempdb' 30
         Assert-True ((Find-Element 'rows returned').matchCount -gt 0) 'query did not report rows'
+    }
+
+    Test-UI 'USE switches the tab, picker and completion to another database' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'use msdb' -Literal
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'msdb' 30
+
+        # Completion now reads msdb: only a USE that reached the shell reloads the schema, and the
+        # insert is schema-qualified and bracketed for T-SQL.
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from back' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'backupset').matchCount -gt 0) 'msdb tables are not suggested after USE'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[backupset] AS [b]') "schema/alias insert was '$((Get-EditorText))'"
+
+        # A bracketed schema and alias must parse back for column completion.
+        Send-Keys ' where b.' -Literal
+        Start-Sleep -Milliseconds 1200
+        Assert-True ((Find-Element 'backup_set_id').matchCount -gt 0) 'columns do not complete through the bracketed alias'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
     }
 
     Test-UI 'Ctrl+B collapses and restores the sidebar' {

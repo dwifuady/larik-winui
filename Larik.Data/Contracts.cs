@@ -232,6 +232,14 @@ public interface IDatabaseConnection : IAsyncDisposable
     /// <summary>Databases visible on this connection.</summary>
     Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The database the open session is using, when the engine can report it. A script's
+    /// <c>USE</c> changes this; the shell adopts the name so the tab, rail, database picker and
+    /// completion follow it. Null means "unknown", which keeps older providers working.
+    /// </summary>
+    Task<string?> GetCurrentDatabaseAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<string?>(null);
+
     Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default);
 
     /// <summary>

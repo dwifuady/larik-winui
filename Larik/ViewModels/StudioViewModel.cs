@@ -818,6 +818,10 @@ public partial class StudioViewModel : ObservableObject
             }
 
             ApplyResults(tab, results, append);
+
+            // A USE inside the script changed the session's database. Adopt it as the tab's database,
+            // so the next run does not switch the session back and completion/picker follow.
+            await AdoptCurrentDatabaseAsync(tab, space);
         }
         catch (OperationCanceledException)
         {
@@ -1127,6 +1131,40 @@ public partial class StudioViewModel : ObservableObject
         {
             await SyncSchemaForTabAsync(ActiveSpace, ActiveTab);
         }
+    }
+
+    /// <summary>
+    /// Mirrors a <c>USE</c> into the shell. The provider reports the session's real database after a
+    /// run; if it differs from the tab's, the tab, rail, picker and completion schema adopt it, so
+    /// the next run is not switched back to the old database.
+    /// </summary>
+    private async Task AdoptCurrentDatabaseAsync(TabViewModel tab, SpaceViewModel space)
+    {
+        var current = await tab.Session.GetCurrentDatabaseAsync(_lifetime.Token);
+        if (string.IsNullOrWhiteSpace(current)
+            || string.Equals(current, tab.Database, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        tab.Database = current;
+
+        if (!ReferenceEquals(space, ActiveSpace) || !ReferenceEquals(tab, ActiveTab))
+        {
+            ScheduleSave();
+            return;
+        }
+
+        var database = space.FindDatabase(current);
+        if (database is not null)
+        {
+            ApplyDatabase(database);
+        }
+
+        await SyncSchemaForTabAsync(space, tab);
+        StatusText = database is not null
+            ? $"{database.Name} · {space.StatusText}"
+            : $"{current} · {space.StatusText}";
     }
 
     public void SelectTab(TabViewModel? tab)
@@ -1712,9 +1750,11 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    /// <summary>The database a tab is bound to, falling back to the space default when it is unknown.</summary>
+    /// <summary>The database a tab is bound to, falling back to the space default only for an unbound tab.</summary>
     private static string? DatabaseNameFor(SpaceViewModel space, TabViewModel tab) =>
-        space.FindDatabase(tab.Database)?.Name ?? space.ActiveDatabase?.Name;
+        string.IsNullOrWhiteSpace(tab.Database)
+            ? space.ActiveDatabase?.Name
+            : space.FindDatabase(tab.Database)?.Name ?? tab.Database;
 
     private static string SchemaKey(SpaceViewModel space, string database) =>
         $"{space.Id}\u001F{database}";

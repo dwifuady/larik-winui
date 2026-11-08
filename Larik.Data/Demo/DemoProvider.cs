@@ -38,12 +38,14 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         new()
         {
             Name = "customers",
+            Schema = "dbo",
             Columns = ["id", "full_name", "email", "country", "created_at"],
             PrimaryKey = ["id"],
         },
         new()
         {
             Name = "orders",
+            Schema = "dbo",
             Columns = ["id", "customer_id", "total_amount", "status", "ordered_at"],
             PrimaryKey = ["id"],
             ForeignKeys = [new ForeignKeySchema("FK_orders_customers", "customer_id", "customers", "id")],
@@ -51,6 +53,7 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         new()
         {
             Name = "order_items",
+            Schema = "dbo",
             Columns = ["id", "order_id", "product_id", "quantity", "unit_price"],
             PrimaryKey = ["id"],
             ForeignKeys =
@@ -62,6 +65,7 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         new()
         {
             Name = "products",
+            Schema = "dbo",
             Columns = ["id", "sku", "name", "price", "stock"],
             PrimaryKey = ["id"],
         },
@@ -202,6 +206,14 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
             if (keyword is "FROM" or "JOIN" or "INTO" or "UPDATE" or "TABLE")
             {
                 var candidate = tokens[i + 1].Trim('[', ']', '"');
+
+                // "dbo.orders" and "[dbo].[orders]" both name the same demo table.
+                var dot = candidate.LastIndexOf('.');
+                if (dot >= 0)
+                {
+                    candidate = candidate[(dot + 1)..].Trim('[', ']', '"');
+                }
+
                 if (candidate.Length > 0 && !candidate.StartsWith('@'))
                 {
                     return candidate;

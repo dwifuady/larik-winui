@@ -71,7 +71,9 @@ Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs onl
 under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
 syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
 replace all rewrites every match as one undo step, query and result tabs drag-reorder,
-`FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
+`FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
+(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `ON `
+suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
 connection + tabs + editor, a
@@ -158,8 +160,16 @@ tab. Providers that support transactions implement `SupportsTransactions`,
 interface implementations return "no transaction" and keep older providers working (the shell then
 hides the transaction guard). The SQL Server provider reads `@@TRANCOUNT` and `XACT_STATE()`.
 
+`IDatabaseConnection.GetCurrentDatabaseAsync` is the other optional member: it reports the session's
+database after a batch, which is how a script's `USE` reaches the tab, rail and picker. Its default
+returns null, so a provider that cannot tell simply never changes the tab's database. `TableSchema`
+carries `Schema` and `ForeignKeySchema` carries `ReferencedSchema`; completion inserts a
+schema-qualified name using the dialect's `QuoteIdentifier` (`[dbo].[Promotion] AS [p]`), and falls
+back to the bare name for providers that report no schema.
+
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
-`sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
+`sys.databases` for the picker, `sys.tables`/`sys.schemas`/`sys.columns` for schema-qualified
+completion, `DB_NAME()` so a `USE` reaches the shell) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
 
 ## What works in this slice
@@ -201,7 +211,10 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the active tab, filled from the provider once connected, and it is absent while disconnected
   instead of showing a dead "not connected" control. Switching
   database updates that tab (and the space while it is active): the rail, toolbar badge, status bar,
-  tab subtitle, snippet dialect and completion schema all follow. Other tabs keep their own database
+  tab subtitle, snippet dialect and completion schema all follow. A `USE <database>` executed in a
+  tab is adopted the same way: after the batch the provider reports the session's database and the
+  tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
+  Other tabs keep their own database
   and schema. An Arc-style row of workspace dots at the bottom of the
   rail shows every workspace with the current one ringed; clicking a dot switches workspace.
   **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
@@ -239,8 +252,10 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
-  lists every table in the active database, appending a generated alias in join positions
-  (`customers AS c`, plus a `no alias` variant); after `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
+  lists every table in the active database with its schema, and inserts a runnable name in the
+  dialect's quoting — `[dbo].[Promotion] AS [p]` on SQL Server (plus a `no alias` variant); typing a
+  schema (`FROM dbo.`) narrows the list and is not repeated in the insert. After
+  `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
   statement's columns through their aliases (`c.full_name`), offers join conditions (declared
   foreign keys first, then `xxx_id`/shared-column heuristics — `o.customer_id = c.id`), and the
   built-in functions (`COUNT()`, caret inside); after `UPDATE x SET` and `INSERT INTO x (` only that
