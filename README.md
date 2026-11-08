@@ -72,8 +72,9 @@ under the caret and F5 runs the selection or the whole document (with `Result 2`
 syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
 replace all rewrites every match as one undo step, query and result tabs drag-reorder,
 `FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
-(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, a
-`PRINT` opens a Messages tab with the server text, `ON `
+(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `Ctrl+K`
+finds a table in the schema peek and inserts its quoted name, the peek pins beside the editor and
+unpins, a `PRINT` opens a Messages tab with the server text, `ON `
 suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
@@ -235,6 +236,14 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   the side the new workspace lives on (left/right matches the dot order), and is skipped when
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
   the ends.
+- **Schema browser**: `Ctrl+K` (or the browse button beside the database row) opens a **peek**: one
+  search field over tables and columns, recents first, grouped by schema, with the highlighted
+  table's columns and PK/FK badges in a detail pane. Enter inserts the dialect-quoted name at the
+  caret (`[dbo].[Orders]`), Shift+Enter previews the top 100 rows into a new result tab, Up/Down move,
+  Esc returns to the editor. The **pin** button docks the same surface as a 300 px inspector beside
+  the editor (columns expand under the selected table); the pin unpins it. Recents are kept per
+  workspace for the session, and the popup never replaces the tab rail. Only base tables appear:
+  the provider contract has no views, routines or column types yet.
 - **Real execution**: connect opens the provider connection and the grid renders returned
   columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from the provider with
   timing. **Ctrl+Enter runs only the statement under the caret** and leaves it selected, so the
@@ -373,6 +382,8 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
 | Gap | Why / next step |
 |---|---|
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB only need new provider assemblies (see above and `docs/PROVIDERS.md`), not app changes. |
+| Schema browser is tables-only | `TableSchema` carries a name, columns, PK and FK but no object kind (view/routine) or column types, so views, procedures and column types cannot be listed. Add `TableSchema.Kind`/column types and routines to the contract and provider first. |
+| Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |

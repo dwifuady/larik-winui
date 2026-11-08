@@ -133,11 +133,13 @@
         <KeyboardAccelerator Key="F5" Invoked="RunAllAccelerator_Invoked" />
         <KeyboardAccelerator Key="T" Modifiers="Control" Invoked="NewTabAccelerator_Invoked" />
         <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="ToggleSidebarAccelerator_Invoked" />
+        <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="SchemaAccelerator_Invoked" />
     </Page.KeyboardAccelerators>
 
     <Grid x:Name="Root">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="0" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -262,18 +264,25 @@
                     </Button>
                 </Grid>
 
-                <!--  Database selector: the space's connection context, present only once it exists  -->
-                <Button
-                    x:Name="DatabaseSelectorButton"
+                <!--  Database selector and its schema browse action share one row  -->
+                <Grid
                     Grid.Row="2"
                     Margin="8,0,8,4"
-                    Padding="8,7"
-                    AutomationProperties.Name="Select database"
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Stretch"
-                    Style="{StaticResource StudioIconButtonStyle}"
-                    ToolTipService.ToolTip="Switch database"
+                    ColumnSpacing="4"
                     Visibility="{x:Bind ViewModel.ActiveSpace.DatabasePickerVisibility, Mode=OneWay}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button
+                        x:Name="DatabaseSelectorButton"
+                        Padding="8,7"
+                        AutomationProperties.Name="Select database"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Switch database">
                     <Button.Flyout>
                         <Flyout Placement="BottomEdgeAlignedLeft" ShouldConstrainToRootBounds="True">
                             <StackPanel MinWidth="288" Spacing="2">
@@ -365,7 +374,20 @@
                             Glyph="&#xE70D;" />
 
                     </Grid>
-                </Button>
+                    </Button>
+
+                    <Button
+                        x:Name="BrowseSchemaButton"
+                        Grid.Column="1"
+                        Width="32"
+                        Padding="0"
+                        AutomationProperties.Name="Browse schema"
+                        Click="BrowseSchema_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Browse schema (Ctrl+K)">
+                        <FontIcon FontSize="12" Glyph="&#xE8FD;" />
+                    </Button>
+                </Grid>
 
                 <!--  Pinned tabs: their own section above the TABS header, like Arc.  -->
                 <ListView
@@ -545,8 +567,20 @@
             </Grid>
         </Border>
 
+        <!--  Pinned schema inspector: the peek's docked form, off until pinned.  -->
+        <Border
+            x:Name="SchemaPinnedHost"
+            Grid.Column="1"
+            Width="300"
+            Background="Transparent"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,0,1,0"
+            Visibility="Collapsed">
+            <controls:SchemaBrowser x:Name="SchemaPinned" Compact="True" />
+        </Border>
+
         <!--  ============ MAIN: editor + results ============  -->
-        <Grid Grid.Column="1">
+        <Grid Grid.Column="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -1168,7 +1202,7 @@
         <!--  ============ NEW TAB COMMAND PALETTE ============  -->
         <Grid
             x:Name="NewTabPalette"
-            Grid.ColumnSpan="2"
+            Grid.ColumnSpan="3"
             Background="#66000000"
             KeyDown="NewTabPalette_KeyDown"
             Visibility="Collapsed">
@@ -1232,6 +1266,27 @@
                         Foreground="{ThemeResource StudioTextMutedBrush}"
                         Text="Type to filter · Enter opens · Esc closes" />
                 </Grid>
+            </Border>
+        </Grid>
+
+        <!--  ============ SCHEMA PEEK ============  -->
+        <Grid
+            x:Name="SchemaPeekHost"
+            Grid.ColumnSpan="3"
+            Background="#66000000"
+            Visibility="Collapsed">
+            <Border Tapped="SchemaPeekBackdrop_Tapped" />
+            <Border
+                Width="620"
+                Height="520"
+                Margin="264,76,0,0"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="12">
+                <controls:SchemaBrowser x:Name="SchemaPeek" />
             </Border>
         </Grid>
 

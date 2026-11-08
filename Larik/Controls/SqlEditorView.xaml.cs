@@ -127,6 +127,35 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         Editor.Document.Selection.SetRange(start, end);
     }
 
+    public void InsertText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        BeginEdit();
+        _suppressEvents = true;
+        try
+        {
+            var selection = Editor.Document.Selection;
+            var start = Math.Min(selection.StartPosition, selection.EndPosition);
+            selection.Text = text;
+            var caret = start + text.Length;
+            selection.SetRange(caret, caret);
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+
+        EndEdit();
+        HideCompletions();
+        RaiseTextChanged();
+        RaiseCaretChanged();
+        FocusEditor();
+    }
+
     public void FocusEditor() => Editor.Focus(FocusState.Programmatic);
 
     // ---------------------------------------------------------------- text plumbing
@@ -1138,6 +1167,10 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     return;
                 case VirtualKey.T:
                     CommandRequested?.Invoke(this, EditorCommandKind.NewTab);
+                    e.Handled = true;
+                    return;
+                case VirtualKey.K:
+                    CommandRequested?.Invoke(this, EditorCommandKind.BrowseSchema);
                     e.Handled = true;
                     return;
                 case VirtualKey.F:

@@ -276,6 +276,10 @@ against `Schema` + `Name`, and inserts a schema-qualified name in the dialect's 
 and is not repeated in the insert. A provider that reports no `Schema` keeps the bare name, so this
 is additive for engines without schemas.
 
+The shell's schema browser reads the same list: base tables with their columns and key metadata.
+Object kind (view/routine) and column data types are not part of `TableSchema` yet, so they cannot
+be browsed — add optional members and introspection when a provider needs them.
+
 ---
 
 ## 6. Result details

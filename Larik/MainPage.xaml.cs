@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Larik.Data;
 using Larik.Editor;
+using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -44,6 +45,9 @@ public sealed partial class MainPage : Page
     private bool _newTabPaletteOpen;
     private List<string> _paletteDatabases = [];
 
+    private bool _schemaPinned;
+    private readonly Dictionary<string, List<string>> _recentObjects = new(StringComparer.Ordinal);
+
     public StudioViewModel ViewModel { get; } = new();
 
     /// <summary>Inactive tabs recede; the active tab carries primary text (Arc sidebar behaviour).</summary>
@@ -82,6 +86,19 @@ public sealed partial class MainPage : Page
         {
             Root.Background = (Brush)Application.Current.Resources["StudioBackgroundBrush"];
         }
+
+        // One schema control serves both placements; the shell owns what insert and preview mean.
+        SchemaPeek.CloseRequested += (_, _) => CloseSchemaPeek();
+        SchemaPeek.PinRequested += (_, _) => PinSchemaBrowser(open: true);
+        SchemaPeek.Activated += (_, selection) => InsertSchemaObject(selection, closePeek: true);
+        SchemaPeek.PreviewRequested += (_, selection) => _ = PreviewSchemaObjectAsync(selection, closePeek: true);
+        SchemaPeek.StatusRequested += (_, message) => ViewModel.StatusText = message;
+
+        SchemaPinned.CloseRequested += (_, _) => PinSchemaBrowser(open: false);
+        SchemaPinned.PinRequested += (_, _) => PinSchemaBrowser(open: false);
+        SchemaPinned.Activated += (_, selection) => InsertSchemaObject(selection, closePeek: false);
+        SchemaPinned.PreviewRequested += (_, selection) => _ = PreviewSchemaObjectAsync(selection, closePeek: false);
+        SchemaPinned.StatusRequested += (_, message) => ViewModel.StatusText = message;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -118,6 +135,157 @@ public sealed partial class MainPage : Page
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(SettingsPage));
 
+    // ---------------------------------------------------------------- schema browser
+
+    private void SchemaAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        OpenSchemaPeek();
+    }
+
+    private void BrowseSchema_Click(object sender, RoutedEventArgs e) => OpenSchemaPeek();
+
+    private void OpenSchemaPeek()
+    {
+        if (SchemaPeekHost.Visibility == Visibility.Visible)
+        {
+            CloseSchemaPeek();
+            return;
+        }
+
+        if (ViewModel.ActiveSpace is not { IsConnected: true })
+        {
+            ViewModel.StatusText = "Connect the workspace to browse its schema";
+            return;
+        }
+
+        RefreshSchemaBrowsers();
+        SchemaPeek.ResetSearch();
+        SchemaPeekHost.Visibility = Visibility.Visible;
+        SchemaPeek.FocusSearch();
+    }
+
+    private void CloseSchemaPeek()
+    {
+        if (SchemaPeekHost.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        SchemaPeekHost.Visibility = Visibility.Collapsed;
+        SqlEditor.FocusEditor();
+    }
+
+    private void SchemaPeekBackdrop_Tapped(object sender, TappedRoutedEventArgs e) => CloseSchemaPeek();
+
+    /// <summary>Re-feeds both placements from the active tab's schema.</summary>
+    private void RefreshSchemaBrowsers()
+    {
+        var database = ViewModel.ActiveSpace?.ActiveDatabase?.Name ?? ViewModel.ActiveTab?.Database;
+        var recents = RecentsForActiveSpace();
+        SchemaPeek.Show(ViewModel.Tables, database, recents);
+
+        if (_schemaPinned)
+        {
+            SchemaPinned.Show(ViewModel.Tables, database, recents);
+        }
+    }
+
+    private void PinSchemaBrowser(bool open)
+    {
+        _schemaPinned = open;
+        Root.ColumnDefinitions[1].Width = open ? new GridLength(300) : new GridLength(0);
+        SchemaPinnedHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+
+        if (open)
+        {
+            CloseSchemaPeek();
+            RefreshSchemaBrowsers();
+            SchemaPinned.FocusSearch();
+            ViewModel.StatusText = "Schema pinned beside the editor";
+        }
+        else
+        {
+            ViewModel.StatusText = "Schema unpinned";
+        }
+    }
+
+    private void InsertSchemaObject(SchemaSelection selection, bool closePeek)
+    {
+        var text = selection.Column ?? QualifiedTableName(selection.Table);
+        SqlEditor.InsertText(text);
+        RememberSchemaObject(selection.Table);
+        ViewModel.StatusText = $"Inserted {text}";
+
+        if (closePeek)
+        {
+            CloseSchemaPeek();
+        }
+        else if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
+    }
+
+    private async Task PreviewSchemaObjectAsync(SchemaSelection selection, bool closePeek)
+    {
+        var name = QualifiedTableName(selection.Table);
+        RememberSchemaObject(selection.Table);
+
+        if (closePeek)
+        {
+            CloseSchemaPeek();
+        }
+        else if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
+
+        ViewModel.StatusText = $"Previewing {name} · top 100";
+        await ViewModel.RunSqlAsync($"SELECT TOP 100 * FROM {name};", append: true);
+    }
+
+    /// <summary>The name inserted into the editor, quoted the way the active dialect requires.</summary>
+    private string QualifiedTableName(TableSchema table)
+    {
+        var dialect = ViewModel.ActiveLanguage as ISqlDialect;
+        string Quote(string value) => dialect?.QuoteIdentifier(value) ?? value;
+
+        return string.IsNullOrWhiteSpace(table.Schema)
+            ? Quote(table.Name)
+            : $"{Quote(table.Schema)}.{Quote(table.Name)}";
+    }
+
+    private List<string> RecentsForActiveSpace()
+    {
+        var id = ViewModel.ActiveSpace?.Id;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return [];
+        }
+
+        if (!_recentObjects.TryGetValue(id, out var list))
+        {
+            list = [];
+            _recentObjects[id] = list;
+        }
+
+        return list;
+    }
+
+    private void RememberSchemaObject(TableSchema table)
+    {
+        var list = RecentsForActiveSpace();
+        var key = SchemaKeys.For(table);
+        list.Remove(key);
+        list.Insert(0, key);
+
+        while (list.Count > 5)
+        {
+            list.RemoveAt(list.Count - 1);
+        }
+    }
+
     // ---------------------------------------------------------------- workspace switching
 
     private int ActiveSpaceIndex() =>
@@ -129,6 +297,16 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(StudioViewModel.Tables))
+        {
+            if (SchemaPeekHost.Visibility == Visibility.Visible || _schemaPinned)
+            {
+                RefreshSchemaBrowsers();
+            }
+
+            return;
+        }
+
         if (e.PropertyName == nameof(StudioViewModel.ActiveLanguage))
         {
             SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
@@ -147,6 +325,17 @@ public sealed partial class MainPage : Page
         }
 
         _lastSpaceIndex = index;
+
+        // The rail changed workspace: the peek belongs to the tab you left, the pin follows along.
+        if (SchemaPeekHost.Visibility == Visibility.Visible)
+        {
+            CloseSchemaPeek();
+        }
+
+        if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
     }
 
     private void SlideQueryContent(int direction)
@@ -282,6 +471,9 @@ public sealed partial class MainPage : Page
                 break;
             case EditorCommandKind.ToggleSidebar:
                 ViewModel.ToggleSidebarCommand.Execute(null);
+                break;
+            case EditorCommandKind.BrowseSchema:
+                OpenSchemaPeek();
                 break;
         }
     }

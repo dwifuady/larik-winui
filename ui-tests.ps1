@@ -856,6 +856,34 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'Ctrl+K browses the schema and inserts a table name' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from ' -Literal
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'backup' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'backupset').matchCount -gt 0) 'schema search did not find msdb tables'
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[backupset]') "schema insert produced '$((Get-EditorText))'"
+        Assert-True ((Find-Element 'Search schema').matchCount -eq 0) 'the schema peek stayed open after inserting'
+    }
+
+    Test-UI 'the schema peek can be pinned beside the editor' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Click-Element 'Pin schema browser'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Search schema').matchCount -gt 0) 'pinning closed the schema surface'
+        Assert-True ((Find-Element 'Preview 100 rows').matchCount -eq 0) 'the pinned pane still shows the peek detail'
+        Click-Element 'Pin schema browser'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Search schema').matchCount -eq 0) 'unpinning left the inspector open'
+    }
+
     Test-UI 'PRINT opens a Messages tab with the server output' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
