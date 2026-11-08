@@ -1005,6 +1005,23 @@ try {
         Assert-True ($withHeaders -match 'master') "the column values are missing: $withHeaders"
     }
 
+    Test-UI 'Space opens the cell preview and Esc closes it' {
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the cell preview did not open'
+
+        # The panel follows the focused cell, so arrowing must not close it.
+        Send-Keys 'right'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the preview closed while moving between cells'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Cell preview').matchCount -eq 0) 'Esc did not close the cell preview'
+    }
+
     Test-UI 'a column width can be dragged from the header' {
         $handle = @((Find-Element 'Resize name column').matches) | Select-Object -First 1
         Assert-True ($null -ne $handle) 'the column resize handle was not found'

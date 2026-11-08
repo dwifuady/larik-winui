@@ -5,6 +5,9 @@ public sealed class ResultColumnLayout
 {
     public required string Name { get; init; }
 
+    /// <summary>Provider-reported type (e.g. "nvarchar"), shown in the cell preview.</summary>
+    public string? DataType { get; init; }
+
     /// <summary>Changed live by the header resize handles; cached with the result.</summary>
     public double Width { get; set; }
 

@@ -39,6 +39,10 @@
     </UserControl.Resources>
 
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -84,6 +88,11 @@
             ScrollViewer.VerticalScrollMode="Enabled">
             <ListView.ContextFlyout>
                 <MenuFlyout>
+                    <MenuFlyoutItem
+                        Click="PreviewCell_Click"
+                        AutomationProperties.Name="Preview cell"
+                        KeyboardAcceleratorTextOverride="Space"
+                        Text="Preview cell" />
                     <MenuFlyoutItem
                         Click="Export_Click"
                         AutomationProperties.Name="Export results"
@@ -133,5 +142,93 @@
                 IsTextSelectionEnabled="True"
                 TextWrapping="Wrap" />
         </ScrollViewer>
+
+        <!--  Cell preview: Space on a cell, or the context menu, shows the full value.  -->
+        <Border
+            x:Name="CellPreview"
+            Grid.RowSpan="2"
+            Grid.Column="1"
+            Width="340"
+            Margin="8,0,0,0"
+            AutomationProperties.Name="Cell preview"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="Collapsed">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Padding="12,8,8,6" ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel VerticalAlignment="Center" Spacing="1">
+                        <TextBlock
+                            x:Name="CellPreviewTitle"
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            x:Name="CellPreviewSubtitle"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+
+                    <Button
+                        Grid.Column="1"
+                        Width="28"
+                        Height="28"
+                        AutomationProperties.Name="Copy cell value"
+                        Click="CopyPreview_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Copy the full value">
+                        <FontIcon FontSize="11" Glyph="&#xE8C8;" />
+                    </Button>
+
+                    <Button
+                        Grid.Column="2"
+                        Width="28"
+                        Height="28"
+                        AutomationProperties.Name="Close cell preview"
+                        Click="ClosePreview_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Close (Esc)">
+                        <FontIcon FontSize="11" Glyph="&#xE711;" />
+                    </Button>
+                </Grid>
+
+                <ScrollViewer
+                    Grid.Row="1"
+                    Padding="12,4,12,10"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+                    <TextBlock
+                        x:Name="CellPreviewValue"
+                        FontFamily="{StaticResource StudioMonoFont}"
+                        FontSize="12"
+                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                        IsTextSelectionEnabled="True"
+                        TextWrapping="Wrap" />
+                </ScrollViewer>
+
+                <TextBlock
+                    x:Name="CellPreviewFooter"
+                    Grid.Row="2"
+                    Margin="12,0,12,10"
+                    FontSize="10"
+                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                    TextWrapping="Wrap" />
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

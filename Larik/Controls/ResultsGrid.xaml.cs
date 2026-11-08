@@ -59,6 +59,12 @@ public sealed partial class ResultsGrid : UserControl
     private Brush _headerBackground = null!;
     private Brush _dividerBrush = null!;
 
+    // Cell preview: the full value of the focused cell, which the grid itself ellipsizes.
+    private const int PreviewCharacterLimit = 100_000;
+    private bool _previewOpen;
+    private int _previewRow = -1;
+    private int _previewColumn = -1;
+
     /// <summary>Per-result scroll/selection state, so each result tab remembers where it was.</summary>
     private sealed class ResultViewState
     {
@@ -100,6 +106,7 @@ public sealed partial class ResultsGrid : UserControl
     public void ShowResult(QueryResult? result, string accentHex)
     {
         SaveViewState();
+        HideCellPreview();
 
         _accentHex = accentHex;
         UpdateAccentBrushes();
@@ -151,6 +158,7 @@ public sealed partial class ResultsGrid : UserControl
 
     private void Clear()
     {
+        HideCellPreview();
         _result = null;
         _layout = null;
         _rows = [];
@@ -213,6 +221,7 @@ public sealed partial class ResultsGrid : UserControl
             columns.Add(new ResultColumnLayout
             {
                 Name = result.Columns[c].Name,
+                DataType = result.Columns[c].DataType,
                 Width = Math.Clamp(24 + (longest * 7.2), 72, 360),
                 Numeric = numeric,
             });
@@ -536,6 +545,14 @@ public sealed partial class ResultsGrid : UserControl
                 SelectColumn(_focusColumn, extend: false);
                 e.Handled = true;
                 break;
+            case VirtualKey.Space:
+                ToggleCellPreview();
+                e.Handled = true;
+                break;
+            case VirtualKey.Escape when _previewOpen:
+                HideCellPreview();
+                e.Handled = true;
+                break;
         }
     }
 
@@ -602,6 +619,7 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         UpdateHeaderSelection();
+        RefreshPreviewIfOpen();
     }
 
     internal void AttachRow(ResultRowView row) => ApplyRowSelection(row);
@@ -710,6 +728,147 @@ public sealed partial class ResultsGrid : UserControl
         {
             _exporting = false;
         }
+    }
+
+    // ---------------------------------------------------------------- cell preview
+
+    /// <summary>
+    /// Space (or the context menu) opens the focused cell's full value beside the grid. Cells are
+    /// ellipsized, so this is the only way to read a long value without copying it.
+    /// </summary>
+    private void ToggleCellPreview()
+    {
+        if (_layout is null || !_hasSelection || _rows.Count == 0)
+        {
+            return;
+        }
+
+        if (_previewOpen && _previewRow == _focusRow && _previewColumn == _focusColumn)
+        {
+            HideCellPreview();
+            return;
+        }
+
+        ShowCellPreview(_focusRow, _focusColumn);
+    }
+
+    private void ShowCellPreview(int row, int column)
+    {
+        if (_layout is null || row < 0 || row >= _rows.Count || column < 0 || column >= _layout.Columns.Count)
+        {
+            return;
+        }
+
+        _previewOpen = true;
+        _previewRow = row;
+        _previewColumn = column;
+        CellPreview.Visibility = Visibility.Visible;
+
+        var layout = _layout.Columns[column];
+        var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
+        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+
+        CellPreviewTitle.Text = layout.Name;
+        CellPreviewSubtitle.Text = string.IsNullOrWhiteSpace(layout.DataType)
+            ? $"row {_rows[row].Index + 1}"
+            : $"{layout.DataType} · row {_rows[row].Index + 1}";
+
+        if (value is null)
+        {
+            CellPreviewValue.Text = "NULL";
+            CellPreviewValue.Foreground = muted;
+            CellPreviewFooter.Text = string.Empty;
+            return;
+        }
+
+        if (value.Length == 0)
+        {
+            CellPreviewValue.Text = "\"\"";
+            CellPreviewValue.Foreground = muted;
+            CellPreviewFooter.Text = "Empty string";
+            return;
+        }
+
+        // A single 10 MB cell would make the TextBlock the slowest thing in the window; the copy
+        // button still hands over the whole value.
+        CellPreviewValue.Text = value.Length > PreviewCharacterLimit
+            ? value[..PreviewCharacterLimit]
+            : value;
+        CellPreviewValue.Foreground = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        CellPreviewFooter.Text = value.Length > PreviewCharacterLimit
+            ? $"Showing first {PreviewCharacterLimit:N0} of {value.Length:N0} characters — Copy copies all"
+            : $"{value.Length:N0} characters";
+    }
+
+    private void HideCellPreview()
+    {
+        if (!_previewOpen)
+        {
+            return;
+        }
+
+        _previewOpen = false;
+        _previewRow = -1;
+        _previewColumn = -1;
+        CellPreview.Visibility = Visibility.Collapsed;
+        CellPreviewValue.Text = string.Empty;
+        CellPreviewFooter.Text = string.Empty;
+    }
+
+    /// <summary>Keeps the panel in step with the focused cell while the user arrows around.</summary>
+    private void RefreshPreviewIfOpen()
+    {
+        if (_previewOpen)
+        {
+            ShowCellPreview(_focusRow, _focusColumn);
+        }
+    }
+
+    private void PreviewCell_Click(object sender, RoutedEventArgs e) =>
+        ShowCellPreview(_focusRow, _focusColumn);
+
+    private void CopyPreview_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_previewOpen || _previewRow < 0 || _previewRow >= _rows.Count)
+        {
+            return;
+        }
+
+        var value = _previewColumn < _rows[_previewRow].Cells.Count
+            ? _rows[_previewRow].Cells[_previewColumn] ?? string.Empty
+            : string.Empty;
+
+        var package = new DataPackage();
+        package.SetText(value);
+
+        try
+        {
+            Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke(this, $"Copy failed: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            // Another process can briefly hold the clipboard open; the content is already set.
+            Clipboard.Flush();
+        }
+        catch
+        {
+            // Best effort.
+        }
+
+        StatusChanged?.Invoke(this, "Cell value copied");
+        Focus(FocusState.Programmatic);
+    }
+
+    private void ClosePreview_Click(object sender, RoutedEventArgs e)
+    {
+        HideCellPreview();
+        Focus(FocusState.Programmatic);
     }
 
     // ---------------------------------------------------------------- clipboard

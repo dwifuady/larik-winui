@@ -86,6 +86,7 @@ appends a new one, a transaction opened in one tab does not leak into another ta
 running `WAITFOR`, each result remembers its scroll row across result/query tab switches, a
 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
 results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
+Space opens the cell preview and Esc closes it,
 the grid menu exports the whole result to a CSV file through the real save dialog,
 Ctrl+Space selects a column, a header drag resizes it, the window rectangle is saved with the
 session, the connection dialog renders the provider's
@@ -318,7 +319,10 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
-  extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies the
+  extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
+  **cell preview** beside the grid with the full, untruncated value (the grid ellipsizes cells),
+  the column type and row number, explicit NULL/empty states and a copy button; arrow keys keep it
+  in step with the focused cell, and Esc or its close button dismisses it. Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
   context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
   writes the whole result (not the selection) through the Windows save picker, where the file type
