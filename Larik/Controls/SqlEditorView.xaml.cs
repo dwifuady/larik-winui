@@ -1,3 +1,4 @@
+using System.Text;
 using Larik.Data;
 using Larik.Editor;
 using Larik.Models;
@@ -528,29 +529,44 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             return;
         }
 
-        _skipCompletionUpdateOnce = true;
         var item = _completions[_selectedIndex];
+        var checkedItems = _completions.Where(candidate => candidate.IsChecked).ToList();
+        var text = GetText();
         var caret = Editor.Document.Selection.StartPosition;
-        var (start, _, _) = CompletionEngine.ExtractContext(GetText(), caret);
+        var (start, _, qualifier) = CompletionEngine.ExtractContext(text, caret);
+        var afterDot = start > 0 && text[start - 1] == '.';
 
+        _skipCompletionUpdateOnce = true;
         BeginEdit();
         _suppressEvents = true;
         try
         {
             var selection = Editor.Document.Selection;
             selection.SetRange(start, caret);
-            selection.Text = item.InsertText;
 
-            if (item.Selection is { } placeholder)
+            if (checkedItems.Count > 0)
             {
-                selection.SetRange(start + placeholder.Start, start + placeholder.Start + placeholder.Length);
+                // Space-ticked columns become one comma-separated list, in the order the list shows.
+                var insert = ComposeInsert(checkedItems, qualifier, afterDot);
+                selection.Text = insert;
+                var end = start + insert.Length;
+                selection.SetRange(end, end);
             }
             else
             {
-                var caretAt = item.CaretOffset >= 0
-                    ? start + item.CaretOffset
-                    : start + item.InsertText.Length;
-                selection.SetRange(caretAt, caretAt);
+                selection.Text = item.InsertText;
+
+                if (item.Selection is { } placeholder)
+                {
+                    selection.SetRange(start + placeholder.Start, start + placeholder.Start + placeholder.Length);
+                }
+                else
+                {
+                    var caretAt = item.CaretOffset >= 0
+                        ? start + item.CaretOffset
+                        : start + item.InsertText.Length;
+                    selection.SetRange(caretAt, caretAt);
+                }
             }
         }
         finally
@@ -563,6 +579,74 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         RaiseTextChanged();
         RaiseCaretChanged();
         FocusEditor();
+    }
+
+    /// <summary>
+    /// Space-ticked columns become one comma-separated list. After a dot (<c>o.</c> + Space) the
+    /// list shows bare column names, so every item after the first repeats the qualifier.
+    /// </summary>
+    private static string ComposeInsert(IReadOnlyList<CompletionItem> items, string? qualifier, bool afterDot)
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (index > 0)
+            {
+                builder.Append(", ");
+            }
+
+            if (afterDot && index > 0 && !string.IsNullOrEmpty(qualifier)
+                && !items[index].InsertText.StartsWith(qualifier + ".", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append(qualifier).Append('.');
+            }
+
+            builder.Append(items[index].InsertText);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Space ticks the highlighted column while the list still shows the whole column set (the word
+    /// being typed is empty). A space pressed mid-word keeps its normal meaning and closes the list.
+    /// </summary>
+    private bool CanToggleCheck()
+    {
+        if (_completions is null || _selectedIndex < 0 || _selectedIndex >= _completions.Count)
+        {
+            return false;
+        }
+
+        if (_completions[_selectedIndex].Kind != CompletionKind.Column)
+        {
+            return false;
+        }
+
+        var (_, word, _) = CompletionEngine.ExtractContext(GetText(), CaretOffset);
+        return word.Length == 0;
+    }
+
+    private void ToggleCheck(int index)
+    {
+        if (_completions is null || index < 0 || index >= _completions.Count)
+        {
+            return;
+        }
+
+        var item = _completions[index];
+        if (item.Kind != CompletionKind.Column)
+        {
+            return;
+        }
+
+        item.IsChecked = !item.IsChecked;
+
+        // Keep the list open and walk on, so several columns can be ticked with repeated Space.
+        if (index + 1 < _completions.Count)
+        {
+            SelectCompletion(index + 1);
+        }
     }
 
     private void CompletionList_ItemClick(object sender, ItemClickEventArgs e)
@@ -1023,6 +1107,10 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         {
             switch (e.Key)
             {
+                case VirtualKey.Space when CanToggleCheck():
+                    ToggleCheck(_selectedIndex);
+                    e.Handled = true;
+                    return;
                 case VirtualKey.Tab:
                 case VirtualKey.Enter:
                     AcceptCompletion();

@@ -249,7 +249,10 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   `SET TRANSACTION ISOLATION LEVEL ...` works, and now only affects the tab that issued it.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
-  **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
+  **Tab or Enter accepts**, Esc dismisses. In a column list, **Space ticks the highlighted column**
+  (column rows carry a checkbox) so several can be picked, and one Tab/Enter inserts them
+  comma-separated (`o.Id, o.Intent, o.Status`); ticking only applies while the word being typed is
+  empty, so a space typed mid-word keeps its normal meaning. Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
   lists every table in the active database with its schema, and inserts a runnable name in the

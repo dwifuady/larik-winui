@@ -147,6 +147,22 @@ public sealed partial class CompletionItem : ObservableObject
     /// </summary>
     public int MatchRank { get; init; }
 
+    /// <summary>
+    /// Tick state for multi-select in the completion popup: Space toggles a column, Tab/Enter
+    /// inserts every ticked column. Only columns can be ticked; tables, keywords and joins keep
+    /// the single-accept behaviour.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CheckGlyph))]
+    [NotifyPropertyChangedFor(nameof(CheckOpacity))]
+    public partial bool IsChecked { get; set; }
+
+    public bool CanCheck => Kind == CompletionKind.Column;
+
+    public string CheckGlyph => IsChecked ? "\uE73E" : "\uE739";
+
+    public double CheckOpacity => CanCheck ? (IsChecked ? 1 : 0.35) : 0;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HighlightBrush))]
     public partial bool IsSelected { get; set; }
