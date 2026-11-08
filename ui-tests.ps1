@@ -162,6 +162,20 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
+function Right-Click-Element {
+    param([string]$Selector)
+    Focus-App
+    try {
+        Invoke-Ui @('click', $Selector, '--right') -Attempts 2 | Out-Null
+        return
+    }
+    catch {
+    }
+
+    $matches = @((Find-Element $Selector).matches)
+    if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
+    Invoke-Ui @('click', $matches[0].selector, '--right') -Attempts 4 | Out-Null
+}
 function Focus-Element { param([string]$Selector) Focus-App; $target = if ($script:MainWindow) { @('-w', $script:MainWindow) } else { @() }; Invoke-Ui (@('focus', $Selector) + $target) | Out-Null }
 function Wait-ForText {
     param([string]$Text, [int]$Seconds = 8)
@@ -199,6 +213,48 @@ try {
 
     Test-UI 'sidebar lists the active workspace tabs' {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'workspace tab is not exposed'
+    }
+
+    Test-UI 'a tab title renames in place and commits on Enter' {
+        Right-Click-Element 'Customer totals'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Rename'
+        Wait-ForText 'Tab name'
+        $editor = @((Find-Element 'Tab name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $editor) 'the inline rename editor did not appear'
+        Invoke-Ui @('set-value', $editor.selector, 'Customer totals renamed') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Customer totals renamed').matchCount -gt 0) 'the inline rename did not commit'
+
+        Right-Click-Element 'Customer totals renamed'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Rename'
+        Wait-ForText 'Tab name'
+        $editor = @((Find-Element 'Tab name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $editor.selector, 'Customer totals') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the tab name was not restored'
+    }
+
+    Test-UI 'pinning moves a tab into its own section' {
+        Right-Click-Element 'Customer totals'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Pin tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Pinned tabs').matchCount -gt 0) 'the pinned section did not appear'
+
+        Right-Click-Element 'Customer totals'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Unpin tab'
+        Start-Sleep -Milliseconds 600
+
+        Right-Click-Element 'Customer totals'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Pin tab').matchCount -gt 0) 'the tab did not unpin'
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
     }
 
     Test-UI 'the workspace switcher spans the rail' {
@@ -570,21 +626,21 @@ try {
     Test-UI 'New query asks for a database before creating the tab' {
         Click-Element 'New query tab'
         Start-Sleep -Milliseconds 800
-        Assert-True ((Find-Element 'New query database').matchCount -gt 0) 'the database picker did not open'
-        Click-Element 'Create'
+        Assert-True ((Find-Element 'New query database').matchCount -gt 0) 'the database palette did not open'
+        Focus-Element 'New tab database search'
+        Send-Keys 'enter'
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'new tab did not appear'
     }
 
-    Test-UI 'a new tab binds the database chosen in the picker' {
+    Test-UI 'typing in the new-tab palette filters the database and Enter opens it' {
         Click-Element 'New query tab'
         Start-Sleep -Milliseconds 800
-        Click-Element 'New query database'
-        Start-Sleep -Milliseconds 600
-        Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the picker did not list the server databases'
-        Click-Element 'tempdb'
-        Start-Sleep -Milliseconds 300
-        Click-Element 'Create'
+        Focus-Element 'New tab database search'
+        Send-Keys 'tempdb' -Literal
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the palette did not filter to tempdb'
+        Send-Keys 'enter'
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'Query 2').matchCount -gt 0) 'new tab did not appear'
         Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab database'
@@ -821,21 +877,21 @@ try {
         Assert-True ((Find-Element 'model').matchCount -gt 0) 'the reordered results reverted on tab switch'
     }
 
-    Test-UI 'query tabs can be reordered by dragging' {
+    Test-UI 'new tabs open on top and query tabs can be reordered by dragging' {
         $first = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         $second = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         Assert-True ($null -ne $first -and $null -ne $second) 'the query tabs were not found'
-        Assert-True ($second.y -gt $first.y) 'the query tabs did not start in order'
+        Assert-True ($second.y -lt $first.y) 'a new tab did not open above the older one'
 
-        $from = "$([int]($first.x + ($first.width / 2))),$([int]($first.y + ($first.height / 2)))"
-        $to = "$([int]($second.x + ($second.width / 2))),$([int]($second.y + ($second.height / 2)))"
+        $from = "$([int]($second.x + ($second.width / 2))),$([int]($second.y + ($second.height / 2)))"
+        $to = "$([int]($first.x + ($first.width / 2))),$([int]($first.y + ($first.height / 2)))"
         Invoke-Ui @('drag', $from, $to, '--hold-ms', '250', '--dwell-ms', '300') | Out-Null
         Start-Sleep -Milliseconds 700
 
         $movedFirst = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         $movedSecond = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         Assert-True ($null -ne $movedFirst -and $null -ne $movedSecond) 'the query tabs disappeared after dragging'
-        Assert-True ($movedFirst.y -gt $movedSecond.y) "Query 1 did not move below Query 2 (Query 1 y=$($movedFirst.y), Query 2 y=$($movedSecond.y))"
+        Assert-True ($movedSecond.y -gt $movedFirst.y) "Query 2 did not move below Query 1 (Query 1 y=$($movedFirst.y), Query 2 y=$($movedSecond.y))"
 
         # The space owns the tab order; switching workspaces and back must preserve it.
         Click-Element 'Workspace Staging'
@@ -845,7 +901,7 @@ try {
         $persistedFirst = @((Find-Element 'Query 1').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         $persistedSecond = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         Assert-True ($null -ne $persistedFirst -and $null -ne $persistedSecond) 'the query tabs disappeared after switching workspaces'
-        Assert-True ($persistedFirst.y -gt $persistedSecond.y) 'the dragged tab order was not saved to the workspace'
+        Assert-True ($persistedFirst.y -lt $persistedSecond.y) 'the dragged tab order was not saved to the workspace'
     }
 
     Test-UI 'transactions belong to the query tab that opened them' {
@@ -901,11 +957,10 @@ try {
         # Pin it to master first: the test then proves USE carries across the GO boundary.
         Click-Element 'New query tab'
         Start-Sleep -Milliseconds 800
-        Click-Element 'New query database'
-        Start-Sleep -Milliseconds 600
-        Click-Element 'master'
-        Start-Sleep -Milliseconds 300
-        Click-Element 'PrimaryButton'
+        Focus-Element 'New tab database search'
+        Send-Keys 'master' -Literal
+        Start-Sleep -Milliseconds 500
+        Send-Keys 'enter'
         Start-Sleep -Milliseconds 900
 
         Invoke-Ui @('focus', 'Editor') | Out-Null

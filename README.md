@@ -23,10 +23,10 @@ C:\dev\larik-winui\
 │   │   ├── CompletionEngine.cs   # clause-aware completion, ${cursor}/${1:placeholder} expansion
 │   │   ├── SqlFormatter.cs       # conservative keyword/clause formatter
 │   │   ├── QuerySession.cs       # one persistent server session per query tab
-│   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, app_state (no passwords)
+│   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, archive, app_state (no passwords)
 │   │   ├── SecretStore.cs        # Windows Credential Manager for provider password fields
 │   │   └── StudioColors.cs       # space palette + active-tab tint
-│   ├── ViewModels/               # Studio / Space / Connection / Database / Tab
+│   ├── ViewModels/               # Studio / Space / Connection / Database / Tab / ArchivedTab
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, completion source, shell commands
 │   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
@@ -134,12 +134,27 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 ## What works in this slice
 
 - **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
-  database subtitle revealed on hover/active, close button. **Drag a tab to reorder it**; the new
-  order is written back to the workspace (and survives a restart). Ctrl+T (or the + button) opens a
-  **New query** dialog that asks which database the tab belongs to; each tab owns that database and
-  its result grid, so switching tabs repoints completion, the database picker and the grid together.
+  database subtitle revealed on hover/active, close button. **Pinned tabs live in their own section
+  above the TABS header** and are more compact (36 px); unpinning returns the tab to the normal rail.
+  **Drag a tab to reorder it** within its section; the new order is written back to the workspace
+  (and survives a restart). **Double-click a tab title** (or right-click → Rename) to rename it
+  **inline**; Enter commits, Esc cancels, clicking away commits. Right-click also pins/unpins and
+  closes. Closing is non-destructive: the tab **moves to the archive** and can be restored.
+  **New tabs open at the top of the unpinned section**, and the **New tab row** is a full-width
+  tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too.
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
   (Ctrl+B also works).
+- **New-tab command palette**: the New tab row opens a searchable palette instead of a modal
+  database picker. Type to filter the workspace's databases, use Up/Down, and press Enter to open
+  the tab (Esc or the backdrop cancels). With no databases available, Enter opens an unbound tab.
+- **Archive & history**: the rail's archive button (and the workspace menu) opens a page listing
+  archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
+  back in its workspace (pin state and section included); Delete or **Clear all** removes history.
+  Inactivity is tracked per tab (last selected or edited). **Auto-archive** is configurable on that
+  page — a toggle plus *n* days (default 30) and **Run now** — and an hourly sweep archives tabs
+  untouched for *n* days. Pinned tabs, the tab currently in view, and the last tab of a workspace
+  are never auto-archived. Archive state and the setting live in the same SQLite database as the
+  session.
 - **Workspaces, connections and databases**: one space owns exactly one connection; that
   connection exposes several databases. Each query tab opens its own persistent **session** from
   that connection, so a transaction, temp table or `SET` option in one tab never leaks into another
@@ -202,13 +217,15 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   persist in the same SQLite database as the workspace (the `snippets` table, same shape as
   `src-tauri/src/storage/snippets.rs`), with built-ins seeded by stable id so edits survive upgrades.
 - **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik\larik.db` (`larik-dev.db` in Debug
-  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `snippets` and
-  `app_state` — the same model as `src-tauri/src/storage` — so spaces, connection profiles
-  (non-secret settings), tabs and their SQL survive a restart. WAL mode, foreign keys with cascade
-  deletes, schema versioned via `PRAGMA user_version`; a pre-SQLite `studio.json` is imported once.
-  Spaces still start disconnected. Provider-declared password fields are kept in Windows Credential
-  Manager (never in SQLite), so SQL-auth connections reconnect after a restart without re-entering
-  the password. Corrupt state falls back to the seeded spaces.
+  builds, like the Tauri version) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
+  `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
+  the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
+  tabs, their SQL, pins, archive history and snippet edits survive a restart. WAL mode, foreign keys
+  with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
+  columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
+  disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
+  SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
+  Corrupt state falls back to the seeded spaces.
 - **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
   tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
@@ -254,7 +271,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |
 | No autocommit / manual-commit switch, no isolation dropdown | Deliberately mirrors SSMS for SQL Server: each statement autocommits, `BEGIN TRAN`/`COMMIT` are explicit, and isolation is the server default (`SET TRANSACTION ISOLATION LEVEL` remains available per tab). A DBeaver/DataGrip-style manual-commit mode is a product decision, not a SQL-standard requirement. |
 | App exit has no transaction prompt | Closing one tab or disconnecting is guarded and rolls back; closing the whole app relies on SQL Server rolling back when the process's sessions end. |
-| Folders, pinned tabs, command palette, MCP | Ported later; tab reordering is in place, the remaining organisation features are not. |
+| Folders, command palette, MCP | Ported later; tab reordering, inline rename, pinning and the archive are in place, the remaining organisation features are not. |
 | No snippet import | The manager handles built-ins and custom snippets; DBeaver template XML import from the web app is not ported yet. |
 
 ## WinUI notes worth remembering
