@@ -86,6 +86,8 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 {
     private readonly ConnectionProfile _profile;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly List<string> _messages = [];
+    private readonly object _messageGate = new();
     private SqlConnection? _connection;
 
     public SqlServerConnection(ConnectionProfile profile) => _profile = profile;
@@ -100,9 +102,18 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
         try
         {
-            _connection ??= new SqlConnection(BuildConnectionString());
+            _connection ??= new SqlConnection(BuildConnectionString())
+            {
+                // PRINT always arrives as InfoMessage; this also reports RAISERROR up to severity 10
+                // as a message instead of throwing it as a client exception, the way SSMS shows it.
+                FireInfoMessageEventOnUserErrors = true,
+            };
+
             if (_connection.State != System.Data.ConnectionState.Open)
             {
+                // Attach once per connection instance: re-subscribing would multiply the handler.
+                _connection.InfoMessage -= OnInfoMessage;
+                _connection.InfoMessage += OnInfoMessage;
                 await _connection.OpenAsync(cancellationToken);
             }
 
@@ -401,6 +412,10 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            // Anything that arrived between commands (a schema load, a transaction probe) is not
+            // this run's output.
+            ClearMessages();
+
             SwitchDatabase(database);
 
             await using var command = _connection!.CreateCommand();
@@ -455,6 +470,22 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             _gate.Release();
         }
 
+        // One Messages tab per batch: a message can arrive between result sets, so attributing it
+        // to an individual set would be guesswork. Errors keep their own result and messages follow.
+        var messages = TakeMessages();
+        if (messages.Count > 0)
+        {
+            results.Add(new QueryResult
+            {
+                Columns = [],
+                Rows = [],
+                Message = $"{messages.Count} message{(messages.Count == 1 ? string.Empty : "s")}",
+                Messages = messages,
+                Elapsed = stopwatch.Elapsed,
+                Database = database,
+            });
+        }
+
         if (results.Count == 0)
         {
             results.Add(new QueryResult
@@ -468,6 +499,58 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         }
 
         return results;
+    }
+
+    // ---------------------------------------------------------------- server messages
+
+    /// <summary>
+    /// PRINT, RAISERROR up to severity 10, SET STATISTICS and engine warnings. SqlClient raises this
+    /// while the command runs; the gate keeps one command in flight per connection, and the lock
+    /// covers an event that arrives on a worker thread.
+    /// </summary>
+    private void OnInfoMessage(object sender, SqlInfoMessageEventArgs e)
+    {
+        lock (_messageGate)
+        {
+            foreach (SqlError error in e.Errors)
+            {
+                _messages.Add(FormatMessage(error));
+            }
+        }
+    }
+
+    private static string FormatMessage(SqlError error)
+    {
+        var text = error.Message.TrimEnd();
+
+        // PRINT arrives as number 0 / severity 0, so the text is the whole message. RAISERROR and
+        // warnings carry a number and level (SqlError.Class); SSMS shows those as a header line.
+        return error.Number == 0 && error.Class <= 0
+            ? text
+            : $"Msg {error.Number}, Level {error.Class}, State {error.State}, Line {error.LineNumber}: {text}";
+    }
+
+    private List<string> TakeMessages()
+    {
+        lock (_messageGate)
+        {
+            if (_messages.Count == 0)
+            {
+                return [];
+            }
+
+            var copy = new List<string>(_messages);
+            _messages.Clear();
+            return copy;
+        }
+    }
+
+    private void ClearMessages()
+    {
+        lock (_messageGate)
+        {
+            _messages.Clear();
+        }
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(

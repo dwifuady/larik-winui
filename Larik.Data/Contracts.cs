@@ -128,6 +128,13 @@ public sealed class QueryResult
     /// <summary>True when the provider stopped at its row cap; <see cref="RowLimit"/> says where.</summary>
     public bool IsTruncated { get; init; }
 
+    /// <summary>
+    /// Informational output the engine sent around the result: <c>PRINT</c>, <c>RAISERROR</c> up to
+    /// severity 10, <c>SET STATISTICS IO/TIME</c> and optimizer warnings. Empty for providers (and
+    /// engines) without messages; additive, so older providers keep working.
+    /// </summary>
+    public IReadOnlyList<string> Messages { get; init; } = [];
+
     public int? RowLimit { get; init; }
 
     /// <summary>

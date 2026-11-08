@@ -856,6 +856,15 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'PRINT opens a Messages tab with the server output' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "print 'larik message test';" -Literal
+        Send-Keys 'f5'
+        Wait-ForText 'Messages' 30
+        Assert-True ((Find-Element 'larik message test').matchCount -gt 0) 'PRINT output is missing from the Messages tab'
+    }
+
     Test-UI 'Ctrl+B collapses and restores the sidebar' {
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700

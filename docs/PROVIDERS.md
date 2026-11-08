@@ -23,7 +23,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
-| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `GeneratedQuery`. |
+| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`. |
 | `TableSchema` / `ForeignKeySchema` | Table name, optional `Schema`, columns, primary key, foreign keys (with `ReferencedSchema`). |
 | `QueryExecutionOptions` | `MaxRows` with a 5,000 default / 100,000 ceiling. |
 | `SessionTransactionState` | `TransactionCount`, `XactState`, `HasTransaction`, `IsDoomed`, `CanCommit`, `CanRollback`. |
@@ -287,6 +287,10 @@ is additive for engines without schemas.
   assuming a fresh connection per call.
 - Return one result per statement even if only one has columns.
 - `QueryResult.Error` is the shape for a statement error (the grid shows the message and timing).
+- `QueryResult.Messages` is for output that is neither rows nor an error: `PRINT`, `RAISERROR` up
+  to severity 10, `SET STATISTICS IO/TIME`, optimizer warnings, and `USE`'s database-context line.
+  The SQL Server provider fills it from `SqlConnection.InfoMessage` (one Messages tab per batch);
+  other providers leave it empty and the tab never appears.
 - `QueryResult.GeneratedQuery` is for engines that translate user text. Example: a MongoDB provider
   compiling a SQL `SELECT` to an aggregation pipeline can report the pipeline it actually ran. The
   app currently stores it but does not display it; a result-tab "generated query" bar is future work.

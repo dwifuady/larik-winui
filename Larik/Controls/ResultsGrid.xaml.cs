@@ -114,6 +114,14 @@ public sealed partial class ResultsGrid : UserControl
         {
             Clear();
             _result = result;
+
+            if (result.Messages.Count > 0)
+            {
+                MessagesText.Text = string.Join(Environment.NewLine, result.Messages);
+                MessagesScroll.Visibility = Visibility.Visible;
+                return;
+            }
+
             EmptyText.Text = result.Message;
             EmptyText.Visibility = Visibility.Visible;
             return;
@@ -156,6 +164,8 @@ public sealed partial class ResultsGrid : UserControl
         AccentRule.Visibility = Visibility.Collapsed;
         EmptyText.Text = string.Empty;
         EmptyText.Visibility = Visibility.Collapsed;
+        MessagesText.Text = string.Empty;
+        MessagesScroll.Visibility = Visibility.Collapsed;
     }
 
     // ---------------------------------------------------------------- layout + rows

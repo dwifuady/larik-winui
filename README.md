@@ -72,7 +72,8 @@ under the caret and F5 runs the selection or the whole document (with `Result 2`
 syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
 replace all rewrites every match as one undo step, query and result tabs drag-reorder,
 `FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
-(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `ON `
+(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, a
+`PRINT` opens a Messages tab with the server text, `ON `
 suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
@@ -153,6 +154,10 @@ are needed, so a new provider only has to stop its own reader/cursor early.
 `ExecuteBatchAsync` returns one `QueryResult` per result set, which becomes one result tab. SQL
 Server reads native multiple result sets with `NextResultAsync`; the Demo provider splits on `;`.
 Providers that only implement the single-result method still work through a default implementation.
+`QueryResult.Messages` carries informational output that is not a result set (`PRINT`, `RAISERROR`
+up to severity 10, `SET STATISTICS IO/TIME`, warnings). SQL Server fills it from
+`SqlConnection.InfoMessage`; the shell gives it a **Messages** tab, and providers without message
+output simply leave it empty.
 
 A provider connection is a **session**, not a shared server handle: the shell creates one per query
 tab. Providers that support transactions implement `SupportsTransactions`,
@@ -239,6 +244,11 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   the toolbar disables Run and shows **Stop**, which cancels the command without closing the
   session. The active provider's editor language owns tokenizing and boundaries; T-SQL understands
   strings, quoted identifiers, line/block comments and `GO` separators (including indented `GO`).
+- **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
+  warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
+  open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
+  batch keeps attribution honest (messages can arrive between result sets); errors keep their own
+  result tab, and the status bar reports the message count.
 - **Transactions, visibly**: because each tab owns a session, `BEGIN TRAN` / `COMMIT` /
   `ROLLBACK` behave per tab. After every run the app reads `@@TRANCOUNT` and `XACT_STATE()` and shows
   a `TXN` badge on the tab plus a status-bar guard ("1 open transaction") with **Commit** and

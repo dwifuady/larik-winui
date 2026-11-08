@@ -986,18 +986,25 @@ public partial class StudioViewModel : ObservableObject
             var result = results[0];
             return result.IsError
                 ? "Error"
-                : result.IsTruncated
-                    ? $"Showing first {result.RowLimit:N0} rows"
-                    : $"{result.Rows.Count} rows returned";
+                : result.Messages.Count > 0
+                    ? DescribeMessages(result.Messages.Count)
+                    : result.IsTruncated
+                        ? $"Showing first {result.RowLimit:N0} rows"
+                        : $"{result.Rows.Count} rows returned";
         }
 
-        var rows = results.Where(result => !result.IsError).Sum(result => result.Rows.Count);
+        // The Messages tab is not a result set; don't count it as one in the summary.
+        var data = results.Where(result => result.Messages.Count == 0).ToList();
+        var rows = data.Where(result => !result.IsError).Sum(result => result.Rows.Count);
         var suffix = errors > 0 ? $" · {errors} error{(errors == 1 ? string.Empty : "s")}" : string.Empty;
-        var sets = $"result set{(results.Count == 1 ? string.Empty : "s")}";
+        var sets = $"result set{(data.Count == 1 ? string.Empty : "s")}";
         return append
-            ? $"Added {results.Count} {sets}{suffix}"
-            : $"{results.Count} {sets} · {rows} rows{suffix}";
+            ? $"Added {data.Count} {sets}{suffix}"
+            : $"{data.Count} {sets} · {rows} rows{suffix}";
     }
+
+    private static string DescribeMessages(int count) =>
+        $"{count} message{(count == 1 ? string.Empty : "s")}";
 
     /// <summary>Republishes the active tab's result tabs; an empty tab clears the grid.</summary>
     private void SyncResultMirror(TabViewModel? tab)

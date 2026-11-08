@@ -114,5 +114,24 @@
             Foreground="{ThemeResource StudioTextMutedBrush}"
             TextWrapping="Wrap"
             Visibility="Collapsed" />
+
+        <!--  Server messages (PRINT, statistics, warnings) as selectable monospace text.  -->
+        <ScrollViewer
+            x:Name="MessagesScroll"
+            Grid.Row="1"
+            Padding="14,12"
+            HorizontalScrollBarVisibility="Auto"
+            HorizontalScrollMode="Auto"
+            VerticalScrollBarVisibility="Auto"
+            VerticalScrollMode="Auto"
+            Visibility="Collapsed">
+            <TextBlock
+                x:Name="MessagesText"
+                FontFamily="{StaticResource StudioMonoFont}"
+                FontSize="12"
+                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                IsTextSelectionEnabled="True"
+                TextWrapping="Wrap" />
+        </ScrollViewer>
     </Grid>
 </UserControl>
