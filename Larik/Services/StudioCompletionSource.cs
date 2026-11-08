@@ -1,3 +1,4 @@
+using Larik.Data;
 using Larik.Editor;
 using Larik.Models;
 using Larik.Services;
@@ -18,8 +19,9 @@ public sealed class StudioCompletionSource(
     {
         var text = query.DocumentText;
         var caret = query.CaretOffset;
+        var dialect = query.Language as ISqlDialect;
         var (_, word, qualifier) = CompletionEngine.ExtractContext(text, caret);
-        var (scope, keyword) = CompletionEngine.DetectScope(text, caret);
+        var (scope, keyword) = CompletionEngine.DetectScope(text, caret, dialect);
         var schema = tables();
         var ctes = CompletionEngine.FindCtes(text, caret, schema);
 
@@ -35,6 +37,9 @@ public sealed class StudioCompletionSource(
             CompletionEngine.DeclaredVariables(text, caret),
             databases(),
             CompletionEngine.FindTarget(text, caret, schema),
-            Clipboard: string.Empty));
+            Clipboard: string.Empty)
+        {
+            Dialect = dialect,
+        });
     }
 }

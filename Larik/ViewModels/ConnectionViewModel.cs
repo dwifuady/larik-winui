@@ -35,6 +35,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     /// <summary>Dialect id for snippet/feature scoping ("mssql", "postgres", "mongodb").</summary>
     public string Dialect => Provider?.Dialect ?? ProviderId;
 
+    /// <summary>The provider's editor language, or generic SQL when it exposes none.</summary>
+    public IEditorLanguage EditorLanguage => EditorLanguageHelpers.Resolve(Provider);
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsConnected))]
     [NotifyPropertyChangedFor(nameof(StatusText))]
@@ -152,6 +155,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(Provider));
         OnPropertyChanged(nameof(ProviderName));
         OnPropertyChanged(nameof(Dialect));
+        OnPropertyChanged(nameof(EditorLanguage));
         OnPropertyChanged(nameof(Endpoint));
         OnPropertyChanged(nameof(StatusLine));
     }

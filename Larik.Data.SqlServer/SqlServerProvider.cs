@@ -20,6 +20,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     public string Dialect => ProviderId;
 
+    public IEditorLanguage? EditorLanguage => TSqlDialect.Instance;
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()

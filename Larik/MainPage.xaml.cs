@@ -128,6 +128,12 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(StudioViewModel.ActiveLanguage))
+        {
+            SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
+            return;
+        }
+
         if (e.PropertyName != nameof(StudioViewModel.ActiveSpace))
         {
             return;
@@ -238,6 +244,8 @@ public sealed partial class MainPage : Page
 
     private void SyncEditorFromActiveTab()
     {
+        // Language first: the first highlight after a tab/space switch must use the right one.
+        SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
         SqlEditor.Text = ViewModel.ActiveTab?.Content ?? string.Empty;
     }
 
@@ -292,27 +300,47 @@ public sealed partial class MainPage : Page
         IReadOnlyList<string> batches;
         if (!selection.IsEmpty)
         {
-            batches = SqlStatementParser.SplitBatches(
-                text.Substring(selection.Start, selection.Length));
+            batches = SplitBatches(text.Substring(selection.Start, selection.Length));
         }
         else if (all)
         {
             // F5 may contain GO: SQL Server does not understand it (it is an SSMS/sqlcmd
-            // separator), so split into real server batches before sending.
-            batches = SqlStatementParser.SplitBatches(text);
+            // separator), so ask the active language to split real server batches before sending.
+            batches = SplitBatches(text);
         }
         else
         {
-            var statement = SqlStatementParser.FindStatement(text, SqlEditor.CaretOffset);
+            var statement = SqlEditor.EditorLanguage.StatementAt(text, SqlEditor.CaretOffset);
             if (!statement.IsEmpty)
             {
-                SqlEditor.Select(statement);
+                SqlEditor.Select(new EditorSpan(statement.Start, statement.Length));
             }
 
             batches = [text.Substring(statement.Start, statement.Length)];
         }
 
         await ViewModel.RunBatchesAsync(batches, append);
+    }
+
+    /// <summary>
+    /// The provider's language owns batch boundaries (T-SQL splits on <c>GO</c>); the shell only
+    /// turns the returned document spans into the strings the session sends.
+    /// </summary>
+    private IReadOnlyList<string> SplitBatches(string text)
+    {
+        var spans = SqlEditor.EditorLanguage.SplitBatches(text);
+        if (spans.Count == 0)
+        {
+            return [];
+        }
+
+        var batches = new List<string>(spans.Count);
+        foreach (var span in spans)
+        {
+            batches.Add(text.Substring(span.Start, span.Length));
+        }
+
+        return batches;
     }
 
     private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);

@@ -1,3 +1,4 @@
+using Larik.Data;
 using Larik.Editor;
 using Larik.Models;
 using Larik.Services;
@@ -62,6 +63,28 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     public event EventHandler<EditorCommandKind>? CommandRequested;
 
     public IEditorCompletionSource? CompletionSource { get; set; }
+
+    private IEditorLanguage _language = GenericSqlLanguage.Default;
+
+    /// <summary>
+    /// The active editor language. Changing it re-highlights with the new tokenizer; the shell sets
+    /// it from the active space's provider.
+    /// </summary>
+    public IEditorLanguage EditorLanguage
+    {
+        get => _language;
+        set
+        {
+            var language = value ?? GenericSqlLanguage.Default;
+            if (ReferenceEquals(language, _language))
+            {
+                return;
+            }
+
+            _language = language;
+            ScheduleHighlighting();
+        }
+    }
 
     /// <summary>Programmatic text access. Setting it does not raise <see cref="TextChanged"/>.</summary>
     public string Text
@@ -198,7 +221,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             // Reset the whole story first so a deleted keyword does not leave its colour behind.
             SetForeground(0, text.Length, TokenColor(null));
 
-            foreach (var token in SqlSyntaxHighlighter.Tokenize(text))
+            foreach (var token in EditorLanguage.Tokenize(text))
             {
                 var start = Math.Clamp(token.Start, 0, text.Length);
                 var end = Math.Clamp(token.Start + token.Length, start, text.Length);
@@ -232,15 +255,15 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         range.CharacterFormat = format;
     }
 
-    private static Color TokenColor(SqlTokenKind? kind) =>
+    private static Color TokenColor(QueryTokenKind? kind) =>
         ColorOf(kind switch
         {
-            SqlTokenKind.Comment => "StudioSyntaxCommentBrush",
-            SqlTokenKind.String => "StudioSyntaxStringBrush",
-            SqlTokenKind.Number => "StudioSyntaxNumberBrush",
-            SqlTokenKind.Keyword => "StudioSyntaxKeywordBrush",
-            SqlTokenKind.Function => "StudioSyntaxFunctionBrush",
-            SqlTokenKind.Variable => "StudioSyntaxVariableBrush",
+            QueryTokenKind.Comment => "StudioSyntaxCommentBrush",
+            QueryTokenKind.String => "StudioSyntaxStringBrush",
+            QueryTokenKind.Number => "StudioSyntaxNumberBrush",
+            QueryTokenKind.Keyword => "StudioSyntaxKeywordBrush",
+            QueryTokenKind.Function => "StudioSyntaxFunctionBrush",
+            QueryTokenKind.Variable => "StudioSyntaxVariableBrush",
             _ => "StudioTextPrimaryBrush",
         });
 
@@ -413,7 +436,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
         // The source decides what a word means; the surface only knows geometry. An empty word
         // still completes when the clause calls for a table or column list (e.g. "FROM ").
-        var items = CompletionSource.GetCompletions(new CompletionQuery(text, caret));
+        var items = CompletionSource.GetCompletions(new CompletionQuery(text, caret, EditorLanguage));
         if (items.Count == 0)
         {
             HideCompletions();

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Larik.Data;
@@ -40,7 +41,14 @@ public sealed record CompletionRequest(
     IReadOnlyList<string> Variables,
     IReadOnlyList<string> Databases,
     StatementTarget? Target,
-    string Clipboard);
+    string Clipboard)
+{
+    /// <summary>
+    /// The active SQL dialect's completion metadata. Null keeps the historical T-SQL lists, so the
+    /// engine behaves exactly as before for providers without an editor language.
+    /// </summary>
+    public ISqlDialect? Dialect { get; init; }
+}
 
 /// <summary>
 /// Snippet + keyword + schema completion, modelled on the desktop app's Monaco provider
@@ -101,6 +109,16 @@ public static partial class CompletionEngine
         "FROM", "AND", "OR", "APPLY", "TABLESAMPLE", "PIVOT", "UNPIVOT", "FOR", "OPTION",
     };
 
+    /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
+    private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectTableContext = new();
+
+    private static HashSet<string> TableContextFor(ISqlDialect? dialect) =>
+        dialect is null
+            ? TableContext
+            : DialectTableContext.GetValue(
+                dialect,
+                value => new HashSet<string>(value.TableContextKeywords, StringComparer.OrdinalIgnoreCase));
+
     private const int KeywordLimit = 8;
     private const int SchemaLimit = 500;
     private const int JoinLimit = 8;
@@ -147,9 +165,13 @@ public static partial class CompletionEngine
     /// under the caret counts, and the word being typed is ignored so "FROM cust" still reads as
     /// a table position.
     /// </summary>
-    public static (CompletionScope Scope, string? Keyword) DetectScope(string text, int caret)
+    public static (CompletionScope Scope, string? Keyword) DetectScope(
+        string text,
+        int caret,
+        ISqlDialect? dialect = null)
     {
         caret = Math.Clamp(caret, 0, text.Length);
+        var tableContext = TableContextFor(dialect);
 
         var (wordStart, _, _) = ExtractContext(text, caret);
         var start = StatementStart(text, caret);
@@ -186,12 +208,12 @@ public static partial class CompletionEngine
         var last = words[^1].ToUpperInvariant();
         var combined = words.Length > 1 ? $"{words[^2]} {last}".ToUpperInvariant() : last;
 
-        if (TableContext.Contains(combined))
+        if (tableContext.Contains(combined))
         {
             return (CompletionScope.Table, combined);
         }
 
-        if (TableContext.Contains(last))
+        if (tableContext.Contains(last))
         {
             return (CompletionScope.Table, last);
         }
@@ -512,7 +534,7 @@ public static partial class CompletionEngine
                 AddJoinConditions(results, request, needle);
                 AddScopedColumns(results, request, needle);
                 AddCteColumns(results, request, needle);
-                AddFunctions(results, needle);
+                AddFunctions(results, needle, request.Dialect?.Functions);
                 break;
 
             default:
@@ -523,7 +545,7 @@ public static partial class CompletionEngine
 
                 AddSnippets(results, request.Snippets, request.Word, request.Clipboard);
                 AddVariables(results, request.Variables, needle);
-                AddKeywords(results, needle);
+                AddKeywords(results, needle, request.Dialect?.Keywords);
                 AddPlainTables(results, request.Tables, needle);
                 AddColumns(results, request.Tables, needle);
                 break;
@@ -636,9 +658,12 @@ public static partial class CompletionEngine
         }
     }
 
-    private static void AddKeywords(List<CompletionItem> results, string needle)
+    private static void AddKeywords(
+        List<CompletionItem> results,
+        string needle,
+        IReadOnlyList<string>? keywords)
     {
-        foreach (var keyword in Keywords.Where(keyword => Matches(keyword, needle)))
+        foreach (var keyword in (keywords ?? Keywords).Where(keyword => Matches(keyword, needle)))
         {
             results.Add(new CompletionItem
             {
@@ -650,9 +675,12 @@ public static partial class CompletionEngine
         }
     }
 
-    private static void AddFunctions(List<CompletionItem> results, string needle)
+    private static void AddFunctions(
+        List<CompletionItem> results,
+        string needle,
+        IReadOnlyList<string>? functions)
     {
-        foreach (var function in Functions.Where(function => Matches(function, needle)))
+        foreach (var function in (functions ?? Functions).Where(function => Matches(function, needle)))
         {
             var insert = $"{function}()";
             results.Add(new CompletionItem
