@@ -1,8 +1,17 @@
 ﻿# UI checks for the Larik WinUI shell: vertical tabs, spaces, and Tab-accepted snippet completion.
 # Run from C:\dev\larik-winui\Larik:  powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1
+#
+# The checks are ONE ordered scenario, not independent tests: they connect the seeded workspaces,
+# create tabs and reuse them later, so a single block cannot be run on its own. While iterating,
+# use -Through <part of a test name> to run the ordered prefix that covers the area you touched
+# (the names are grouped: rail/workspaces, connection, editor/completion, results, transactions,
+# settings). Run the whole suite before committing a behaviour change.
+#   -Through 'editing another workspace'   # rail + workspace settings only (~2 min)
+#   -Through 'SQL Server provider connects' # everything through the live SQL Server round trip
 param(
     [Parameter(Mandatory)][ValidateSet('sandbox', 'local')][string]$Target,
     [int]$AppPid = 0,
+    [string]$Through = '',
     [string]$ArtifactDirectory = (Join-Path $PSScriptRoot '..\ui-test-artifacts')
 )
 
@@ -12,6 +21,7 @@ $ScopeArgs = @(if ($Target -eq 'sandbox') { '--on'; 'sandbox' })
 $results = [Collections.Generic.List[object]]::new()
 $screenshots = [Collections.Generic.List[string]]::new()
 $script:MainWindow = $null
+$script:ThroughReached = $false
 
 # Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik (larik-dev.db in Debug
 # builds). Park the tester's databases, WAL sidecars included, so every run starts from the
@@ -91,8 +101,17 @@ function Get-UiJson {
 
 function Test-UI {
     param([string]$Name, [scriptblock]$Script)
+
+    # -Through runs an ordered prefix; blocks after the match are reported as skipped, not run.
+    if ($script:ThroughReached) {
+        $results.Add([pscustomobject]@{ Name = $Name; Status = 'SKIP' })
+        return
+    }
+
     try { & $Script | Out-Null; $results.Add([pscustomobject]@{ Name = $Name; Status = 'PASS' }) }
     catch { $results.Add([pscustomobject]@{ Name = $Name; Status = 'FAIL'; Detail = "$_" }) }
+
+    if ($Through -and $Name -like "*$Through*") { $script:ThroughReached = $true }
 }
 
 function Assert-True {
@@ -263,17 +282,76 @@ try {
         Assert-True ($switcher.width -ge 200) "the workspace switcher is only $($switcher.width)px wide"
     }
 
-    Test-UI 'a workspace colour can be changed from the switcher menu' {
+    Test-UI 'the connect action sits with the workspace it opens' {
+        $connect = @((Find-Element 'ConnectionToggleButton').matches)
+        Assert-True ($connect.Count -eq 1) "the connect action appears $($connect.Count) times; it belongs only in the rail"
+        $newTab = @((Find-Element 'New query tab').matches)[0]
+        Assert-True ($null -ne $newTab) 'the tab list was not found'
+        Assert-True ($connect[0].y -lt $newTab.y) 'the connect action is below the tab list, not beside the workspace'
+    }
+
+    Test-UI 'a workspace colour can be changed from its settings' {
+        # A workspace is name + colour + connection, so all three live in one editor, opened from
+        # the workspace's own row in the switcher.
         Click-Element 'Switch workspace'
         Start-Sleep -Milliseconds 500
-        $colours = (Find-Element 'Workspace colour').matches | Where-Object type -eq 'MenuItem' | Select-Object -First 1
-        Assert-True ($null -ne $colours) 'the workspace colour submenu is missing'
-        Click-Element $colours.selector
-        Start-Sleep -Milliseconds 500
-        Assert-True ((Find-Element 'Pastel Yellow').matchCount -gt 0) 'the colour palette is missing'
-        Click-Element 'Pastel Yellow'
+        Click-Element 'Edit Staging'
+        Wait-ForText 'Workspace settings'
+        Click-Element 'Colour Pastel Yellow'
+        Start-Sleep -Milliseconds 400
+        Click-Element 'Save'
         Start-Sleep -Milliseconds 1200
         Assert-True ((Get-StudioStateText) -match '#FDE047') 'the new workspace colour was not saved'
+    }
+
+    Test-UI 'a workspace renames from its edit button in the switcher' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Staging'
+        Wait-ForText 'Workspace settings'
+        $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
+        Assert-True ($null -ne $editor) 'the name field did not appear'
+        Invoke-Ui @('set-value', $editor.selector, 'Staging renamed') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Staging renamed').matchCount -gt 0) 'the workspace rename did not apply'
+        Assert-True ((Get-StudioStateText) -match 'Staging renamed') 'the workspace rename was not saved'
+
+        # Put the seeded name back so the rest of the suite starts from the same place.
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Staging renamed'
+        Wait-ForText 'Workspace settings'
+        $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
+        Invoke-Ui @('set-value', $editor.selector, 'Staging') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'the workspace name was not restored'
+    }
+
+    Test-UI 'editing another workspace leaves the current one alone' {
+        # Local SQL Server is not the active workspace here: saving it must not switch, connect,
+        # or touch the editor.
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Local SQL Server'
+        Wait-ForText 'Workspace settings'
+        $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
+        Invoke-Ui @('set-value', $editor.selector, 'Local renamed') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 1000
+        Assert-True ((Find-Element 'Local renamed').matchCount -gt 0) 'the other workspace was not renamed'
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'editing another workspace changed the active one'
+
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Local renamed'
+        Wait-ForText 'Workspace settings'
+        $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
+        Invoke-Ui @('set-value', $editor.selector, 'Local SQL Server') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 1000
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the active workspace changed while restoring names'
     }
 
     Test-UI 'the workspace indicator shows every workspace and switches' {
@@ -555,12 +633,13 @@ try {
         Start-Sleep -Milliseconds 400
     }
 
-    Test-UI 'connection settings dialog renders the provider schema' {
+    Test-UI 'workspace settings render the provider schema' {
         Click-Element 'Switch workspace'
         Start-Sleep -Milliseconds 500
-        Click-Element 'Connection settings'
+        Click-Element 'Edit Staging'
         Start-Sleep -Milliseconds 1000
         try {
+            Assert-True ((Find-Element 'Workspace settings').matchCount -gt 0) 'the workspace editor did not open'
             Assert-True ((Find-Element 'Provider').matchCount -gt 0) 'provider picker missing'
             Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'provider settings not rendered'
             # Opening the picker proves the catalog listed every loaded provider.
@@ -618,6 +697,12 @@ try {
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700
         Assert-True ((Find-Element 'DatabaseSelectorButton').matchCount -eq 0) 'sidebar did not collapse'
+        # The rail is gone, so the toolbar badge must still reach the workspace and its connection.
+        Click-Element 'Workspace and connection'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'WORKSPACES').matchCount -gt 0) 'the collapsed rail lost access to workspaces'
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700
         Assert-True ((Find-Element 'DatabaseSelectorButton').matchCount -gt 0) 'sidebar did not come back'
@@ -1020,14 +1105,34 @@ try {
         Wait-ForText 'Refused'
     }
 
+    # Last: the settings page replaces the shell in the same frame, so nothing after it is checked.
+    Test-UI 'settings lives at the bottom of the rail, not in the query toolbar' {
+        $gear = @((Find-Element 'SettingsButton').matches)[0]
+        Assert-True ($null -ne $gear) 'no settings action in the rail'
+        $newTab = @((Find-Element 'New query tab').matches)[0]
+        Assert-True ($gear.y -gt $newTab.y) 'settings is not in the rail footer'
+
+        Click-Element 'Settings'
+        Wait-ForText 'Snippets' 10
+        Click-Element 'Back'
+        Wait-ForText 'Switch workspace' 10
+    }
+
     $shot = Join-Path $ArtifactDirectory 'larik-shell.png'
     Invoke-Ui @('screenshot', '--output', $shot) | Out-Null
     $screenshots.Add($shot)
 }
 finally {
+    $ran = @($results | Where-Object Status -ne 'SKIP').Count
+    $passed = @($results | Where-Object Status -eq 'PASS').Count
+    $failed = @($results | Where-Object Status -eq 'FAIL').Count
+    if ($Through) {
+        Write-Host "Ran $ran of $($results.Count) checks through '$Through' (-Through): $passed passed, $failed failed."
+    }
+
     $results | Format-Table -AutoSize | Out-String | Write-Host
-    if (($results | Where-Object Status -eq 'FAIL').Count -gt 0) {
-        $results | Where-Object Status -eq "FAIL" | ForEach-Object { Write-Host ("FAIL: " + $_.Name + " :: " + $_.Detail) }
+    if ($failed -gt 0) {
+        $results | Where-Object Status -eq 'FAIL' | ForEach-Object { Write-Host ("FAIL: " + $_.Name + " :: " + $_.Detail) }
     }
     $screenshots | ForEach-Object { Write-Host "screenshot: $_" }
 
@@ -1038,3 +1143,11 @@ finally {
     }
     Restore-StudioState
 }
+
+# Explicit exit codes so a targeted run can be used in a script: 0 green, 1 failed, 2 -Through typo.
+if ($Through -and -not $script:ThroughReached) {
+    Write-Host "No check name matched -Through '$Through'; nothing was verified."
+    exit 2
+}
+
+exit @($results | Where-Object Status -eq 'FAIL').Count

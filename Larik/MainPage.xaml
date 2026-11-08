@@ -152,7 +152,8 @@
             Visibility="{x:Bind ViewModel.SidebarVisibility, Mode=OneWay}">
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="48" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -161,78 +162,118 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!--  Workspace switcher: full rail width; the pane toggle now lives in the title bar  -->
-                <Grid Grid.Row="0" Padding="8,0">
+                <!--  Workspace identity: the switcher, and nothing else competing with the name  -->
+                <Button
+                    x:Name="SpaceSwitcherButton"
+                    Grid.Row="0"
+                    Height="36"
+                    Margin="4,4,4,0"
+                    Padding="10,0"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Switch workspace"
+                    Click="SpaceSwitcher_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.TooltipText, Mode=OneWay}">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Ellipse
+                            Width="10"
+                            Height="10"
+                            VerticalAlignment="Center"
+                            Fill="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}" />
+
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            Text="{x:Bind ViewModel.ActiveSpace.Name, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
+
+                        <FontIcon
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="8"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Glyph="&#xE70D;" />
+                    </Grid>
+                </Button>
+
+                <!--  Connection state and its one action, on the line below the name it belongs to  -->
+                <Grid
+                    Grid.Row="1"
+                    Margin="12,2,8,6"
+                    ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid VerticalAlignment="Center" ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Ellipse
+                            Width="5"
+                            Height="5"
+                            VerticalAlignment="Center"
+                            Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="{x:Bind ViewModel.ActiveSpace.StatusHeadline, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}" />
+                    </Grid>
+
+                    <!--  A toggle, not two buttons: the label is the state transition, the tooltip the outcome.  -->
                     <Button
-                        x:Name="SpaceSwitcherButton"
-                        Height="38"
-                        Padding="10,0"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        AutomationProperties.Name="Switch workspace"
-                        Click="SpaceSwitcher_Click"
+                        x:Name="ConnectionToggleButton"
+                        Grid.Column="1"
+                        Padding="8,2"
+                        AutomationProperties.Name="{x:Bind ViewModel.ActiveSpace.Connection.ConnectionActionLabel, Mode=OneWay}"
+                        Command="{x:Bind ViewModel.ToggleConnectionCommand}"
                         Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.TooltipText, Mode=OneWay}">
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-
-                            <Ellipse
-                                Width="10"
-                                Height="10"
-                                VerticalAlignment="Center"
-                                Fill="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}" />
-
-                            <!--  Name and the workspace's connection state  -->
-                            <StackPanel
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                Spacing="-1">
-                                <TextBlock
-                                    FontSize="12"
-                                    FontWeight="SemiBold"
-                                    Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                    Text="{x:Bind ViewModel.ActiveSpace.Name, Mode=OneWay}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <Ellipse
-                                        Width="5"
-                                        Height="5"
-                                        VerticalAlignment="Center"
-                                        Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
-                                    <TextBlock
-                                        FontSize="9"
-                                        Foreground="{ThemeResource StudioTextMutedBrush}"
-                                        Text="{x:Bind ViewModel.ActiveSpace.StatusText, Mode=OneWay}" />
-                                </StackPanel>
-                            </StackPanel>
-
-                            <FontIcon
-                                Grid.Column="2"
-                                VerticalAlignment="Center"
-                                FontSize="8"
+                        ToolTipService.ToolTip="Connect or disconnect this workspace">
+                        <Grid>
+                            <TextBlock
+                                FontSize="10"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioAccentBrush}"
+                                Text="Connect"
+                                Visibility="{x:Bind ViewModel.ActiveSpace.ConnectActionVisibility, Mode=OneWay}" />
+                            <TextBlock
+                                FontSize="10"
                                 Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Glyph="&#xE70D;" />
+                                Text="Disconnect"
+                                Visibility="{x:Bind ViewModel.ActiveSpace.DisconnectActionVisibility, Mode=OneWay}" />
                         </Grid>
                     </Button>
                 </Grid>
 
-                <!--  Database selector: the space's connection context  -->
+                <!--  Database selector: the space's connection context, present only once it exists  -->
                 <Button
                     x:Name="DatabaseSelectorButton"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Margin="8,0,8,4"
                     Padding="8,7"
                     AutomationProperties.Name="Select database"
-                    IsEnabled="{x:Bind ViewModel.ActiveSpace.IsConnected, Mode=OneWay}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch"
                     Style="{StaticResource StudioIconButtonStyle}"
-                    ToolTipService.ToolTip="Switch database">
+                    ToolTipService.ToolTip="Switch database"
+                    Visibility="{x:Bind ViewModel.ActiveSpace.DatabasePickerVisibility, Mode=OneWay}">
                     <Button.Flyout>
                         <Flyout Placement="BottomEdgeAlignedLeft" ShouldConstrainToRootBounds="True">
                             <StackPanel MinWidth="288" Spacing="2">
@@ -284,21 +325,6 @@
                                         </DataTemplate>
                                     </ListView.ItemTemplate>
                                 </ListView>
-
-                                <Button
-                                    x:Name="ConnectionSettingsButton"
-                                    Margin="0,2,0,0"
-                                    Padding="10,7"
-                                    HorizontalAlignment="Stretch"
-                                    HorizontalContentAlignment="Left"
-                                    AutomationProperties.Name="Connection settings"
-                                    Click="ConnectionSettings_Click"
-                                    Style="{StaticResource StudioIconButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <FontIcon FontSize="11" Glyph="&#xE713;" />
-                                        <TextBlock FontSize="12" Text="Connection settings…" />
-                                    </StackPanel>
-                                </Button>
                             </StackPanel>
                         </Flyout>
                     </Button.Flyout>
@@ -344,7 +370,7 @@
                 <!--  Pinned tabs: their own section above the TABS header, like Arc.  -->
                 <ListView
                     x:Name="PinnedTabsList"
-                    Grid.Row="2"
+                    Grid.Row="3"
                     MaxHeight="220"
                     Padding="0,4,0,2"
                     AllowDrop="True"
@@ -363,7 +389,7 @@
                     Visibility="{x:Bind ViewModel.PinnedTabsVisibility, Mode=OneWay}" />
 
                 <!--  Section header  -->
-                <Grid Grid.Row="3" Margin="18,6,12,2">
+                <Grid Grid.Row="4" Margin="18,6,12,2">
                     <TextBlock
                         VerticalAlignment="Center"
                         CharacterSpacing="120"
@@ -383,7 +409,7 @@
 
                 <!--  New tab is a row, not a small + in the header (Arc's rail).  -->
                 <Button
-                    Grid.Row="4"
+                    Grid.Row="5"
                     Height="38"
                     Margin="4,0,4,2"
                     Padding="10,0"
@@ -424,7 +450,7 @@
                 <!--  Unpinned vertical tab list  -->
                 <ListView
                     x:Name="TabsList"
-                    Grid.Row="5"
+                    Grid.Row="6"
                     Padding="0,0,0,8"
                     AllowDrop="True"
                     AutomationProperties.Name="Query tabs"
@@ -441,11 +467,32 @@
 
                 <!--  Workspace indicator: one dot per workspace, the active one ringed. The row is also a switcher.  -->
                 <Grid
-                    Grid.Row="6"
-                    Padding="12,8"
+                    Grid.Row="7"
+                    Padding="8,7,8,7"
                     BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                    BorderThickness="0,1,0,0">
+                    BorderThickness="0,1,0,0"
+                    ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!--  App settings belong to the shell, not to the query being edited.  -->
+                    <Button
+                        x:Name="SettingsButton"
+                        Width="28"
+                        Height="24"
+                        Padding="0"
+                        AutomationProperties.Name="Settings"
+                        Click="Settings_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Settings">
+                        <FontIcon FontSize="12" Glyph="&#xE713;" />
+                    </Button>
+
                     <ScrollViewer
+                        Grid.Column="1"
                         HorizontalContentAlignment="Center"
                         HorizontalScrollBarVisibility="Hidden"
                         HorizontalScrollMode="Enabled"
@@ -488,6 +535,12 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
+
+                    <!--  Balances the settings button so the dots stay centred in the rail.  -->
+                    <Border
+                        Grid.Column="2"
+                        Width="28"
+                        IsHitTestVisible="False" />
                 </Grid>
             </Grid>
         </Border>
@@ -536,11 +589,17 @@
                         Text="{x:Bind ViewModel.ActiveTab.Title, Mode=OneWay}"
                         TextTrimming="CharacterEllipsis" />
 
-                    <Border
-                        Padding="7,2"
+                    <Button
+                        x:Name="ContextBadgeButton"
+                        Padding="8,2"
                         VerticalAlignment="Center"
+                        AutomationProperties.Name="Workspace and connection"
                         Background="{ThemeResource HairlineSubtleBrush}"
-                        CornerRadius="10">
+                        Click="ContextBadge_Click"
+                        CornerRadius="10"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.ContextBadgeVisibility, Mode=OneWay}">
                         <StackPanel Orientation="Horizontal" Spacing="5">
                             <Ellipse
                                 Width="5"
@@ -551,14 +610,10 @@
                                 FontSize="10"
                                 FontWeight="Medium"
                                 Foreground="{ThemeResource StudioTextSecondaryBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.ConnectedDatabaseText, Mode=OneWay}"
+                                Text="{x:Bind ViewModel.ActiveSpace.ContextBadgeText, Mode=OneWay}"
                                 TextTrimming="CharacterEllipsis" />
-                            <TextBlock
-                                FontSize="10"
-                                Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Text="{x:Bind ViewModel.ActiveSpace.StatusText, Mode=OneWay}" />
                         </StackPanel>
-                    </Border>
+                    </Button>
                 </StackPanel>
 
                 <StackPanel
@@ -606,18 +661,6 @@
                             FontSize="11"
                             Foreground="{ThemeResource StudioDangerBrush}"
                             Glyph="&#xE71A;" />
-                    </Button>
-
-                    <Button
-                        Width="32"
-                        Height="28"
-                        Padding="0"
-                        AutomationProperties.Name="Settings"
-                        Click="Settings_Click"
-                        CornerRadius="6"
-                        Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="Settings">
-                        <FontIcon FontSize="12" Glyph="&#xE713;" />
                     </Button>
                 </StackPanel>
             </Grid>
@@ -786,30 +829,12 @@
                 Padding="16,6,16,6"
                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">
-                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Ellipse
-                        Width="6"
-                        Height="6"
-                        VerticalAlignment="Center"
-                        Fill="{x:Bind ViewModel.ActiveSpace.StatusBrush, Mode=OneWay}" />
-                    <TextBlock
-                        FontSize="10"
-                        Foreground="{ThemeResource StudioTextSecondaryBrush}"
-                        Text="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}" />
-                    <Button
-                        x:Name="ConnectionToggleButton"
-                        Padding="8,1"
-                        AutomationProperties.Name="{x:Bind ViewModel.ActiveSpace.Connection.ConnectionActionLabel, Mode=OneWay}"
-                        Command="{x:Bind ViewModel.ToggleConnectionCommand}"
-                        Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="Connect or disconnect this workspace">
-                        <TextBlock
-                            FontSize="10"
-                            FontWeight="SemiBold"
-                            Foreground="{ThemeResource StudioAccentBrush}"
-                            Text="{x:Bind ViewModel.ActiveSpace.Connection.ConnectionActionLabel, Mode=OneWay}" />
-                    </Button>
-                </StackPanel>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="10"
+                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
 
                 <StackPanel
                     HorizontalAlignment="Right"
@@ -859,10 +884,6 @@
                         </Button>
                     </StackPanel>
 
-                    <TextBlock
-                        FontSize="10"
-                        Foreground="{ThemeResource StudioTextMutedBrush}"
-                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
                     <TextBlock
                         FontSize="10"
                         Foreground="{ThemeResource StudioTextMutedBrush}"

@@ -24,10 +24,15 @@ public partial class SpaceViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(StatusText));
+            OnPropertyChanged(nameof(StatusHeadline));
             OnPropertyChanged(nameof(StatusBrush));
             OnPropertyChanged(nameof(ConnectionLine));
             OnPropertyChanged(nameof(Driver));
             OnPropertyChanged(nameof(ConnectedDatabaseText));
+            OnPropertyChanged(nameof(ContextBadgeText));
+            OnPropertyChanged(nameof(ConnectActionVisibility));
+            OnPropertyChanged(nameof(DisconnectActionVisibility));
+            OnPropertyChanged(nameof(DatabasePickerVisibility));
         };
     }
 
@@ -59,6 +64,7 @@ public partial class SpaceViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
+    [NotifyPropertyChangedFor(nameof(ContextBadgeText))]
     public partial DatabaseViewModel? ActiveDatabase { get; set; }
 
     public ObservableCollection<DatabaseViewModel> Databases { get; } = [];
@@ -85,12 +91,34 @@ public partial class SpaceViewModel : ObservableObject
 
     public string StatusText => Connection.StatusText;
 
+    /// <summary>
+    /// Why the rail shows the state next to the connect action: the state word alone ("Connected")
+    /// does not say what you are connected to when nothing is open yet. Once connected the database
+    /// row carries that context, so the line stays short enough to never truncate the state itself.
+    /// </summary>
+    public string StatusHeadline => IsConnected ? StatusText : $"{StatusText} · {Connection.ProviderName}";
+
     public SolidColorBrush StatusBrush => Connection.StatusBrush;
 
     public string ConnectionLine => Connection.StatusLine;
 
+    /// <summary>One action slot in the rail: "Connect" while down, "Disconnect" while up.</summary>
+    public Visibility ConnectActionVisibility => IsConnected ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility DisconnectActionVisibility => IsConnected ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>The database picker only exists once the provider names databases, so it is not a dead row.</summary>
+    public Visibility DatabasePickerVisibility => IsConnected ? Visibility.Visible : Visibility.Collapsed;
+
     public string ConnectedDatabaseText => ActiveDatabase?.Name
         ?? (Connection.IsConnected ? "no database" : "not connected");
+
+    /// <summary>
+    /// What the collapsed-rail badge says: the database once connected, the connection state
+    /// otherwise. It uses the same state word as the rail, so "Disconnected" never becomes
+    /// "not connected" just because the rail is hidden.
+    /// </summary>
+    public string ContextBadgeText => Connection.IsConnected ? ConnectedDatabaseText : StatusText;
 
     /// <summary>Finds a database by name, or null when the list is empty or the name is unknown.</summary>
     public DatabaseViewModel? FindDatabase(string? name) =>

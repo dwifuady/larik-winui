@@ -55,7 +55,14 @@ dotnet build Larik.slnx
 dotnet test Larik.Data.Tests\Larik.Data.Tests.csproj
 cd C:\dev\larik-winui\Larik
 powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local
+# While iterating, run only the ordered prefix that covers the area you touched:
+powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1 -Target local -Through 'editing another workspace'
 ```
+
+The UI checks are one ordered scenario (they connect workspaces and reuse tabs), so a check cannot
+run alone; `-Through` runs everything up to the named check and marks the rest `SKIP`. Use it for
+the cheap loop, then run the whole suite before calling a behaviour change done. Exit codes: `0`
+green, `1` failure, `2` `-Through` matched nothing.
 
 The suite drives the real window over UI Automation: tab switching, the workspace dots switch
 workspaces (click and a horizontal trackpad swipe), new-workspace creation is gated on the create
@@ -67,7 +74,7 @@ syntax highlighting is applied without breaking Ctrl+Z, query and result tabs dr
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
 connection + tabs + editor, a
-workspace starts disconnected until the status-bar action connects it, a new query asks for its
+workspace starts disconnected until the rail's Connect action connects it, a new query asks for its
 database, the picker and result grid follow the active tab (and each tab restores its own result),
 a batch opens one result tab per statement, Ctrl+Enter replaces the active result tab, Ctrl+\
 appends a new one, a transaction opened in one tab does not leak into another tab and shows the
@@ -162,11 +169,15 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   **New tabs open at the top of the unpinned section**, and the **New tab row** is a full-width
   tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too.
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
-  (Ctrl+B also works).
+  (Ctrl+B also works). The connection state sits on one line under the workspace name with its
+  single action (**Connect** / **Disconnect**) at the end of that line, so the primary action is
+  beside the workspace it opens instead of in the status bar. The database row only appears once a
+  connection exists, and the toolbar badge repeats the database only while the rail is collapsed —
+  it opens the same workspace panel, so connecting and switching stay reachable with the rail shut.
 - **New-tab command palette**: the New tab row opens a searchable palette instead of a modal
   database picker. Type to filter the workspace's databases, use Up/Down, and press Enter to open
   the tab (Esc or the backdrop cancels). With no databases available, Enter opens an unbound tab.
-- **Archive & history**: the rail's archive button (and the workspace menu) opens a page listing
+- **Archive & history**: the TABS header's archive button opens a page listing
   archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
   back in its workspace (pin state and section included); Delete or **Clear all** removes history.
   Inactivity is tracked per tab (last selected or edited). **Auto-archive** is configurable on that
@@ -178,19 +189,24 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   connection exposes several databases. Each query tab opens its own persistent **session** from
   that connection, so a transaction, temp table or `SET` option in one tab never leaks into another
   tab (the same model as SSMS, DBeaver and DataGrip). The rail's top strip carries the workspace
-  switcher, whose chip shows the workspace name and its connection state (dot **and**
-  `Connected`/`Disconnected`) —
-  **spaces start disconnected**. Connect from the chip's status bar action or the workspace menu;
-  running a query while disconnected is refused with an explicit message. The row beneath the strip
-  is a database picker for the active tab, filled from the provider once connected. Switching
+  switcher, whose chip shows the workspace name; the line beneath carries the connection state (dot
+  **and** `Connected`/`Disconnected`) and the one action for it, so **spaces start disconnected**
+  and the way to connect is beside the workspace rather than in the status bar. Running a query
+  while disconnected is refused with an explicit message. The database row under it is a picker for
+  the active tab, filled from the provider once connected, and it is absent while disconnected
+  instead of showing a dead "not connected" control. Switching
   database updates that tab (and the space while it is active): the rail, toolbar badge, status bar,
   tab subtitle, snippet dialect and completion schema all follow. Other tabs keep their own database
   and schema. An Arc-style row of workspace dots at the bottom of the
   rail shows every workspace with the current one ringed; clicking a dot switches workspace.
   **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
   under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the workspace
-  list untouched. Each workspace owns a palette colour (dot, tab strip/tint and Run button); change
-  it from the workspace menu's **Workspace colour** submenu. Switching — from the top dropdown, the
+  list untouched. Each workspace owns a palette colour (dot, tab strip/tint and Run button).
+  **The pencil on a workspace row opens Workspace settings**: name, colour and the connection in one
+  form (a workspace *is* its connection), editable for any workspace without leaving the current
+  one. Saving rebuilds the connection only when it actually changed — renaming never drops a live
+  session — and a workspace you are not in stays disconnected instead of changing what is on screen.
+  The database flyout is only about databases. Switching — from the top dropdown, the
   dots, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
   the side the new workspace lives on (left/right matches the dot order), and is skipped when
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
@@ -268,7 +284,10 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   owns text snapshots, so Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
-  status bar with connection + `Ln/Col`, splitter between editor and results.
+  status bar with the transient message + `Ln/Col` (connection state lives in the rail),
+  splitter between editor and results. **Settings** (snippets, about) is an app destination, so its
+  gear sits in the rail footer beside the workspace dots — the query toolbar only carries editor
+  actions (Format, Run, Stop).
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
   (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
   `FocusEditor`), so the editor can be swapped for a WebView2/Monaco island without changing the
