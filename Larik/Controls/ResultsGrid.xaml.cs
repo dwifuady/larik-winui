@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Larik.Data;
 using Larik.Models;
 using Larik.Services;
@@ -11,6 +12,8 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI.Core;
 
@@ -631,6 +634,71 @@ public sealed partial class ResultsGrid : UserControl
         else if (left + width > offset + viewport)
         {
             _listScroller.ChangeView(left + width - viewport, null, null, disableAnimation: true);
+        }
+    }
+
+    // ---------------------------------------------------------------- export
+
+    private bool _exporting;
+
+    /// <summary>
+    /// Writes the whole result, not the selection: the save picker's file type is the format
+    /// choice, so there is no second dialog asking a question the extension already answers.
+    /// </summary>
+    private async void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (_exporting || _result is not { } result || result.Columns.Count == 0)
+        {
+            return;
+        }
+
+        _exporting = true;
+        try
+        {
+            var picker = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = $"results_{DateTime.Now:yyyy-MM-dd_HHmm}",
+            };
+            picker.FileTypeChoices.Add("CSV file", [ResultExport.CsvExtension]);
+            picker.FileTypeChoices.Add("JSON file", [ResultExport.JsonExtension]);
+
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.WindowHandle);
+
+            var file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            var format = string.Equals(file.FileType, ResultExport.JsonExtension, StringComparison.OrdinalIgnoreCase)
+                ? ResultExportFormat.Json
+                : ResultExportFormat.Csv;
+
+            var text = ResultExport.Format(result, format);
+
+            // The picker already granted access to the file; writing through its stream keeps a
+            // packaged (MSIX) app out of file-system virtualization trouble. Excel needs the BOM
+            // to read UTF-8 CSV correctly; strict JSON readers prefer no BOM.
+            await using var stream = await file.OpenStreamForWriteAsync();
+            stream.SetLength(0);
+            await using (var writer = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: format == ResultExportFormat.Csv)))
+            {
+                await writer.WriteAsync(text);
+            }
+
+            StatusChanged?.Invoke(this, $"Exported {result.Rows.Count:N0} rows to {file.Name}");
+        }
+        catch (Exception ex)
+        {
+            // A save dialog or disk failure must be visible, not silent, and must not crash the shell.
+            StatusChanged?.Invoke(this, $"Export failed: {ex.Message}");
+        }
+        finally
+        {
+            _exporting = false;
         }
     }
 

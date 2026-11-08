@@ -62,6 +62,18 @@ public partial class StudioViewModel : ObservableObject
 
     public ObservableCollection<SpaceViewModel> Spaces { get; } = [];
 
+    /// <summary>
+    /// Last window rectangle (DIPs). The shell restores it at launch and updates it while the
+    /// window moves; it travels with the session so the next launch opens where the user left it.
+    /// </summary>
+    public WindowBoundsState? WindowBounds { get; private set; }
+
+    public void SetWindowBounds(WindowBoundsState? bounds)
+    {
+        WindowBounds = bounds;
+        ScheduleSave();
+    }
+
     /// <summary>Tabs of the active space. Mutated in place so the ListView keeps its identity.</summary>
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
@@ -1339,6 +1351,7 @@ public partial class StudioViewModel : ObservableObject
         QueryCounter = _queryCounter,
         AutoArchiveEnabled = AutoArchiveEnabled,
         AutoArchiveDays = EffectiveAutoArchiveDays,
+        WindowBounds = WindowBounds,
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -1425,6 +1438,7 @@ public partial class StudioViewModel : ObservableObject
 
     private void Restore(StudioState state)
     {
+        WindowBounds = state.WindowBounds;
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);

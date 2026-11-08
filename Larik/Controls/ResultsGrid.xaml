@@ -85,6 +85,11 @@
             <ListView.ContextFlyout>
                 <MenuFlyout>
                     <MenuFlyoutItem
+                        Click="Export_Click"
+                        AutomationProperties.Name="Export results"
+                        Text="Export results…" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem
                         Click="Copy_Click"
                         KeyboardAcceleratorTextOverride="Ctrl+C"
                         Text="Copy" />

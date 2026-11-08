@@ -83,7 +83,9 @@ appends a new one, a transaction opened in one tab does not leak into another ta
 running `WAITFOR`, each result remembers its scroll row across result/query tab switches, a
 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
 results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
-Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the provider's
+the grid menu exports the whole result to a CSV file through the real save dialog,
+Ctrl+Space selects a column, a header drag resizes it, the window rectangle is saved with the
+session, the connection dialog renders the provider's
 declared fields and its Test result, saved state is written to disk, and a real **SQL Server**
 workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
@@ -136,7 +138,9 @@ foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes`
 to the desktop app's name heuristics.
 
 `ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
-connection dialog's **Advanced** section instead of competing with the server and credentials.
+connection dialog's **Advanced** section instead of competing with the server and credentials. The
+SQL Server provider's `queryTimeout` (seconds, `0` waits indefinitely) lives there: a statement
+is no longer cut off at a timeout the app chose.
 
 `IDatabaseConnection.ExecuteAsync` has an overload taking `QueryExecutionOptions`. Providers should
 stop reading at `EffectiveMaxRows + 1` and set `QueryResult.IsTruncated`/`RowLimit`; the default is
@@ -256,7 +260,9 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   (`larik-winui-dev.db` in Debug builds) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
   `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
-  tabs, their SQL, pins, archive history and snippet edits survive a restart. WAL mode, foreign keys
+  tabs, their SQL, pins, archive history and snippet edits survive a restart, as does the **window
+  rectangle** (stored under `app_state` as DIPs, never the maximized size), so the next launch opens
+  where you left it. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
   columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
@@ -279,7 +285,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
-  context menu offers Copy / Copy with headers / Select all. Drag a header edge to resize a column;
+  context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
+  writes the whole result (not the selection) through the Windows save picker, where the file type
+  *is* the format choice: CSV (RFC 4180, CRLF, header row, NULL as an empty field, UTF-8 with BOM
+  so Excel reads non-ASCII) or JSON (array of row objects, real `null`s, duplicate column names
+  suffixed). The status bar reports the row count and file name. Drag a header edge to resize a column;
   widths persist with that result set. Each result also remembers its vertical/horizontal scroll
   offset and active cell, so switching to another result or query tab and back returns to the same
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated

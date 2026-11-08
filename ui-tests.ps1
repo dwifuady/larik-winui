@@ -149,6 +149,27 @@ function Get-UiJson {
     return $data
 }
 
+# list-windows without the app filter: the save picker is a separate process (PickerHost).
+function Get-AllWindows {
+    $data = (Invoke-WinAppChecked (@('ui', 'list-windows', '--json') + $ScopeArgs)) -join "`n" | ConvertFrom-Json
+    if ($data -is [System.Array]) { return $data }
+    return $data
+}
+
+# The save picker is hosted by PickerHost, a different process, so an -a <app> filter cannot act on
+# its controls. Target the dialog HWND explicitly and leave the app filter off.
+function Invoke-PickerUi {
+    param([string[]]$Arguments, [string]$Hwnd, [int]$Attempts = 1)
+    Invoke-WinAppChecked (@('ui') + $Arguments + $ScopeArgs + @('-w', $Hwnd)) -Attempts $Attempts
+}
+
+function Get-PickerJson {
+    param([string[]]$Arguments, [string]$Hwnd)
+    $data = (Invoke-PickerUi $Arguments $Hwnd) -join "`n" | ConvertFrom-Json
+    if ($data -is [System.Array]) { return $data }
+    return $data
+}
+
 function Test-UI {
     param([string]$Name, [scriptblock]$Script)
 
@@ -183,6 +204,8 @@ public class LarikWin32 {
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
 }
 "@
 
@@ -946,6 +969,45 @@ try {
         Assert-True ($moved.x -gt ($next.x + 50)) "the column did not widen (before=$($next.x) after=$($moved.x))"
     }
 
+    Test-UI 'the grid exports the whole result to a CSV file' {
+        # The save picker's file type is the format choice; drive it end to end so the bytes on
+        # disk (header, CRLF rows, NULL handling) are what a person would actually get.
+        $path = Join-Path $env:TEMP ("larik-export-{0}.csv" -f [guid]::NewGuid().ToString('n'))
+        Focus-Element 'Results grid'
+        $cell = @((Find-Element 'master').matches) | Where-Object { $_.width -gt 0 -and $_.height -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $cell) 'no visible result cell to right-click'
+        Focus-App
+        Invoke-Ui @('click', $cell.selector, '--right') -Attempts 4 | Out-Null
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Export results').matchCount -gt 0) 'the grid menu has no export action'
+
+        Invoke-Ui @('click', 'Export results') | Out-Null
+        Wait-ForText 'Save As' 15
+
+        # The picker runs in its own process, so find its window and drive that.
+        $dialog = @((Get-AllWindows) | Where-Object { $_.title -eq 'Save As' -and $_.hwnd } | Select-Object -First 1)
+        Assert-True ($dialog.Count -gt 0) 'the save picker window was not found'
+        $picker = [string]$dialog[0].hwnd
+
+        $nameBox = @((Get-PickerJson @('search', 'File name', '--json') $picker).matches |
+                Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $nameBox) 'the save picker has no file-name field'
+        Invoke-PickerUi @('focus', $nameBox.selector) $picker | Out-Null
+        Invoke-PickerUi @('set-value', $nameBox.selector, $path) $picker | Out-Null
+
+        $save = @((Get-PickerJson @('search', 'Save', '--json') $picker).matches |
+                Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+        Assert-True ($null -ne $save) 'the save picker has no Save button'
+        Invoke-PickerUi @('invoke', $save.selector) $picker | Out-Null
+        Wait-ForText 'Exported' 15
+
+        Assert-True (Test-Path $path) "no file was written at $path"
+        $csv = Get-Content $path -Raw
+        Assert-True ($csv -match '^name,database_id') "the CSV header is missing: $($csv.Substring(0, [math]::Min(80, $csv.Length)))"
+        Assert-True ($csv -match 'master') 'the exported CSV has no result rows'
+        Remove-Item $path -ErrorAction SilentlyContinue
+    }
+
     Test-UI 'a batch opens one result tab per statement' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -1192,6 +1254,28 @@ try {
         $state = Get-StudioStateText
         Assert-True ($state -match 'Customer totals') 'seeded tabs are missing from the database'
         Assert-True ($state -match 'Query 1') 'the new tab is missing from the database'
+    }
+
+    Test-UI 'window size and position are remembered' {
+        Focus-App
+        $hwnd = [IntPtr]([int64]$script:MainWindow)
+        [LarikWin32]::ShowWindow($hwnd, 9) | Out-Null
+        Start-Sleep -Milliseconds 300
+
+        # Resize in physical pixels; the app stores DIPs, so the saved value stays 820x620.
+        $scale = [LarikWin32]::GetDpiForWindow($hwnd) / 96.0
+        [LarikWin32]::SetWindowPos(
+            $hwnd, [IntPtr]::Zero, 140, 100, [int](820 * $scale), [int](620 * $scale), 0x0014) | Out-Null
+        Start-Sleep -Milliseconds 1500
+
+        # Written from AppWindow.Changed (debounced), not only on close, so a killed process keeps it.
+        $state = Get-StudioStateText
+        $width = [regex]::Match($state, '"Width":\s*(\d+)')
+        $height = [regex]::Match($state, '"Height":\s*(\d+)')
+        Assert-True ($width.Success -and $height.Success) 'the window rectangle was not saved with the session'
+        Assert-True ([math]::Abs([int]$width.Groups[1].Value - 820) -le 3) "saved width is $($width.Groups[1].Value), expected 820"
+        Assert-True ([math]::Abs([int]$height.Groups[1].Value - 620) -le 3) "saved height is $($height.Groups[1].Value), expected 620"
+        Assert-True ($state -match '"Maximized":\s*false') 'the saved window was not in its restored state'
     }
 
     Test-UI 'refuses a mutating statement without WHERE' {

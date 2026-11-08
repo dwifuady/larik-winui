@@ -68,6 +68,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
             DefaultValue = "8",
             IsAdvanced = true,
         },
+        new()
+        {
+            Key = "queryTimeout",
+            Label = "Query timeout (s)",
+            Kind = ProviderSettingKind.Number,
+            DefaultValue = "60",
+            Hint = "How long a statement may run before the client cancels it. 0 waits indefinitely.",
+            IsAdvanced = true,
+        },
     ];
 
     public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new SqlServerConnection(profile);
@@ -358,7 +367,9 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
             await using var command = _connection!.CreateCommand();
             command.CommandText = sql;
-            command.CommandTimeout = 60;
+            // The provider's timeout setting is the user's one control here: a report that needs
+            // minutes must not die at a value the app chose. 0 means wait indefinitely.
+            command.CommandTimeout = Math.Max(0, _profile.GetInt("queryTimeout", 60));
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
