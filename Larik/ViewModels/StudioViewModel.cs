@@ -13,6 +13,7 @@ public partial class StudioViewModel : ObservableObject
 {
     private readonly CancellationTokenSource _lifetime = new();
     private readonly StudioStore _store = new();
+    private readonly SnippetLibrary _snippets = SnippetLibrary.Current;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
@@ -41,6 +42,7 @@ public partial class StudioViewModel : ObservableObject
         ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
 
         Spaces.CollectionChanged += (_, _) => ScheduleSave();
+        _snippets.Changed += (_, _) => OnPropertyChanged(nameof(Snippets));
         PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab))
@@ -95,7 +97,7 @@ public partial class StudioViewModel : ObservableObject
     public string WindowTitle => ActiveTab is null ? "Larik SQL Studio" : $"{ActiveTab.Title} — Larik";
 
     public IReadOnlyList<SnippetDef> Snippets =>
-        SnippetCatalog.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
+        _snippets.ForDialect(ActiveSpace?.Connection.Dialect ?? "mssql");
 
     /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
     public IReadOnlyList<TableSchema> Tables => _schema;

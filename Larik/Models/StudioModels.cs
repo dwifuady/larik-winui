@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 
@@ -28,6 +29,96 @@ public sealed class SnippetDef
 
     /// <summary>Null means every dialect.</summary>
     public string[]? Dialects { get; init; }
+}
+
+/// <summary>Database dialects a snippet can be scoped to.</summary>
+public static class SnippetDialects
+{
+    /// <summary>The dialects the desktop app ships snippets for, plus room for new providers.</summary>
+    public static IReadOnlyList<(string Id, string Label)> Known { get; } =
+    [
+        ("mssql", "SQL Server"),
+        ("postgres", "PostgreSQL"),
+    ];
+
+    public static string Label(string id)
+    {
+        foreach (var dialect in Known)
+        {
+            if (dialect.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
+            {
+                return dialect.Label;
+            }
+        }
+
+        return id;
+    }
+
+    /// <summary>Normalizes a scope: known names, sorted, de-duplicated; empty becomes null (all).</summary>
+    public static string[]? Normalize(IEnumerable<string>? dialects)
+    {
+        if (dialects is null)
+        {
+            return null;
+        }
+
+        var names = dialects
+            .Where(dialect => !string.IsNullOrWhiteSpace(dialect))
+            .Select(dialect => dialect.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(dialect => dialect, StringComparer.Ordinal)
+            .ToArray();
+
+        return names.Length == 0 ? null : names;
+    }
+}
+
+/// <summary>
+/// One stored snippet: a built-in from <see cref="Services.SnippetCatalog"/> or a user-defined row,
+/// with the enabled state and dialect scope that decide whether completion offers it.
+/// </summary>
+public sealed record SnippetRecord
+{
+    public required string Id { get; init; }
+
+    public required string Trigger { get; init; }
+
+    public required string Name { get; init; }
+
+    public required string Content { get; init; }
+
+    public string? Description { get; init; }
+
+    public string? Category { get; init; }
+
+    public bool IsBuiltin { get; init; }
+
+    public bool IsEnabled { get; init; } = true;
+
+    /// <summary>Null means every SQL dialect.</summary>
+    public string[]? Dialects { get; init; }
+
+    public string OriginLabel => IsBuiltin ? "BUILT-IN" : "CUSTOM";
+
+    public Visibility DisabledVisibility => IsEnabled ? Visibility.Collapsed : Visibility.Visible;
+
+    public double RowOpacity => IsEnabled ? 1 : 0.55;
+
+    public string CategoryLabel => string.IsNullOrWhiteSpace(Category) ? "Other" : Category;
+
+    public string ScopeLabel => Dialects is { Length: > 0 } dialects
+        ? string.Join(", ", dialects.Select(SnippetDialects.Label))
+        : "All SQL databases";
+
+    /// <summary>First non-empty line, so the list can show what the trigger expands to.</summary>
+    public string Preview
+    {
+        get
+        {
+            var line = Content.Split('\n', 2)[0].Trim();
+            return line.Length > 0 ? line : Content;
+        }
+    }
 }
 
 /// <summary>One row in the completion popup.</summary>

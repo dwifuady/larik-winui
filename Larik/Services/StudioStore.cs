@@ -67,24 +67,12 @@ public sealed class StudioStore
 {
     private const int SchemaVersion = 1;
 
-#if DEBUG
-    private const string DatabaseFileName = "larik-dev.db";
-#else
-    private const string DatabaseFileName = "larik.db";
-#endif
-
     public StudioStore()
+        : this(LarikPaths.DatabasePath)
     {
-        var directory = Environment.GetEnvironmentVariable("LARIK_STATE_DIR");
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Larik");
-        }
-
-        DatabasePath = Path.Combine(directory, DatabaseFileName);
     }
+
+    public StudioStore(string databasePath) => DatabasePath = databasePath;
 
     public string DatabasePath { get; }
 

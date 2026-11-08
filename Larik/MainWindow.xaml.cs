@@ -22,9 +22,11 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
         RootFrame.Navigate(typeof(MainPage));
+        var mainPage = RootFrame.Content as MainPage;
 
-        // The last edits may still be inside the debounce window; flush them on close.
-        Closed += (_, _) => (RootFrame.Content as MainPage)?.ViewModel.SaveNow();
+        // The last edits may still be inside the debounce window; flush them on close. The frame
+        // may be showing Settings when the window closes, so keep the shell page itself.
+        Closed += (_, _) => mainPage?.ViewModel.SaveNow();
 
         ResizeForDesktop(1360, 860);
     }

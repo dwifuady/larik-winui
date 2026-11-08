@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.UI.ViewManagement;
@@ -50,6 +51,9 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+
+        // Settings is pushed onto the same frame; keep the shell (and its live session) alive.
+        NavigationCacheMode = NavigationCacheMode.Required;
         Loaded += OnLoaded;
 
         // Two-finger horizontal trackpad swipes over the rail move between workspaces. The
@@ -107,6 +111,9 @@ public sealed partial class MainPage : Page
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) =>
         ViewModel.ToggleSidebarCommand.Execute(null);
+
+    private void Settings_Click(object sender, RoutedEventArgs e) =>
+        Frame.Navigate(typeof(SettingsPage));
 
     // ---------------------------------------------------------------- workspace switching
 

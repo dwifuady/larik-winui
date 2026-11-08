@@ -466,6 +466,18 @@
                         ToolTipService.ToolTip="Run statement (Ctrl+Enter) · F5 runs all">
                         <FontIcon FontSize="11" Glyph="&#xE768;" />
                     </Button>
+
+                    <Button
+                        Width="32"
+                        Height="28"
+                        Padding="0"
+                        AutomationProperties.Name="Settings"
+                        Click="Settings_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Settings">
+                        <FontIcon FontSize="12" Glyph="&#xE713;" />
+                    </Button>
                 </StackPanel>
             </Grid>
 
