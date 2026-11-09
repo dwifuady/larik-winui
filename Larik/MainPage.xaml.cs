@@ -361,6 +361,12 @@ public sealed partial class MainPage : Page
             return;
         }
 
+        if (e.PropertyName == nameof(StudioViewModel.HasSpaces) && !ViewModel.HasSpaces)
+        {
+            // The welcome surface replaces the editor; a result pane left open would sit behind it.
+            HideResultsPane();
+        }
+
         if (e.PropertyName != nameof(StudioViewModel.ActiveSpace))
         {
             return;
@@ -1124,8 +1130,8 @@ public sealed partial class MainPage : Page
     }
 
     /// <summary>
-    /// One palette strip, used by the workspace editor. The ring marks the current colour so the
-    /// state is visible without opening anything.
+    /// The colour palette popup. The ring marks the current choice; the identity row's swatch shows
+    /// the same colour without opening it.
     /// </summary>
     private static StackPanel CreateColourSwatches(string selectedHex, Action<string> changed)
     {
@@ -1210,6 +1216,10 @@ public sealed partial class MainPage : Page
 
     // ---------------------------------------------------------------- workspace settings
 
+    /// <summary>Onboarding's one action: the same workspace dialog the switcher opens.</summary>
+    private async void NewWorkspace_Click(object sender, RoutedEventArgs e) =>
+        await ShowWorkspaceDialogAsync();
+
     /// <summary>
     /// The workspace editor. A workspace is its name, colour and single connection, so one dialog
     /// covers all three. Create mode (no <paramref name="editing"/>) starts from a ready name and
@@ -1257,15 +1267,77 @@ public sealed partial class MainPage : Page
             Foreground = mutedBrush,
         };
 
-        // Rare provider fields (port, encryption, timeouts) live one level down instead of
-        // competing with the server and credentials.
-        var advanced = new Expander
+        // Rare provider fields (port, encryption, timeouts) open in a focused popup instead of
+        // expanding the form: the connection form keeps its shape and the fields are visible
+        // immediately rather than below the fold.
+        var advancedFieldsScroll = new ScrollViewer
         {
-            Header = "Advanced",
-            IsExpanded = false,
             Content = advancedFields,
+            MaxHeight = 360,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollMode = ScrollMode.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            IsTabStop = false,
+        };
+
+        var advancedPanel = new StackPanel { Width = 360, Spacing = 10 };
+        advancedPanel.Children.Add(new TextBlock
+        {
+            Text = "Advanced connection settings",
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+        });
+        advancedPanel.Children.Add(advancedFieldsScroll);
+
+        var advancedDone = new Button { Content = "Done", HorizontalAlignment = HorizontalAlignment.Right };
+        AutomationProperties.SetName(advancedDone, "Done");
+        advancedPanel.Children.Add(advancedDone);
+
+        var advancedFlyout = new Flyout
+        {
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft,
+            ShouldConstrainToRootBounds = true,
+            Content = advancedPanel,
+        };
+        advancedDone.Click += (_, _) => advancedFlyout.Hide();
+
+        var advancedButton = new Button
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(12, 9, 12, 9),
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Style = (Style)Application.Current.Resources["StudioIconButtonStyle"],
+            Flyout = advancedFlyout,
             Visibility = Visibility.Collapsed,
         };
+
+        var advancedContent = new Grid { ColumnSpacing = 8 };
+        advancedContent.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        advancedContent.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        advancedContent.Children.Add(new TextBlock
+        {
+            Text = "Advanced connection settings",
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var advancedChevron = new FontIcon
+        {
+            Glyph = "\uE76C",
+            FontSize = 9,
+            Foreground = mutedBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(advancedChevron, 1);
+        advancedContent.Children.Add(advancedChevron);
+        advancedButton.Content = advancedContent;
+        AutomationProperties.SetName(advancedButton, "Advanced connection settings");
+        AutomationProperties.SetHelpText(advancedButton, "Opens the rare provider fields");
+        ToolTipService.SetToolTip(advancedButton, "Advanced connection settings");
 
         IDatabaseProvider SelectedProvider() => providers[Math.Max(0, providerBox.SelectedIndex)];
 
@@ -1320,7 +1392,7 @@ public sealed partial class MainPage : Page
                 (setting.IsAdvanced ? advancedFields : primaryFields).Children.Add(group);
             }
 
-            advanced.Visibility = advancedFields.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            advancedButton.Visibility = advancedFields.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         string ReadValue(ProviderSetting setting) => inputs[setting.Key] switch
@@ -1350,13 +1422,14 @@ public sealed partial class MainPage : Page
 
         var body = new StackPanel { Spacing = 10 };
         body.Children.Add(primaryFields);
-        body.Children.Add(advanced);
+        body.Children.Add(advancedButton);
 
         // The dialog's own scroller does not always engage when the form outgrows the window,
         // so the fields scroll in their own viewport and the status line stays in view.
         var fieldsScroll = new ScrollViewer
         {
             Content = body,
+            MaxHeight = 340,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollMode = ScrollMode.Auto,
@@ -1366,7 +1439,7 @@ public sealed partial class MainPage : Page
 
         var form = new Grid { MinWidth = 360, RowSpacing = 12 };
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        form.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
@@ -1427,6 +1500,8 @@ public sealed partial class MainPage : Page
             ShouldConstrainToRootBounds = true,
         };
 
+        Button? colourButton = null;
+
         void RefreshIcon()
         {
             // A caret in the corner, so the icon reads as a control that opens something.
@@ -1453,6 +1528,16 @@ public sealed partial class MainPage : Page
             AutomationProperties.SetName(iconButton, $"Workspace icon, {SpaceIcons.Label(selectedIcon)}");
             AutomationProperties.SetHelpText(iconButton, "Opens the icon picker");
             ToolTipService.SetToolTip(iconButton, $"Change icon · {SpaceIcons.Label(selectedIcon)}");
+
+            if (colourButton?.Content is Ellipse dot)
+            {
+                dot.Fill = StudioColors.Brush(selectedColour);
+                var index = Array.IndexOf(StudioColors.Palette, selectedColour);
+                var colourName = index >= 0 ? StudioColors.PaletteNames[index] : "Custom";
+                AutomationProperties.SetName(colourButton, $"Workspace colour, {colourName}");
+                AutomationProperties.SetHelpText(colourButton, "Opens the colour picker");
+                ToolTipService.SetToolTip(colourButton, $"Workspace colour · {colourName}");
+            }
         }
 
         // A shipped, named set rather than the whole Fluent font: a 15 px glyph is only readable as
@@ -1594,39 +1679,124 @@ public sealed partial class MainPage : Page
 
         iconButton.Click += (_, _) => ShowIconPicker();
 
+        var colourPicker = new Flyout
+        {
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedRight,
+            ShouldConstrainToRootBounds = true,
+        };
+
         var swatches = CreateColourSwatches(selectedColour, hex =>
         {
             selectedColour = hex;
             RefreshIcon();
+            colourPicker.Hide();
         });
 
-        var colourGroup = new StackPanel { Spacing = 4 };
-        colourGroup.Children.Add(new TextBlock { Text = "Colour", FontSize = 11 });
-        colourGroup.Children.Add(swatches);
+        var colourPanel = new StackPanel { Spacing = 10 };
+        colourPanel.Children.Add(new TextBlock
+        {
+            Text = "Workspace colour",
+            FontSize = 11,
+            Foreground = secondaryBrush,
+        });
+        colourPanel.Children.Add(swatches);
+        colourPicker.Content = colourPanel;
+
+        var colourButtonControl = new Button
+        {
+            Width = 40,
+            Height = 40,
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            CornerRadius = new CornerRadius(9),
+            Style = iconStyle,
+            Flyout = colourPicker,
+            Content = new Ellipse
+            {
+                Width = 20,
+                Height = 20,
+                Fill = StudioColors.Brush(selectedColour),
+                Stroke = secondaryBrush,
+                StrokeThickness = 1,
+            },
+        };
+        colourButton = colourButtonControl;
 
         var identity = new Grid { ColumnSpacing = 10 };
         identity.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        identity.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         identity.Children.Add(iconButton);
         Grid.SetColumn(nameBox, 1);
         identity.Children.Add(nameBox);
+        Grid.SetColumn(colourButtonControl, 2);
+        identity.Children.Add(colourButtonControl);
 
         nameBox.TextChanged += (_, _) => RefreshIcon();
         RefreshIcon();
 
-        var header = new StackPanel { Spacing = 12 };
-        header.Children.Add(identity);
-        header.Children.Add(colourGroup);
-
         var root = new Grid { MinWidth = 360, RowSpacing = 16 };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        Grid.SetRow(header, 0);
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(identity, 0);
         Grid.SetRow(form, 1);
-        root.Children.Add(header);
+        root.Children.Add(identity);
         root.Children.Add(form);
+
+        // Destructive actions are last, quiet, and only exist once there is something to delete.
+        Button? deleteButton = null;
+        if (!creating)
+        {
+            var deleteContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            deleteContent.Children.Add(new FontIcon
+            {
+                FontSize = 11,
+                Glyph = "\uE74D",
+                Foreground = dangerBrush,
+            });
+            deleteContent.Children.Add(new TextBlock
+            {
+                Text = "Delete workspace",
+                FontSize = 12,
+                Foreground = dangerBrush,
+            });
+
+            deleteButton = new Button
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Content = deleteContent,
+                Style = iconStyle,
+            };
+            AutomationProperties.SetName(deleteButton, "Delete workspace");
+            ToolTipService.SetToolTip(deleteButton, "Move its tabs to Archive and remove its connection");
+
+            var deleteSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
+            deleteSection.Children.Add(new Border
+            {
+                Height = 1,
+                Margin = new Thickness(0, 0, 0, 8),
+                Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+            });
+            deleteSection.Children.Add(deleteButton);
+            deleteSection.Children.Add(new TextBlock
+            {
+                Text = "Tabs with SQL move to Archive. This cannot be undone.",
+                FontSize = 10,
+                Foreground = mutedBrush,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(deleteSection, 2);
+            root.Children.Add(deleteSection);
+        }
+
         content = root;
 
+        var deleteRequested = false;
         var dialog = new ContentDialog
         {
             Title = creating ? "New workspace" : "Workspace settings",
@@ -1637,6 +1807,23 @@ public sealed partial class MainPage : Page
             SecondaryButtonText = "Test",
             CloseButtonText = "Cancel",
         };
+
+        if (deleteButton is not null)
+        {
+            deleteButton.Click += (_, _) =>
+            {
+                if (editing!.Tabs.Any(tab => tab.IsRunning) || editing.Tabs.Any(tab => tab.HasOpenTransaction))
+                {
+                    // The reason belongs next to the form, not hidden behind a closed dialog.
+                    status.Foreground = dangerBrush;
+                    status.Text = "Stop the query and roll back the transaction before deleting this workspace.";
+                    return;
+                }
+
+                deleteRequested = true;
+                dialog.Hide();
+            };
+        }
 
         dialog.Opened += (_, _) =>
         {
@@ -1739,6 +1926,47 @@ public sealed partial class MainPage : Page
 
         RebuildFields();
         await dialog.ShowAsync();
+
+        if (deleteRequested && editing is not null)
+        {
+            await ConfirmDeleteWorkspaceAsync(editing);
+        }
+    }
+
+    /// <summary>
+    /// Confirms a workspace deletion after its settings dialog has closed. The consequence is
+    /// stated up front because the workspace itself cannot be restored; its tabs can.
+    /// </summary>
+    private async Task ConfirmDeleteWorkspaceAsync(SpaceViewModel space)
+    {
+        var withSql = space.Tabs.Count(tab => !string.IsNullOrWhiteSpace(tab.Content));
+        var consequence = withSql switch
+        {
+            0 => $"\"{space.Name}\" and its connection settings will be removed. This cannot be undone.",
+            1 => $"\"{space.Name}\" and its connection settings will be removed. Its tab moves to Archive so its SQL is not lost.",
+            _ => $"\"{space.Name}\" and its connection settings will be removed. Its {withSql} tabs move to Archive so their SQL is not lost.",
+        };
+
+        var dialog = new ContentDialog
+        {
+            Title = "Delete workspace?",
+            XamlRoot = XamlRoot,
+            Content = new TextBlock
+            {
+                MaxWidth = 360,
+                Text = consequence,
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            PrimaryButtonStyle = (Style)Application.Current.Resources["StudioDangerButtonStyle"],
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await ViewModel.DeleteSpaceAsync(space);
+        }
     }
 
     // ---------------------------------------------------------------- new query palette

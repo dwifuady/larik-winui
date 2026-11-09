@@ -1,11 +1,11 @@
 ﻿# UI checks for the Larik SQL Studio shell: vertical tabs, spaces, and Tab-accepted snippet completion.
 # Run from C:\dev\larik-winui\Larik:  powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1
 #
-# The checks are ONE ordered scenario, not independent tests: they connect the seeded workspaces,
-# create tabs and reuse them later, so a single block cannot be run on its own. While iterating,
-# use -Through <part of a test name> to run the ordered prefix that covers the area you touched
-# (the names are grouped: rail/workspaces, connection, editor/completion, results, transactions,
-# settings). Run the whole suite before committing a behaviour change.
+# The checks are ONE ordered scenario, not independent tests. They start on the empty onboarding
+# surface, create the workspaces they reuse, then connect them, so a single block cannot be run on
+# its own. While iterating, use -Through <part of a test name> to run the ordered prefix that covers
+# the area you touched (the names are grouped: onboarding/rail, connection, editor/completion,
+# results, transactions, settings). Run the whole suite before committing a behaviour change.
 #   -Through 'editing another workspace'   # rail + workspace settings only (~2 min)
 #   -Through 'SQL Server provider connects' # everything through the live SQL Server round trip
 param(
@@ -30,8 +30,9 @@ $script:ThroughReached = $false
 # has AppData redirected by MSIX into the package's LocalCache, so both roots are parked. The WinUI
 # build deliberately does not share the Tauri app's store and migrates its own old
 # %LOCALAPPDATA%\Larik database on first launch, so that location is parked too. Every run then
-# starts from the seeded spaces; Restore-StudioState puts the tester's files back untouched. When
-# attaching to a running app (-AppPid) the state belongs to that app, so leave it alone.
+# starts from the empty onboarding surface; the first checks create the workspaces the rest of the
+# scenario reuses. Restore-StudioState puts the tester's files back untouched. When attaching to a
+# running app (-AppPid) the state belongs to that app, so leave it alone.
 $LaunchedHere = $AppPid -le 0
 $NewStateNames = @('larik-winui-dev.db', 'larik-winui.db')
 $LegacyStateNames = @('larik-dev.db', 'larik.db')
@@ -180,7 +181,17 @@ function Test-UI {
     }
 
     try { & $Script | Out-Null; $results.Add([pscustomobject]@{ Name = $Name; Status = 'PASS' }) }
-    catch { $results.Add([pscustomobject]@{ Name = $Name; Status = 'FAIL'; Detail = "$_" }) }
+    catch {
+        $slug = ($Name -replace '[^A-Za-z0-9]+', '-').Trim('-')
+        $shot = Join-Path $ArtifactDirectory "fail-$slug.png"
+        try {
+            Invoke-Ui @('screenshot', '--output', $shot) | Out-Null
+            $screenshots.Add($shot)
+        }
+        catch { }
+
+        $results.Add([pscustomobject]@{ Name = $Name; Status = 'FAIL'; Detail = "$_" })
+    }
 
     if ($Through -and $Name -like "*$Through*") { $script:ThroughReached = $true }
 }
@@ -238,6 +249,17 @@ function Find-Element {
     ($raw -join "`n") | ConvertFrom-Json
 }
 function Send-Keys { param([string]$Keys, [switch]$Literal) Focus-App; Invoke-Ui (@('send-keys', $Keys, '--via', 'send-input') + $(if ($Literal) { @('--verbatim') } else { @() })) | Out-Null }
+# Switch by invoking the rail's workspace indicator: mouse clicks outside an open flyout can be
+# swallowed by its light-dismiss layer, and the indicator is the stable target above six workspaces.
+function Switch-Workspace {
+    param([string]$Name)
+    Send-Keys 'escape'
+    Start-Sleep -Milliseconds 250
+    $button = @((Find-Element "Workspace $Name").matches | Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+    if ($null -eq $button) { throw "Workspace '$Name' is not in the rail." }
+    Invoke-Ui @('invoke', $button.selector) -Attempts 2 | Out-Null
+    Start-Sleep -Milliseconds 600
+}
 function Click-Element {
     param([string]$Selector)
     Focus-App
@@ -254,15 +276,23 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
-# Result-tab titles repeat ("Messages"), so click the rightmost visible ListItem with that title.
-function Click-NewestResultTab {
-    param([string]$Title)
+# Result tabs with the same title can hold different sessions (a USE message vs PRINT), so select
+# them in turn until the expected content is on screen.
+function Click-ResultTabWithText {
+    param([string]$Title, [string]$Text, [int]$Seconds = 8)
     Focus-App
     $tabs = @((Find-Element $Title).matches) |
         Where-Object { $_.type -eq 'ListItem' -and $_.width -gt 0 -and $_.height -gt 0 } |
         Sort-Object x
-    if ($tabs.Count -eq 0) { throw "No result tab '$Title' found." }
-    Invoke-Ui @('click', $tabs[-1].selector) -Attempts 4 | Out-Null
+    foreach ($tab in $tabs) {
+        Invoke-Ui @('click', $tab.selector) -Attempts 4 | Out-Null
+        $deadline = (Get-Date).AddSeconds($Seconds)
+        while ((Get-Date) -lt $deadline) {
+            if ((Find-Element $Text).matchCount -gt 0) { return }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    throw "No '$Title' result tab shows '$Text'."
 }
 function Right-Click-Element {
     param([string]$Selector)
@@ -304,13 +334,101 @@ New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
 Start-Sleep -Seconds 3
 
 # Wait for the shell, then focus it so synthetic input does not land in the console.
-try { Invoke-Ui @('wait-for', 'Editor') -Attempts 20 | Out-Null } catch { }
+try { Invoke-Ui @('wait-for', 'Welcome to Larik SQL Studio') -Attempts 20 | Out-Null } catch { }
 Focus-App
-Invoke-Ui @('focus', 'Editor') | Out-Null
 
 try {
     Test-UI 'window shows the studio title' {
         Assert-True ((Invoke-Ui @('list-windows', '--json')) -join '' -match 'Larik SQL Studio') 'main window not found'
+    }
+
+    Test-UI 'a first run starts on the empty onboarding surface' {
+        Assert-True ((Find-Element 'Welcome to Larik SQL Studio').matchCount -gt 0) 'the welcome surface is missing'
+        Assert-True ((Find-Element 'Create your first workspace').matchCount -gt 0) 'onboarding offers no way to start'
+        Assert-True ((Find-Element 'Customer totals').matchCount -eq 0) 'sample workspaces were seeded'
+        Assert-True ((Find-Element 'SQL editor').matchCount -eq 0) 'the editor is visible before a workspace exists'
+    }
+
+    Test-UI 'onboarding creates the workspaces the rest of the suite reuses' {
+        Click-Element 'Create your first workspace'
+        Wait-ForText 'Create & connect'
+
+        $name = @((Find-Element 'Workspace name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $name) 'the workspace name field is missing'
+        Invoke-Ui @('set-value', $name.selector, 'Staging') | Out-Null
+
+        # The Demo provider is the offline fixture: no server is needed for the editor checks.
+        $provider = @((Find-Element 'Provider').matches | Where-Object { $_.type -eq 'ComboBox' } | Select-Object -First 1)
+        Assert-True ($null -ne $provider) 'the provider picker is missing'
+        Invoke-Ui @('click', $provider.selector) | Out-Null
+        Start-Sleep -Milliseconds 400
+        $demo = @((Find-Element 'Demo (in-memory)').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+        Assert-True ($null -ne $demo) 'the Demo provider was not offered'
+        Invoke-Ui @('click', $demo.selector) | Out-Null
+        Start-Sleep -Milliseconds 500
+
+        $databases = @((Find-Element 'Databases').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $databases) 'the Demo databases field is missing'
+        Invoke-Ui @('set-value', $databases.selector, 'larik_staging,larik_sandbox') | Out-Null
+        Start-Sleep -Milliseconds 300
+        $demoNames = ((Invoke-Ui @('get-value', $databases.selector, '--json')) -join "`n" | ConvertFrom-Json).text
+        Assert-True ($demoNames -match 'larik_staging') "the Demo databases field kept '$demoNames'"
+
+        Click-Element 'Create & connect'
+        Wait-ForText 'Connected' 15
+
+        # Keep the first tab on larik_staging: the suite's rest-of-scenario fixture depends on it.
+        Click-Element 'Select database'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'larik_staging'
+        Start-Sleep -Milliseconds 500
+        Wait-ForText 'larik_staging' 10
+
+        Right-Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Rename'
+        Wait-ForText 'Tab name'
+        $tab = @((Find-Element 'Tab name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $tab.selector, 'Customer totals') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+
+        # Start disconnected, like every workspace: connecting is the rail's explicit action.
+        Click-Element 'ConnectionToggleButton'
+        Wait-ForText 'Disconnected' 15
+
+        # The second workspace exercises the SQL Server path later.
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'New workspace'
+        Wait-ForText 'Create & connect'
+        $name = @((Find-Element 'Workspace name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $name.selector, 'Local SQL Server') | Out-Null
+        Click-Element 'Create & connect'
+        Start-Sleep -Seconds 4
+
+        if ((Find-Element 'Disconnect').matchCount -gt 0) {
+            Click-Element 'ConnectionToggleButton'
+            Wait-ForText 'Disconnected' 30
+        }
+
+        Right-Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Rename'
+        Wait-ForText 'Tab name'
+        $tab = @((Find-Element 'Tab name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $tab.selector, 'Databases') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'SELECT name, state_desc FROM sys.databases ORDER BY name;' -Literal
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -match 'sys.databases') 'the SQL Server tab content was not set'
+
+        Switch-Workspace 'Staging'
+        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the suite did not return to Staging'
     }
 
     Test-UI 'the results pane starts collapsed' {
@@ -384,6 +502,8 @@ try {
         Start-Sleep -Milliseconds 500
         Click-Element 'Edit Staging'
         Wait-ForText 'Workspace settings'
+        Click-Element 'Workspace colour'
+        Start-Sleep -Milliseconds 400
         Click-Element 'Colour Pastel Yellow'
         Start-Sleep -Milliseconds 400
         Click-Element 'Save'
@@ -484,7 +604,7 @@ try {
         Assert-True ((Find-Element 'Workspace name').matchCount -gt 0) 'the new workspace dialog did not open'
         Click-Element 'Cancel'
         Start-Sleep -Milliseconds 700
-        Assert-True ((Find-Element 'Workspace Space 4').matchCount -eq 0) 'cancelling still created a workspace'
+        Assert-True ((Find-Element 'Workspace Space 3').matchCount -eq 0) 'cancelling still created a workspace'
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the active workspace changed after cancelling'
     }
 
@@ -495,10 +615,38 @@ try {
         Start-Sleep -Milliseconds 900
         Click-Element 'Create & connect'
         Start-Sleep -Milliseconds 1500
-        Assert-True ((Find-Element 'Workspace Space 4').matchCount -gt 0) 'the workspace was not created'
+        Assert-True ((Find-Element 'Workspace Space 3').matchCount -gt 0) 'the workspace was not created'
         Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'the new workspace is not the active one'
         Click-Element 'Workspace Staging'
         Start-Sleep -Milliseconds 700
+    }
+
+    Test-UI 'deleting a workspace archives its SQL and removes it from the rail' {
+        # The workspace from the previous check has SQL, so deletion must preserve it in Archive.
+        Switch-Workspace 'Space 3'
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 1' -Literal
+        Start-Sleep -Milliseconds 400
+
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Space 3'
+        Wait-ForText 'Workspace settings'
+        Click-Element 'Delete workspace'
+        Wait-ForText 'Delete workspace?'
+        Click-Element 'Delete'
+        Start-Sleep -Milliseconds 1200
+        Assert-True ((Find-Element 'Workspace Space 3').matchCount -eq 0) 'the workspace is still in the switcher'
+        Assert-True ((Find-Element 'Query 1').matchCount -eq 0) 'deletion did not switch away from the workspace'
+
+        # The tab's SQL survives in Archive, so a delete never discards work.
+        Click-Element 'Archive'
+        Wait-ForText 'select 1' 10
+        Click-Element 'Back to workspace'
+        Start-Sleep -Milliseconds 700
+
+        Switch-Workspace 'Staging'
     }
 
     Test-UI 'a workspace starts disconnected and connects on demand' {
@@ -829,6 +977,8 @@ try {
             Click-Element 'Advanced'
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'Connect timeout (s)').matchCount -gt 0) 'advanced fields did not expand'
+            Click-Element 'Done'
+            Start-Sleep -Milliseconds 400
             Click-Element 'Test'
             $status = $null
             $deadline = (Get-Date).AddSeconds(30)
@@ -1022,8 +1172,7 @@ try {
         Send-Keys "print 'larik message test';" -Literal
         Send-Keys 'f5'
         Start-Sleep -Milliseconds 1500
-        Click-NewestResultTab 'Messages'
-        Wait-ForText 'larik message test' 20
+        Click-ResultTabWithText 'Messages' 'larik message test'
         Assert-True ((Find-Element 'Messages').matchCount -gt 0) 'PRINT did not open a Messages tab'
     }
 
@@ -1033,7 +1182,7 @@ try {
         Send-Keys "print 'larik behind rows';" -Literal
         Send-Keys 'f5'
         Start-Sleep -Milliseconds 1500
-        Click-NewestResultTab 'Messages'
+        Click-ResultTabWithText 'Messages' 'larik behind rows'
         Wait-ForText 'larik behind rows' 20
 
         # Running a row query replaces the active Messages result. The message panel must clear
@@ -1448,7 +1597,7 @@ try {
         Send-Keys 'select 12345 * (1 + @@trancount) as session_state;' -Literal
         Send-Keys 'ctrl+a'
         Send-Keys 'ctrl+enter'
-        Wait-ForText '1 rows returned' 20
+        Wait-ForText '1 result set' 20
         # Clean is 12345; a leaked transaction would make it 24690. The value is computed,
         # so it cannot be satisfied by the editor text itself.
         Assert-True ((Find-Element '24690').matchCount -eq 0) 'the transaction leaked into another tab'
@@ -1490,9 +1639,12 @@ try {
         Send-Keys 'enter'
         Send-Keys "select db_name() + '-suffix' as db_name;" -Literal
         Send-Keys 'f5'
-        Wait-ForText 'Result 2' 20
+
+        # The two GO batches get their own result tabs (the USE batch also carries a Messages tab),
+        # so find the tab that renders the select instead of assuming its number.
+        Wait-ForText 'Statement completed' 20
         Assert-True ((Find-Element 'Incorrect syntax').matchCount -eq 0) 'GO reached SQL Server'
-        Click-Element 'Result 2'
+        Click-ResultTabWithText 'Result' 'tempdb-suffix'
         Wait-ForText 'tempdb-suffix' 20
     }
 
@@ -1571,13 +1723,37 @@ try {
         Click-Element 'Settings'
         Wait-ForText 'Snippets' 10
 
-        # The About page names this build's own store, which is what keeps the WinUI app and the
-        # Tauri app installable side by side: neither opens (or migrates) the other's database.
+        # The About page names this build's own store, so local data is easy to find.
         Click-Element 'About'
         Wait-ForText 'larik-winui' 10
 
         Click-Element 'Back'
         Wait-ForText 'Switch workspace' 10
+    }
+
+    Test-UI 'deleting the last workspace returns to onboarding' {
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Staging'
+        Wait-ForText 'Workspace settings'
+        Click-Element 'Delete workspace'
+        Wait-ForText 'Delete workspace?'
+        Click-Element 'Delete'
+        Start-Sleep -Milliseconds 1200
+        Assert-True ((Find-Element 'Workspace Staging').matchCount -eq 0) 'Staging was not deleted'
+
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Edit Local SQL Server'
+        Wait-ForText 'Workspace settings'
+        Click-Element 'Delete workspace'
+        Wait-ForText 'Delete workspace?'
+        Click-Element 'Delete'
+        Start-Sleep -Milliseconds 1500
+
+        Assert-True ((Find-Element 'Welcome to Larik SQL Studio').matchCount -gt 0) 'the empty onboarding surface did not return'
+        Assert-True ((Find-Element 'Create your first workspace').matchCount -gt 0) 'onboarding lost its way to start'
+        Assert-True ((Find-Element 'SQL editor').matchCount -eq 0) 'the editor stayed visible with no workspace'
     }
 
     $shot = Join-Path $ArtifactDirectory 'larik-shell.png'

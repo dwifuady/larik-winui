@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace Larik.Data.Demo;
 
 /// <summary>
-/// In-memory provider used by the sample workspaces and by UI tests. It is a normal provider:
+/// In-memory provider for offline use and the UI tests. It is a normal provider:
 /// nothing in the app special-cases it.
 /// </summary>
 public sealed class DemoProvider : IDatabaseProvider

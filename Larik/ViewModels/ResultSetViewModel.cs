@@ -29,6 +29,8 @@ public partial class ResultSetViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TabBackground))]
     [NotifyPropertyChangedFor(nameof(TitleWeight))]
+    [NotifyPropertyChangedFor(nameof(TitleBrush))]
+    [NotifyPropertyChangedFor(nameof(CloseOpacity))]
     [NotifyPropertyChangedFor(nameof(ActiveStripOpacity))]
     public partial bool IsActive { get; set; }
 
@@ -43,8 +45,8 @@ public partial class ResultSetViewModel : ObservableObject
             : Result.Rows.Count switch
             {
                 0 => Result.Message,
-                1 => "1 row",
-                var count => $"{count:N0} rows",
+                1 => $"1 row · {Result.Elapsed.TotalMilliseconds:0} ms",
+                var count => $"{count:N0} rows · {Result.Elapsed.TotalMilliseconds:0} ms",
             };
 
     public Brush DetailBrush => Result.IsError
@@ -69,6 +71,13 @@ public partial class ResultSetViewModel : ObservableObject
     public FontWeight TitleWeight => IsActive
         ? Microsoft.UI.Text.FontWeights.SemiBold
         : Microsoft.UI.Text.FontWeights.Normal;
+
+    public Brush TitleBrush => IsActive
+        ? (Brush)Application.Current.Resources["StudioTextPrimaryBrush"]
+        : (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
+
+    /// <summary>Inactive tabs keep their close affordance, but quiet until the tab is chosen.</summary>
+    public double CloseOpacity => IsActive ? 1 : 0.45;
 
     public double ActiveStripOpacity => IsActive ? 1 : 0;
 

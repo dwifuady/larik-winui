@@ -29,7 +29,6 @@ public partial class StudioViewModel : ObservableObject
         CaretText = "Ln 1, Col 1";
         ResultMessage = string.Empty;
         ResultSummary = string.Empty;
-        IsSidebarOpen = true;
 
         if (_store.Load() is { Spaces.Count: > 0 } saved)
         {
@@ -37,13 +36,18 @@ public partial class StudioViewModel : ObservableObject
         }
         else
         {
-            Seed();
-            SelectSpace(Spaces[0]);
+            // A first run starts empty. The welcome surface owns the one setup decision, so the
+            // app never ships someone else's sample workspaces into a real install.
+            StatusText = "Create a workspace to get started";
         }
+
+        // An empty rail during onboarding is only a 252 px blank column; hide it so the welcome
+        // sits in the whole window. The first created workspace opens it again.
+        IsSidebarOpen = HasSpaces;
 
         // The empty results pane names the next action. It only does so while the workspace is
         // disconnected: a hint that says "Connect…" next to a connected rail is dishonest.
-        if (ActiveSpace?.IsConnected != true)
+        if (HasSpaces && ActiveSpace?.IsConnected != true)
         {
             ResultMessage = "Connect the workspace, then run a query with Ctrl+Enter";
         }
@@ -177,9 +181,16 @@ public partial class StudioViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ResultTabsVisibility))]
+    [NotifyPropertyChangedFor(nameof(ResultHeaderVisibility))]
     public partial bool HasMultipleResults { get; set; }
 
     public Visibility ResultTabsVisibility => HasMultipleResults ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// With several results the tab strip already carries each result's row count and timing, so the
+    /// extra RESULTS line is duplicate chrome. A single result has no tab strip, so the line stays.
+    /// </summary>
+    public Visibility ResultHeaderVisibility => HasMultipleResults ? Visibility.Collapsed : Visibility.Visible;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SidebarVisibility))]
@@ -188,6 +199,15 @@ public partial class StudioViewModel : ObservableObject
 
     [ObservableProperty]
     public partial SpaceViewModel? ActiveSpace { get; set; }
+
+    /// <summary>False on the first run and after the last workspace is deleted.</summary>
+    public bool HasSpaces => Spaces.Count > 0;
+
+    /// <summary>The content area is onboarding while no workspace exists.</summary>
+    public Visibility WelcomeVisibility => HasSpaces ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Workspace-specific chrome (switcher, connection, tabs, editor) is hidden at onboarding.</summary>
+    public Visibility WorkspaceChromeVisibility => HasSpaces ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
     /// Six icons fit in the rail footer at a legal hit-target size (26 px inside 172 px of usable
@@ -679,10 +699,121 @@ public partial class StudioViewModel : ObservableObject
 
         PersistSecrets(space);
         TrackSpace(space);
+        var firstSpace = !HasSpaces;
         Spaces.Add(space);
+        if (firstSpace)
+        {
+            // Creating the first workspace is the moment the rail becomes useful.
+            IsSidebarOpen = true;
+        }
+
         SelectSpace(space);
         ScheduleSave();
         return space;
+    }
+
+    /// <summary>
+    /// Deletes a workspace. Tabs that hold SQL move to the archive instead of being destroyed, so
+    /// the action never loses the user's work; connection secrets are removed with the profile.
+    /// The caller confirms the action because removing the workspace itself is not reversible.
+    /// </summary>
+    public async Task DeleteSpaceAsync(SpaceViewModel space)
+    {
+        if (!Spaces.Contains(space))
+        {
+            return;
+        }
+
+        if (space.Tabs.FirstOrDefault(tab => tab.IsRunning) is { } running)
+        {
+            StatusText = $"Stop the query in {running.Title} before deleting {space.Name}.";
+            return;
+        }
+
+        if (space.Tabs.Any(tab => tab.HasOpenTransaction))
+        {
+            StatusText = $"Roll back the open transaction before deleting {space.Name}.";
+            return;
+        }
+
+        var index = Spaces.IndexOf(space);
+
+        // The archive is the safety net: any tab with SQL survives as a restorable history entry.
+        var savedTabs = space.Tabs
+            .Where(tab => !string.IsNullOrWhiteSpace(tab.Content))
+            .ToList();
+
+        foreach (var tab in savedTabs)
+        {
+            ArchivedTabs.Insert(0, new ArchivedTabViewModel(
+                tab.Id,
+                space.Id,
+                space.Name,
+                space.ColorHex,
+                tab.Title,
+                tab.Database,
+                tab.Content,
+                tab.IsPinned,
+                DateTimeOffset.UtcNow));
+        }
+
+        // Each tab owns one session; close them before the connection and profile disappear.
+        foreach (var tab in space.Tabs)
+        {
+            tab.Session.Cancel();
+            await tab.CloseSessionAsync(CancellationToken.None);
+        }
+
+        DeleteSecrets(space, space.Connection.Provider);
+        await space.Connection.DisposeAsync();
+
+        var wasActive = ReferenceEquals(space, ActiveSpace);
+        Spaces.Remove(space);
+
+        if (wasActive)
+        {
+            if (Spaces.Count > 0)
+            {
+                SelectSpace(Spaces[Math.Clamp(index, 0, Spaces.Count - 1)]);
+            }
+            else
+            {
+                ClearActiveWorkspace();
+            }
+        }
+
+        RefreshArchiveView();
+        ScheduleSave();
+
+        var archived = savedTabs.Count == 1 ? "1 tab" : $"{savedTabs.Count} tabs";
+        StatusText = Spaces.Count == 0
+            ? "Create a workspace to get started"
+            : savedTabs.Count == 0
+                ? $"Deleted {space.Name}"
+                : $"Deleted {space.Name} · {archived} moved to archive";
+    }
+
+    /// <summary>Returns the shell to the first-run welcome surface once the last workspace is gone.</summary>
+    private void ClearActiveWorkspace()
+    {
+        ActiveSpace = null;
+        ActiveTab = null;
+        Tabs.Clear();
+        PinnedTabs.Clear();
+        UnpinnedTabs.Clear();
+        Results.Clear();
+        LastResult = null;
+        ResultMessage = string.Empty;
+        ResultSummary = string.Empty;
+        HasMultipleResults = false;
+        ClearSchema();
+        IsSidebarOpen = false;
+        StatusText = "Create a workspace to get started";
+        OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveLanguage));
+        OnPropertyChanged(nameof(ActiveSpace));
+        OnPropertyChanged(nameof(WindowTitle));
+        NotifyWorkspaceFooter();
     }
 
     /// <summary>
@@ -1238,6 +1369,9 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>The footer is derived from the space list; the list itself only changes structurally.</summary>
     private void NotifyWorkspaceList()
     {
+        OnPropertyChanged(nameof(HasSpaces));
+        OnPropertyChanged(nameof(WelcomeVisibility));
+        OnPropertyChanged(nameof(WorkspaceChromeVisibility));
         OnPropertyChanged(nameof(FooterSpaces));
         OnPropertyChanged(nameof(ShowsWorkspacePill));
         OnPropertyChanged(nameof(FooterIconsVisibility));
@@ -1999,61 +2133,5 @@ public partial class StudioViewModel : ObservableObject
         // Snippets are scoped per dialect, which the connection decides.
         OnPropertyChanged(nameof(Snippets));
         OnPropertyChanged(nameof(ActiveLanguage));
-    }
-
-    private void Seed()
-    {
-        var staging = new SpaceViewModel(
-            "space-staging",
-            "Staging",
-            StudioColors.Palette[2],
-            new ConnectionViewModel("demo", DemoProfile("larik_staging,larik_sandbox")),
-            "data");
-        staging.Tabs.Add(new TabViewModel("t1", "Customer totals", "larik_staging", staging,
-            "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count DESC;"));
-
-        var localSql = new SpaceViewModel(
-            "space-local-sql",
-            "Local SQL Server",
-            StudioColors.Palette[0],
-            new ConnectionViewModel("mssql", SqlServerProfile()),
-            "terminal");
-        localSql.Tabs.Add(new TabViewModel("t2", "Databases", "master", localSql,
-            "SELECT name, state_desc\nFROM sys.databases\nORDER BY name;"));
-
-        var playground = new SpaceViewModel(
-            "space-playground",
-            "Local playground",
-            StudioColors.Palette[3],
-            new ConnectionViewModel("demo", DemoProfile("playground")),
-            "beaker");
-        playground.Tabs.Add(new TabViewModel("t3", "Notes", "playground", playground,
-            "-- Local playground\n-- Connect the workspace, then run this\nSELECT * FROM products;"));
-
-        Spaces.Add(staging);
-        Spaces.Add(localSql);
-        Spaces.Add(playground);
-
-        foreach (var space in Spaces)
-        {
-            TrackSpace(space);
-        }
-    }
-
-    private static ConnectionProfile DemoProfile(string databases)
-    {
-        var profile = new ConnectionProfile { ProviderId = "demo" };
-        profile.Values["databases"] = databases;
-        return profile;
-    }
-
-    private static ConnectionProfile SqlServerProfile()
-    {
-        var profile = new ConnectionProfile { ProviderId = "mssql" };
-        profile.Values["server"] = @"(localdb)\MSSQLLocalDB";
-        profile.Values["encrypt"] = "false";
-        profile.Values["trustServerCertificate"] = "true";
-        profile.Values["connectTimeout"] = "8";
-        return profile;
     }
 }

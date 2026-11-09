@@ -39,7 +39,7 @@ C:\dev\larik-winui\
 │   ├── EditorLanguage.cs         # IEditorLanguage/ISqlDialect, QueryToken, StatementSpan
 │   ├── SqlLanguage.cs            # shared SQL lexer/splitter + generic fallback
 │   ├── DatabaseProviderCatalog.cs# discovers providers from assemblies + Plugins folders
-│   └── Demo/DemoProvider.cs      # in-memory provider (sample workspaces + UI tests)
+│   └── Demo/DemoProvider.cs      # in-memory provider (offline use + UI tests)
 ├── Larik.Data.SqlServer/         # SQL Server provider on Microsoft.Data.SqlClient
 │   └── TSqlDialect.cs            # T-SQL editor language (keywords, quoting, GO, splitting)
 ├── Larik.Data.Tests/             # editor-language golden tests (net10.0, xUnit)
@@ -97,9 +97,10 @@ run alone; `-Through` runs everything up to the named check and marks the rest `
 the cheap loop, then run the whole suite before calling a behaviour change done. Exit codes: `0`
 green, `1` failure, `2` `-Through` matched nothing.
 
-The suite drives the real window over UI Automation: tab switching, the workspace dots switch
-workspaces (click and a horizontal trackpad swipe), new-workspace creation is gated on the create
-dialog, `sel` → suggestion popup →
+The suite drives the real window over UI Automation: the empty first run creates its workspaces
+through onboarding, the workspace dots switch workspaces (click and a horizontal trackpad swipe),
+new-workspace creation is gated on the create dialog and deletion archives its SQL, `sel` →
+suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs only the statement
 under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
 syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
@@ -128,11 +129,11 @@ session, the connection dialog renders the provider's
 declared fields and its Test result, saved state is written to disk, and a real **SQL Server**
 workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
-or a reachable server; it is the seeded `(localdb)\MSSQLLocalDB` profile).
+or a reachable server; the workspace dialog starts with the `(localdb)\MSSQLLocalDB` profile).
 
 The suite parks the `%LOCALAPPDATA%\Larik WinUI` SQLite files (database + WAL sidecars) before
-launching, so it always starts from the seeded workspaces, and restores the tester's files when it
-finishes.
+launching, so it starts from the empty onboarding surface and creates the workspaces it reuses,
+then restores the tester's files when it finishes.
 
 ## Providers: adding a database
 
@@ -225,7 +226,7 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
 `sys.partitions` for reference-preview row estimates, and
 `DB_NAME()` so a `USE` reaches the shell) and
-`Larik.Data.Demo` (in-memory, used by the sample workspaces).
+`Larik.Data.Demo` (in-memory, used by UI tests and offline demos).
 
 ## What works in this slice
 
@@ -258,7 +259,10 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   untouched for *n* days. Pinned tabs, the tab currently in view, and the last tab of a workspace
   are never auto-archived. Archive state and the setting live in the same SQLite database as the
   session.
-- **Workspaces, connections and databases**: one space owns exactly one connection; that
+- **Workspaces, connections and databases**: a first run opens an empty **welcome surface** with one
+  action — **New workspace** — instead of shipping sample data. The rail stays hidden until the first
+  workspace exists, then opens automatically; deleting the last workspace hides it again and returns
+  to the welcome surface. One space owns exactly one connection; that
   connection exposes several databases. Each query tab opens its own persistent **session** from
   that connection, so a transaction, temp table or `SET` option in one tab never leaks into another
   tab (the same model as SSMS, DBeaver and DataGrip). The rail's top strip carries the workspace
@@ -278,18 +282,25 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   workspace. Past six the row becomes a position pill (`‹ icon › 4 / 10`) that steps to the
   neighbour or opens the labelled workspace list, because ten unlabelled marks identify nothing.
   Each workspace wears a curated Fluent icon and falls back to the first letter of its name, so no
-  workspace is ever a blank; the icon is picked beside the name in the workspace dialog. The active
+  workspace is ever a blank; the icon is picked beside the name in the workspace dialog, and the
+  colour swatch next to it opens the palette in a flyout. Choosing a colour closes the flyout and
+  re-tints the icon, so the header stays one compact identity row and the connection form keeps the
+  height. The active
   workspace gets a tinted chip instead of the old ring — a ring only reads as a dot — and colour is
   now a state signal (active workspace, tab tint), not the identity.
   **New workspace** opens one dialog for the icon, name, colour and connection (rare provider fields
-  live under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the
-  workspace list untouched. Each workspace owns a palette colour (icon chip, tab strip/tint and Run
-  button).
+  open from an **Advanced connection settings** row, so the form keeps its shape); nothing is created
+  until **Create & connect**, so Cancel leaves the workspace list untouched. Each workspace owns a
+  palette colour (icon chip, tab strip/tint and Run button).
   **The pencil on a workspace row opens Workspace settings**: icon, name, colour and the connection
   in one form (a workspace *is* its connection), editable for any workspace without leaving the
   current one. Saving rebuilds the connection only when it actually changed — renaming never drops a
   live session — and a workspace you are not in stays disconnected instead of changing what is on
   screen.
+  **Workspace settings ends with a divided danger section**: quiet red **Delete workspace**, one line
+  stating the consequence, and a second confirmation. The profile and its stored secrets are removed,
+  but every tab that holds SQL moves to **Archive** first, so deleting a workspace never discards the
+  user's work.
   The database flyout is only about databases. Switching — from the top dropdown, the
   icons, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
   the side the new workspace lives on (left/right matches the icon order), and is skipped when
@@ -376,7 +387,7 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
   SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
-  Corrupt state falls back to the seeded spaces. The store is deliberately **separate from the Tauri
+  Corrupt state opens the welcome surface instead of failing the launch. The store is deliberately **separate from the Tauri
   app's** (`%APPDATA%\larik\larik-sql-studio\data\larik.db`): the two schemas share table names but
   not versions, so the WinUI build keeps its own file and the two apps install and run side by side.
   The first launch after this split copies the WinUI build's older `%LOCALAPPDATA%\Larik` database

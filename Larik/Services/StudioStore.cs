@@ -125,7 +125,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// (<c>larik-winui-dev.db</c> for debug builds) so the WinUI port and the Tauri app never open
 /// each other's incompatible store.
 /// <para>
-/// Writes are best-effort: a broken or unreadable database falls back to the seeded spaces
+/// Writes are best-effort: a broken or unreadable database opens the first-run welcome surface
 /// instead of failing the launch. Provider-declared password fields are never written.
 /// </para>
 /// </summary>

@@ -187,6 +187,14 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
+                <!--  Workspace identity, connection and database: the chrome onboarding removes.  -->
+                <Grid Grid.Row="0" Grid.RowSpan="3" Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
                 <!--  Workspace identity: the switcher, and nothing else competing with the name  -->
                 <Button
                     x:Name="SpaceSwitcherButton"
@@ -412,6 +420,7 @@
                         <FontIcon FontSize="12" Glyph="&#xE8FD;" />
                     </Button>
                 </Grid>
+                </Grid>
 
                 <!--  Pinned tabs: their own section above the TABS header, like Arc.  -->
                 <ListView
@@ -435,7 +444,10 @@
                     Visibility="{x:Bind ViewModel.PinnedTabsVisibility, Mode=OneWay}" />
 
                 <!--  Section header  -->
-                <Grid Grid.Row="4" Margin="18,6,12,2">
+                <Grid
+                    Grid.Row="4"
+                    Margin="18,6,12,2"
+                    Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}">
                     <TextBlock
                         VerticalAlignment="Center"
                         CharacterSpacing="120"
@@ -464,7 +476,8 @@
                     AutomationProperties.Name="New query tab"
                     Command="{x:Bind ViewModel.NewTabCommand}"
                     Style="{StaticResource StudioIconButtonStyle}"
-                    ToolTipService.ToolTip="New query (Ctrl+T)">
+                    ToolTipService.ToolTip="New query (Ctrl+T)"
+                    Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}">
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -670,7 +683,8 @@
                 x:Name="QueryToolbar"
                 Grid.Row="1"
                 Padding="16,4,12,8"
-                ColumnSpacing="10">
+                ColumnSpacing="10"
+                Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -769,7 +783,11 @@
             </Grid>
 
             <!--  SQL editor: an IEditorSurface implementation; swap it for a WebView2/Monaco island without touching the shell.  -->
-            <controls:SqlEditorView x:Name="SqlEditor" Grid.Row="2" Margin="12,0,12,0" />
+            <controls:SqlEditorView
+                x:Name="SqlEditor"
+                Grid.Row="2"
+                Margin="12,0,12,0"
+                Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}" />
             <!--  Drag handle between editor and results  -->
             <controls:DragHandle
                 x:Name="Splitter"
@@ -799,6 +817,15 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+
+                <!--  A hairline under the strip keeps the tabs on a baseline; the active tab's accent
+                      underline sits above it.  -->
+                <Border
+                    Grid.Row="1"
+                    Height="1"
+                    VerticalAlignment="Bottom"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                    IsHitTestVisible="False" />
 
                 <!--  Result tabs for a batch: one per result set, reorderable like query tabs.  -->
                 <ListView
@@ -839,10 +866,11 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="vm:ResultSetViewModel">
                             <Border
+                                MinHeight="28"
                                 Margin="0,0,2,0"
                                 AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
                                 Background="{x:Bind TabBackground, Mode=OneWay}"
-                                CornerRadius="6"
+                                CornerRadius="4"
                                 ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -851,17 +879,17 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel
-                                        Padding="9,3"
+                                        Padding="9,4"
                                         VerticalAlignment="Center"
                                         Orientation="Horizontal"
                                         Spacing="6">
                                         <TextBlock
                                             FontSize="11"
                                             FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
-                                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                            Foreground="{x:Bind TitleBrush, Mode=OneWay}"
                                             Text="{x:Bind Title, Mode=OneWay}" />
                                         <TextBlock
-                                            MaxWidth="120"
+                                            MaxWidth="160"
                                             FontSize="10"
                                             Foreground="{x:Bind DetailBrush, Mode=OneWay}"
                                             Text="{x:Bind Detail, Mode=OneWay}"
@@ -875,17 +903,18 @@
                                         Background="Transparent"
                                         BorderThickness="0"
                                         Click="ResultTabClose_Click"
+                                        Opacity="{x:Bind CloseOpacity, Mode=OneWay}"
                                         ToolTipService.ToolTip="Close result">
                                         <FontIcon FontSize="9" Glyph="&#xE711;" />
                                     </Button>
 
                                     <Rectangle
                                         Grid.ColumnSpan="2"
-                                        Width="2"
-                                        Height="14"
-                                        HorizontalAlignment="Left"
+                                        Height="2"
+                                        Margin="4,0"
+                                        HorizontalAlignment="Stretch"
                                         IsHitTestVisible="False"
-                                        VerticalAlignment="Center"
+                                        VerticalAlignment="Bottom"
                                         Fill="{x:Bind AccentBrush, Mode=OneWay}"
                                         Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}" />
                                 </Grid>
@@ -894,7 +923,10 @@
                     </ListView.ItemTemplate>
                 </ListView>
 
-                <Grid Grid.Row="0" Padding="4,0,4,0">
+                <Grid
+                    Grid.Row="0"
+                    Padding="4,0,4,0"
+                    Visibility="{x:Bind ViewModel.ResultHeaderVisibility, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <TextBlock
                             CharacterSpacing="120"
@@ -945,7 +977,8 @@
                     HorizontalAlignment="Right"
                     Orientation="Horizontal"
                     Spacing="14"
-                    VerticalAlignment="Center">
+                    VerticalAlignment="Center"
+                    Visibility="{x:Bind ViewModel.WorkspaceChromeVisibility, Mode=OneWay}">
                     <StackPanel
                         Orientation="Horizontal"
                         Spacing="6"
@@ -993,6 +1026,62 @@
                         FontSize="10"
                         Foreground="{ThemeResource StudioTextMutedBrush}"
                         Text="{x:Bind ViewModel.CaretText, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+
+            <!--  ============ FIRST RUN: one surface, one decision ============  -->
+            <Grid
+                x:Name="WelcomePage"
+                Grid.Row="1"
+                Grid.RowSpan="4"
+                Padding="32"
+                Background="{ThemeResource StudioBackgroundBrush}"
+                Visibility="{x:Bind ViewModel.WelcomeVisibility, Mode=OneWay}">
+                <StackPanel
+                    MaxWidth="460"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="12">
+                    <Border
+                        Width="56"
+                        Height="56"
+                        HorizontalAlignment="Left"
+                        Background="{ThemeResource StudioAccentSoftBrush}"
+                        CornerRadius="14">
+                        <FontIcon
+                            FontSize="24"
+                            Foreground="{ThemeResource StudioAccentBrush}"
+                            Glyph="&#xE8FD;" />
+                    </Border>
+
+                    <TextBlock
+                        FontSize="28"
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                        Text="Welcome to Larik SQL Studio"
+                        TextWrapping="Wrap" />
+
+                    <TextBlock
+                        FontSize="13"
+                        Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                        Text="Connect to a database and start querying. A workspace holds one connection and its tabs, so each project keeps its own context."
+                        TextWrapping="Wrap" />
+
+                    <Button
+                        Margin="0,8,0,0"
+                        Padding="18,9"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.Name="Create your first workspace"
+                        Click="NewWorkspace_Click"
+                        Content="New workspace"
+                        Style="{StaticResource AccentButtonStyle}" />
+
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        FontSize="11"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="You can add more workspaces later from the workspace switcher."
+                        TextWrapping="Wrap" />
                 </StackPanel>
             </Grid>
 

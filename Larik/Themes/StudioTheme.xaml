@@ -99,6 +99,15 @@
         <Setter Property="Foreground" Value="{ThemeResource StudioTextSecondaryBrush}" />
     </Style>
 
+    <!-- Destructive confirmation: same weight as the accent action, but red and never the default. -->
+    <Style
+        x:Key="StudioDangerButtonStyle"
+        BasedOn="{StaticResource AccentButtonStyle}"
+        TargetType="Button">
+        <Setter Property="Background" Value="{ThemeResource StudioDangerBrush}" />
+        <Setter Property="Foreground" Value="{ThemeResource StudioOnAccentBrush}" />
+    </Style>
+
     <!-- Vertical tab row: no padding, content stretches edge to edge -->
     <Style x:Key="StudioTabItemStyle" TargetType="ListViewItem">
         <Setter Property="Padding" Value="0" />
