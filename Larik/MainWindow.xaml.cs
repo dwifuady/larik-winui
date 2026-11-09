@@ -27,7 +27,14 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         ExtendsContentIntoTitleBar = true;
-        AppWindow.SetIcon("Assets/AppIcon.ico");
+
+        // Resolve the icon against the app folder: a relative path only works when the
+        // process happens to start in its own directory (the portable ZIP does not).
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+        if (File.Exists(iconPath))
+        {
+            AppWindow.SetIcon(iconPath);
+        }
 
         RootFrame.Navigate(typeof(MainPage));
         var mainPage = RootFrame.Content as MainPage;

@@ -1,6 +1,24 @@
 # Build output
 bin/
 obj/
+out/
+AppPackages/
+*.appx
+*.appxupload
+*.msix
+*.msixupload
+*.msixbundle
+
+# Release artifacts
+Larik-*.zip
+Larik-*-setup.exe
+SHA256SUMS.txt
+RELEASE_NOTES.md
 
 # UI test evidence
 ui-test-artifacts/
+
+# IDE / OS
+.vs/
+*.user
+Thumbs.db

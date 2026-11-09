@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: Build and test (x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      # Restore must use the same Configuration, RID and Platform as the build.
+      # Larik.csproj turns on SelfContained and PublishReadyToRun for Release,
+      # and restoring as Debug skips the runtime and crossgen packs the Release
+      # build needs (NETSDK1112 / "valid runtime package was not found").
+      - name: Restore
+        run: >
+          dotnet restore Larik/Larik.csproj
+          -p:Configuration=Release
+          -r win-x64
+          -p:Platform=x64
+
+      - name: Build
+        run: >
+          dotnet build Larik/Larik.csproj
+          -c Release
+          -r win-x64
+          -p:Platform=x64
+          --no-restore
+
+      - name: Test
+        run: dotnet test Larik.Data.Tests/Larik.Data.Tests.csproj -c Release
+
+      # A WinUI publish that skips XAML/PRI compilation still produces an exe,
+      # but it dies on launch inside Microsoft.UI.Xaml.dll (0xc000027b), and a
+      # publish without CopyToOutputDirectory drops Assets. Catch both before a
+      # tag can ever ship them.
+      - name: Publish portable layout
+        run: >
+          dotnet publish Larik/Larik.csproj
+          -c Release
+          -r win-x64
+          -p:Platform=x64
+          -p:Version=0.0.0
+          -p:SelfContained=true
+          -p:WindowsAppSDKSelfContained=true
+          -p:WindowsPackageType=None
+          -p:PublishTrimmed=false
+          -o out/win-x64
+
+      - name: Verify portable layout
+        shell: pwsh
+        run: |
+          $required = @(
+              'Larik.exe',
+              'Larik.pri',
+              'Microsoft.UI.Xaml.dll',
+              'Assets/AppIcon.ico',
+              'e_sqlite3.dll',
+              'LICENSE',
+              'THIRD-PARTY-NOTICES.md'
+          )
+          foreach ($file in $required) {
+              if (-not (Test-Path "out/win-x64/$file")) {
+                  throw "out/win-x64/$file is missing from the publish output"
+              }
+          }

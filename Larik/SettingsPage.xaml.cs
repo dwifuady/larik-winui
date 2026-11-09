@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Reflection;
 using Larik.Models;
 using Larik.Services;
 using Microsoft.UI.Xaml;
@@ -45,6 +46,10 @@ public sealed partial class SettingsPage : Page
     {
         App.Window.SetTitleBar(SettingsTitleBar);
         DatabasePathText.Text = LarikPaths.DatabasePath;
+
+        var version = typeof(SettingsPage).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        VersionText.Text = $"Version {(string.IsNullOrEmpty(version) ? "0.0.0" : version.Split('+')[0])} · MIT licensed";
 
         if (DialectChips.Children.Count == 0)
         {

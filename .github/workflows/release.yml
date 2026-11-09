@@ -1,0 +1,207 @@
+name: Release
+
+# Push a tag:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, without the leading v (e.g. 0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+              '${{ inputs.version }}'
+          } else {
+              '${{ github.ref_name }}'.TrimStart('v')
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Version '$version' is not MAJOR.MINOR.PATCH."
+          }
+
+          "value=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing v$version"
+
+      - name: Publish portable builds and installers
+        shell: pwsh
+        run: |
+          $iscc = @(
+              'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+              'C:\Program Files\Inno Setup 6\ISCC.exe',
+              "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $iscc) {
+              Write-Host 'Inno Setup not found on the runner, installing it'
+              choco install innosetup -y --no-progress
+              $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          }
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found' }
+
+          $version = '${{ steps.version.outputs.value }}'
+          $root = (Get-Location).Path
+
+          $targets = @(
+              @{ Rid = 'win-x64';   Platform = 'x64'   },
+              @{ Rid = 'win-arm64'; Platform = 'ARM64' }
+          )
+
+          foreach ($target in $targets) {
+              Write-Host "::group::Publishing $($target.Rid)"
+
+              dotnet publish Larik/Larik.csproj `
+                  -c Release `
+                  -r $target.Rid `
+                  -p:Platform=$($target.Platform) `
+                  -p:Version=${{ steps.version.outputs.value }} `
+                  -p:SelfContained=true `
+                  -p:WindowsAppSDKSelfContained=true `
+                  -p:WindowsPackageType=None `
+                  -p:PublishTrimmed=false `
+                  -p:PublishReadyToRun=true `
+                  -o "out/$($target.Rid)"
+
+              if ($LASTEXITCODE -ne 0) { throw "publish failed for $($target.Rid)" }
+
+              # WinUI compiles XAML and PRI resources during the build. A
+              # publish that skips that step still produces an exe, but it
+              # dies on launch inside Microsoft.UI.Xaml.dll (0xc000027b).
+              # Refuse to ship an artifact without its resource file or assets.
+              foreach ($required in @(
+                  'Larik.exe',
+                  'Larik.pri',
+                  'Microsoft.UI.Xaml.dll',
+                  'Assets/AppIcon.ico',
+                  'e_sqlite3.dll',
+                  'LICENSE',
+                  'THIRD-PARTY-NOTICES.md'
+              )) {
+                  if (-not (Test-Path "out/$($target.Rid)/$required")) {
+                      throw "out/$($target.Rid)/$required is missing from the publish output"
+                  }
+              }
+
+              $arch = $target.Rid -replace '^win-', ''
+
+              Write-Host "::group::Building $arch installer"
+              & $iscc `
+                  "/DAppVersion=$version" `
+                  "/DArch=$arch" `
+                  "/DPublishDir=$root\out\$($target.Rid)" `
+                  "/DOutputDir=$root\out\installer" `
+                  'installer\Larik.iss'
+
+              if ($LASTEXITCODE -ne 0) { throw "installer build failed for $arch" }
+
+              $setup = "out/installer/Larik-$version-win-$arch-setup.exe"
+              if (-not (Test-Path $setup)) { throw "$setup was not produced" }
+
+              Write-Host "::endgroup::"
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.value }}'
+
+          foreach ($rid in @('win-x64', 'win-arm64')) {
+              $name = "Larik-$version-$rid"
+              Write-Host "::group::Packing $name.zip"
+              Compress-Archive -Path "out/$rid/*" -DestinationPath "$name.zip" -CompressionLevel Optimal
+              Write-Host "::endgroup::"
+          }
+
+          $lines = Get-ChildItem 'Larik-*.zip', 'out/installer/Larik-*-setup.exe' | ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+          }
+          ($lines -join "`n") + "`n" | Set-Content -Path SHA256SUMS.txt -Encoding ascii -NoNewline
+
+          Get-ChildItem 'Larik-*.zip', 'out/installer/Larik-*-setup.exe' |
+              Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
+
+      - name: Build release notes
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+
+          $previous = git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>$null
+          if ($LASTEXITCODE -ne 0) { $previous = $null }
+
+          $range = if ($previous) { "$previous..$tag" } else { $tag }
+          $changes = git log $range --no-merges --pretty=format:'- %s (`%h`)'
+
+          $notes = @(
+              '## Install'
+              ''
+              '**Installer (recommended):** download `Larik-<version>-win-<arch>-setup.exe` and run it. It installs per-user to `%LOCALAPPDATA%\Programs\Larik SQL Studio`, needs no admin rights, and uninstalls from Apps & Features.'
+              ''
+              '**Portable:** download the ZIP, unpack it anywhere, and run `Larik.exe`.'
+              ''
+              'Neither is code-signed, so Windows SmartScreen may warn on first run — choose **More info → Run anyway**. Requires Windows 10 1809 or newer.'
+              ''
+              'The SQL Server provider needs a reachable SQL Server (LocalDB works). The built-in Demo provider works without a server, so the app opens and runs offline.'
+              ''
+              'Larik SQL Studio is free software under the MIT license. See `THIRD-PARTY-NOTICES.md` in the ZIP for bundled components.'
+              ''
+              '## Changes'
+              ''
+          ) + $changes + @(
+              ''
+              '## Checksums'
+              ''
+              'See `SHA256SUMS.txt`.'
+          )
+
+          $notes -join "`n" | Set-Content -Path RELEASE_NOTES.md -Encoding utf8
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+
+          $assets = @(
+              (Get-ChildItem 'Larik-*.zip').FullName
+              (Get-ChildItem 'out/installer/Larik-*-setup.exe').FullName
+              (Resolve-Path 'SHA256SUMS.txt').Path
+          )
+
+          gh release create $tag `
+              --title "Larik SQL Studio $tag" `
+              --notes-file RELEASE_NOTES.md `
+              @assets

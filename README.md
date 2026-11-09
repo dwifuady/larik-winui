@@ -1,13 +1,38 @@
-# Larik — WinUI 3 port
+# Larik SQL Studio — WinUI 3
 
 A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app,
 now talking to **real databases through pluggable providers**:
 **Arc-style vertical tabs, workspaces that group databases, live SQL syntax highlighting, and
 snippet completion that expands on Tab.**
 
+![WinUI 3](https://img.shields.io/badge/WinUI-3-0E7A0D) ![.NET](https://img.shields.io/badge/.NET-10-512BD4) ![License](https://img.shields.io/badge/license-MIT-blue)
+
+## Download
+
+Published for `win-x64` and `win-arm64` from
+[Releases](https://github.com/dwifuady/larik-winui/releases):
+
+- **Installer** — `Larik-<version>-win-<arch>-setup.exe`. Per-user install to
+  `%LOCALAPPDATA%\Programs\Larik SQL Studio`, no admin rights, Start menu
+  shortcut, uninstalls from **Apps & Features**.
+- **Portable** — `Larik-<version>-win-<arch>.zip`. Unpack anywhere and run
+  `Larik.exe`. Both builds keep their data in `%LOCALAPPDATA%\Larik WinUI`.
+
+Requires Windows 10 1809+ and does not need a separate .NET install. Neither
+build is code-signed, so Windows SmartScreen may warn on the first run:
+**More info → Run anyway**.
+
+The SQL Server provider needs a reachable SQL Server (LocalDB works). The
+built-in **Demo** provider works without a server, so the app opens and runs
+offline.
+
 ```
 C:\dev\larik-winui\
 ├── Larik.slnx                    # solution (app + provider assemblies)
+├── .github/workflows/            # CI build/test and tag-driven release
+├── installer/Larik.iss           # Inno Setup per-user installer
+├── LICENSE                       # MIT
+├── THIRD-PARTY-NOTICES.md        # bundled components and licenses
 ├── Larik.Data/                   # provider contracts + catalog + Demo provider (net10.0)
 │   ├── Contracts.cs              # IDatabaseProvider, IDatabaseConnection, QueryResult, settings schema
 │   ├── EditorLanguage.cs         # IEditorLanguage/ISqlDialect, QueryToken, StatementSpan
@@ -47,6 +72,13 @@ C:\dev\larik-winui\
 cd C:\dev\larik-winui\Larik
 winapp run . --detach --json     # builds, registers a debug identity, launches
 ```
+
+## Requirements
+
+- Windows 10 1809+ (`x64` or `arm64`).
+- To build from source: .NET 10 SDK, [WinApp CLI](https://github.com/microsoft/winappCli)
+  0.7+, and Developer Mode. Published builds are self-contained and need no
+  separate .NET install.
 
 ## Verify
 
@@ -462,3 +494,25 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   a background process from stealing focus. The test harness presses a synthetic Alt before
   `SetForegroundWindow` to unlock it; without that, clicks and keys land in whatever window has focus
   (the IDE), while UIA `invoke`/`get-value` still work — a confusing half-passing suite.
+
+## Releasing
+
+The git tag is the version. Tag a commit and push it; CI builds both
+architectures as portable ZIPs and Inno Setup installers, then publishes them
+with SHA-256 checksums.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Keep `Version` in `Larik/Larik.csproj` in sync for local builds; the workflow
+overrides it from the tag. The release publishes these asset names:
+`Larik-<version>-win-<arch>-setup.exe`, `Larik-<version>-win-<arch>.zip`, and
+`SHA256SUMS.txt`.
+
+## License
+
+Larik SQL Studio is free software under the **MIT License** (see `LICENSE`).
+Bundled components and their licenses are listed in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

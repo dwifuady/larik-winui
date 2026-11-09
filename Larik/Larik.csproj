@@ -14,18 +14,26 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!--  Version is overridden from the git tag by the release workflow.  -->
+    <Version>0.1.0</Version>
+    <Product>Larik SQL Studio</Product>
+    <Company>Larik</Company>
   </PropertyGroup>
 
+  <!--
+    CopyToOutputDirectory matters for unpackaged (portable) builds: without it
+    the MSIX layout still gets these files, but `dotnet publish` leaves them out,
+    so the window icon and tile assets are missing at runtime.
+  -->
   <ItemGroup>
-    <Content Include="Assets\SplashScreen.scale-200.png" />
-    <Content Include="Assets\LockScreenLogo.scale-200.png" />
-    <Content Include="Assets\Square150x150Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
-    <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
-    <Content Include="Assets\StoreLogo.png" />
-    <Content Include="Assets\AppIcon.ico" />
-    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--  License notices ship next to the app, in both the ZIP and the installer.  -->
+  <ItemGroup>
+    <Content Include="..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -71,10 +79,20 @@
   </PropertyGroup>
 
   <!-- Publish Properties -->
-  <PropertyGroup>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+  <!--
+    Trimming is not supported for WinUI 3 / XAML: it can strip x:Bind and WinRT
+    interop, producing a package that builds clean and fails at runtime. Release
+    builds are always self-contained so the portable ZIP needs no installed .NET
+    runtime.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Debug'">
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 </Project>
