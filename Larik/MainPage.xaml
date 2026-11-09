@@ -739,13 +739,15 @@
                     Spacing="6"
                     VerticalAlignment="Center">
                     <Button
-                        Padding="10,5"
+                        Width="32"
+                        Height="28"
+                        Padding="0"
                         AutomationProperties.Name="Format query"
                         Command="{x:Bind ViewModel.FormatCommand}"
                         CornerRadius="6"
                         Style="{StaticResource StudioIconButtonStyle}"
                         ToolTipService.ToolTip="Format query">
-                        <TextBlock FontSize="11" Text="Format" />
+                        <FontIcon FontSize="12" Glyph="&#xE8D2;" />
                     </Button>
 
                     <Button

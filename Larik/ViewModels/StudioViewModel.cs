@@ -216,26 +216,48 @@ public partial class StudioViewModel : ObservableObject
     /// </summary>
     private const int FooterIconLimit = 6;
 
-    public IReadOnlyList<SpaceViewModel> FooterSpaces => [.. Spaces.Take(FooterIconLimit)];
+    /// <summary>
+    /// The workspaces the rail and switcher offer: everything not hidden, plus the active one even
+    /// when it is hidden. Keeping the open workspace visible avoids a "where am I?" state; it
+    /// disappears as soon as the user switches away.
+    /// </summary>
+    public IReadOnlyList<SpaceViewModel> RailSpaces =>
+        [.. Spaces.Where(space => !space.IsHidden || ReferenceEquals(space, ActiveSpace))];
 
-    public bool ShowsWorkspacePill => Spaces.Count > FooterIconLimit;
+    public int HiddenSpaceCount => Spaces.Count(space => space.IsHidden);
+
+    public string HiddenSpaceCountLabel => HiddenSpaceCount == 1
+        ? "1 hidden workspace"
+        : $"{HiddenSpaceCount} hidden workspaces";
+
+    public IReadOnlyList<SpaceViewModel> FooterSpaces => [.. RailSpaces.Take(FooterIconLimit)];
+
+    public bool ShowsWorkspacePill => RailSpaces.Count > FooterIconLimit;
 
     public Visibility FooterIconsVisibility => ShowsWorkspacePill ? Visibility.Collapsed : Visibility.Visible;
 
     public Visibility FooterPillVisibility => ShowsWorkspacePill ? Visibility.Visible : Visibility.Collapsed;
 
-    public string WorkspacePositionText => ActiveSpace is null
-        ? string.Empty
-        : $"{Spaces.IndexOf(ActiveSpace) + 1} / {Spaces.Count}";
+    public string WorkspacePositionText
+    {
+        get
+        {
+            var rail = RailSpaces;
+            var index = ActiveSpace is null ? -1 : rail.ToList().IndexOf(ActiveSpace);
+            return index < 0 ? string.Empty : $"{index + 1} / {rail.Count}";
+        }
+    }
 
-    public bool CanGoToPreviousSpace => ActiveSpace is not null && Spaces.IndexOf(ActiveSpace) > 0;
+    public bool CanGoToPreviousSpace => ActiveSpace is not null
+        && RailSpaces.ToList().IndexOf(ActiveSpace) > 0;
 
     public bool CanGoToNextSpace
     {
         get
         {
-            var index = ActiveSpace is null ? -1 : Spaces.IndexOf(ActiveSpace);
-            return index >= 0 && index < Spaces.Count - 1;
+            var rail = RailSpaces;
+            var index = ActiveSpace is null ? -1 : rail.ToList().IndexOf(ActiveSpace);
+            return index >= 0 && index < rail.Count - 1;
         }
     }
 
@@ -1341,12 +1363,12 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(Snippets));
         OnPropertyChanged(nameof(ActiveLanguage));
         OnPropertyChanged(nameof(ActiveSpace));
-        NotifyWorkspaceFooter();
+        NotifyWorkspaceList();
     }
 
     /// <summary>
-    /// Moves <paramref name="offset"/> workspaces along the dot order (negative = left).
-    /// Returns false at the ends, so a swipe never wraps around.
+    /// Moves <paramref name="offset"/> workspaces along the visible rail order (negative = left).
+    /// Returns false at the ends, so a swipe never wraps around; hidden workspaces are skipped.
     /// </summary>
     public bool SelectRelativeSpace(int offset)
     {
@@ -1355,14 +1377,15 @@ public partial class StudioViewModel : ObservableObject
             return false;
         }
 
-        var index = Spaces.IndexOf(ActiveSpace);
+        var rail = RailSpaces;
+        var index = rail.ToList().IndexOf(ActiveSpace);
         var target = index + offset;
-        if (index < 0 || target < 0 || target >= Spaces.Count)
+        if (index < 0 || target < 0 || target >= rail.Count)
         {
             return false;
         }
 
-        SelectSpace(Spaces[target]);
+        SelectSpace(rail[target]);
         return true;
     }
 
@@ -1372,7 +1395,10 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(HasSpaces));
         OnPropertyChanged(nameof(WelcomeVisibility));
         OnPropertyChanged(nameof(WorkspaceChromeVisibility));
+        OnPropertyChanged(nameof(RailSpaces));
         OnPropertyChanged(nameof(FooterSpaces));
+        OnPropertyChanged(nameof(HiddenSpaceCount));
+        OnPropertyChanged(nameof(HiddenSpaceCountLabel));
         OnPropertyChanged(nameof(ShowsWorkspacePill));
         OnPropertyChanged(nameof(FooterIconsVisibility));
         OnPropertyChanged(nameof(FooterPillVisibility));
@@ -1411,6 +1437,29 @@ public partial class StudioViewModel : ObservableObject
         space.Name = trimmed;
         StatusText = $"Renamed workspace to {trimmed}";
         return true;
+    }
+
+    /// <summary>
+    /// Hides or shows a workspace in the rail and switcher. The workspace keeps its tabs, session
+    /// and connection; hiding the open one only takes effect in the rail after the user switches
+    /// away, so the current context never disappears underneath them.
+    /// </summary>
+    public void ToggleWorkspaceHidden(SpaceViewModel space)
+    {
+        if (!Spaces.Contains(space))
+        {
+            return;
+        }
+
+        space.IsHidden = !space.IsHidden;
+        NotifyWorkspaceList();
+        ScheduleSave();
+
+        StatusText = space.IsHidden
+            ? ReferenceEquals(space, ActiveSpace)
+                ? $"{space.Name} hidden · it leaves the rail after you switch away"
+                : $"Hidden {space.Name} from the rail"
+            : $"Shown {space.Name} in the rail";
     }
 
     /// <summary>
@@ -1710,6 +1759,7 @@ public partial class StudioViewModel : ObservableObject
             Name = space.Name,
             Color = space.ColorHex,
             Icon = space.IconName,
+            Hidden = space.IsHidden,
             ProviderId = space.Connection.ProviderId,
             Profile = VisibleProfile(space.Connection),
             ActiveDatabase = space.PreferredDatabase,
@@ -1819,6 +1869,7 @@ public partial class StudioViewModel : ObservableObject
                 string.IsNullOrWhiteSpace(spaceState.Icon) ? null : spaceState.Icon)
             {
                 PreferredDatabase = spaceState.ActiveDatabase,
+                IsHidden = spaceState.Hidden,
             };
 
             foreach (var tabState in spaceState.Tabs)
@@ -1869,7 +1920,12 @@ public partial class StudioViewModel : ObservableObject
                 archived.ArchivedAt));
         }
 
-        var active = Spaces.FirstOrDefault(space => space.Id == state.ActiveSpaceId) ?? Spaces[0];
+        // A hidden workspace is intentionally out of the rail, so a restart does not reopen it
+        // unless nothing visible remains. Falling back keeps the app usable with an all-hidden list.
+        var active = Spaces.FirstOrDefault(space => space.Id == state.ActiveSpaceId && !space.IsHidden)
+            ?? Spaces.FirstOrDefault(space => !space.IsHidden)
+            ?? Spaces.FirstOrDefault(space => space.Id == state.ActiveSpaceId)
+            ?? Spaces[0];
         SelectSpace(active, active.LastActiveTab);
     }
 
@@ -1877,9 +1933,15 @@ public partial class StudioViewModel : ObservableObject
     {
         space.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase) or nameof(SpaceViewModel.ColorHex) or nameof(SpaceViewModel.IconName))
+            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase) or nameof(SpaceViewModel.ColorHex) or nameof(SpaceViewModel.IconName) or nameof(SpaceViewModel.IsHidden))
             {
                 ScheduleSave();
+
+                // Hiding changes the rail and switcher membership, not just one row's look.
+                if (args.PropertyName == nameof(SpaceViewModel.IsHidden))
+                {
+                    NotifyWorkspaceList();
+                }
             }
         };
 

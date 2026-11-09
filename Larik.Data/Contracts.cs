@@ -331,6 +331,14 @@ public interface IDatabaseProvider
     /// </summary>
     string? DescribeEndpoint(ConnectionProfile profile) => null;
 
+    /// <summary>
+    /// The identity the saved profile connects as, shown in the workspace list (for example a login
+    /// name, or <c>"Windows authentication"</c> when the provider uses integrated security). Null
+    /// means the provider has nothing to add, so older providers keep working unchanged. This is
+    /// the configured identity, not necessarily the server's live session user.
+    /// </summary>
+    string? DescribeIdentity(ConnectionProfile profile) => null;
+
     IDatabaseConnection CreateConnection(ConnectionProfile profile);
 }
 

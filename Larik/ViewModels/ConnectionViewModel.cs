@@ -73,6 +73,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
 
     public string Endpoint => Provider?.DescribeEndpoint(Profile) ?? ProviderName;
 
+    /// <summary>The identity the saved profile connects as, or null when the provider has none to name.</summary>
+    public string? Identity => Provider?.DescribeIdentity(Profile);
+
     /// <summary>Status is colour AND text — never colour alone.</summary>
     public string StatusLine => $"{Endpoint} · {StatusText}";
 
@@ -153,6 +156,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(Dialect));
         OnPropertyChanged(nameof(EditorLanguage));
         OnPropertyChanged(nameof(Endpoint));
+        OnPropertyChanged(nameof(Identity));
         OnPropertyChanged(nameof(StatusLine));
     }
 

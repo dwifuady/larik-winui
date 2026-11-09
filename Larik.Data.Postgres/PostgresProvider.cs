@@ -35,6 +35,9 @@ public sealed class PostgresProvider : IDatabaseProvider
         return $"PostgreSQL · {host}:{port}";
     }
 
+    public string? DescribeIdentity(ConnectionProfile profile) =>
+        string.IsNullOrWhiteSpace(profile.Get("user")) ? null : profile.Get("user")!.Trim();
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()

@@ -27,6 +27,12 @@ public sealed class SqlServerProvider : IDatabaseProvider
             ? null
             : $"SQL Server · {profile.Get("server")}";
 
+    /// <summary>Empty SQL logins mean integrated security, which is worth naming explicitly.</summary>
+    public string? DescribeIdentity(ConnectionProfile profile) =>
+        string.IsNullOrWhiteSpace(profile.Get("user"))
+            ? "Windows authentication"
+            : profile.Get("user")!.Trim();
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()

@@ -260,6 +260,22 @@ function Switch-Workspace {
     Invoke-Ui @('invoke', $button.selector) -Attempts 2 | Out-Null
     Start-Sleep -Milliseconds 600
 }
+# Workspace editing lives on the Workspaces page now; the switcher only points at it.
+function Open-WorkspaceSettings {
+    param([string]$Name)
+    Send-Keys 'escape'
+    Start-Sleep -Milliseconds 250
+    Click-Element 'Switch workspace'
+    Start-Sleep -Milliseconds 500
+    Click-Element 'Manage workspaces'
+    Wait-ForText 'Drag a row' 10
+    Click-Element "Edit $Name"
+    Wait-ForText 'Workspace settings'
+}
+function Close-WorkspaceManager {
+    Click-Element 'Back'
+    Wait-ForText 'Switch workspace' 10
+}
 function Click-Element {
     param([string]$Selector)
     Focus-App
@@ -487,6 +503,34 @@ try {
         Assert-True ($switcher.width -ge 200) "the workspace switcher is only $($switcher.width)px wide"
     }
 
+    Test-UI 'the workspace manager shows provider and identity, and hides without deleting' {
+        # The provider is a fact on every switcher row, and the manager adds the saved identity.
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Staging, Demo (in-memory)').matchCount -gt 0) 'the switcher does not name the provider'
+        Click-Element 'Manage workspaces'
+        Wait-ForText 'Drag a row' 10
+        Assert-True ((Find-Element 'Windows authentication').matchCount -gt 0) 'the manager does not show the connection identity'
+        Assert-True ((Find-Element 'Edit Local SQL Server').matchCount -gt 0) 'the manager row has no edit action'
+
+        Click-Element 'Hide Local SQL Server from the rail'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'HIDDEN FROM RAIL').matchCount -gt 0) 'the hidden row is not labelled'
+        Assert-True ((Find-Element 'Show Local SQL Server in the rail').matchCount -gt 0) 'hide did not stick'
+        Close-WorkspaceManager
+        Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -eq 0) 'a hidden workspace is still in the rail'
+
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element '1 hidden workspace').matchCount -gt 0) 'the switcher does not account for the hidden workspace'
+        Click-Element 'Manage workspaces'
+        Wait-ForText 'Drag a row' 10
+        Click-Element 'Show Local SQL Server in the rail'
+        Start-Sleep -Milliseconds 600
+        Close-WorkspaceManager
+        Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -gt 0) 'show did not return the workspace to the rail'
+    }
+
     Test-UI 'the connect action sits with the workspace it opens' {
         $connect = @((Find-Element 'ConnectionToggleButton').matches)
         Assert-True ($connect.Count -eq 1) "the connect action appears $($connect.Count) times; it belongs only in the rail"
@@ -497,11 +541,8 @@ try {
 
     Test-UI 'a workspace colour can be changed from its settings' {
         # A workspace is name + colour + connection, so all three live in one editor, opened from
-        # the workspace's own row in the switcher.
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Staging'
-        Wait-ForText 'Workspace settings'
+        # its row on the Workspaces page.
+        Open-WorkspaceSettings 'Staging'
         Click-Element 'Workspace colour'
         Start-Sleep -Milliseconds 400
         Click-Element 'Colour Pastel Yellow'
@@ -509,13 +550,11 @@ try {
         Click-Element 'Save'
         Start-Sleep -Milliseconds 1200
         Assert-True ((Get-StudioStateText) -match '#FDE047') 'the new workspace colour was not saved'
+        Close-WorkspaceManager
     }
 
-    Test-UI 'a workspace renames from its edit button in the switcher' {
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Staging'
-        Wait-ForText 'Workspace settings'
+    Test-UI 'a workspace renames from the manager' {
+        Open-WorkspaceSettings 'Staging'
         $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
         Assert-True ($null -ne $editor) 'the name field did not appear'
         Invoke-Ui @('set-value', $editor.selector, 'Staging renamed') | Out-Null
@@ -523,41 +562,36 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'Staging renamed').matchCount -gt 0) 'the workspace rename did not apply'
         Assert-True ((Get-StudioStateText) -match 'Staging renamed') 'the workspace rename was not saved'
+        Close-WorkspaceManager
 
         # Put the seeded name back so the rest of the suite starts from the same place.
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Staging renamed'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Staging renamed'
         $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
         Invoke-Ui @('set-value', $editor.selector, 'Staging') | Out-Null
         Send-Keys 'enter'
         Start-Sleep -Milliseconds 900
+        Close-WorkspaceManager
         Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'the workspace name was not restored'
     }
 
     Test-UI 'editing another workspace leaves the current one alone' {
         # Local SQL Server is not the active workspace here: saving it must not switch, connect,
         # or touch the editor.
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Local SQL Server'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Local SQL Server'
         $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
         Invoke-Ui @('set-value', $editor.selector, 'Local renamed') | Out-Null
         Send-Keys 'enter'
         Start-Sleep -Milliseconds 1000
         Assert-True ((Find-Element 'Local renamed').matchCount -gt 0) 'the other workspace was not renamed'
+        Close-WorkspaceManager
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'editing another workspace changed the active one'
 
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Local renamed'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Local renamed'
         $editor = @((Find-Element 'Workspace name').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
         Invoke-Ui @('set-value', $editor.selector, 'Local SQL Server') | Out-Null
         Send-Keys 'enter'
         Start-Sleep -Milliseconds 1000
+        Close-WorkspaceManager
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the active workspace changed while restoring names'
     }
 
@@ -629,14 +663,12 @@ try {
         Send-Keys 'select 1' -Literal
         Start-Sleep -Milliseconds 400
 
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Space 3'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Space 3'
         Click-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
+        Close-WorkspaceManager
         Assert-True ((Find-Element 'Workspace Space 3').matchCount -eq 0) 'the workspace is still in the switcher'
         Assert-True ((Find-Element 'Query 1').matchCount -eq 0) 'deletion did not switch away from the workspace'
 
@@ -954,9 +986,7 @@ try {
     }
 
     Test-UI 'workspace settings render the provider schema' {
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Staging'
+        Open-WorkspaceSettings 'Staging'
         Start-Sleep -Milliseconds 1000
         try {
             Assert-True ((Find-Element 'Workspace settings').matchCount -gt 0) 'the workspace editor did not open'
@@ -1005,6 +1035,7 @@ try {
         finally {
             Click-Element 'Cancel'
             Start-Sleep -Milliseconds 700
+            Close-WorkspaceManager
         }
     }
 
@@ -1745,24 +1776,21 @@ try {
     }
 
     Test-UI 'deleting the last workspace returns to onboarding' {
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Staging'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Staging'
         Click-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
-        Assert-True ((Find-Element 'Workspace Staging').matchCount -eq 0) 'Staging was not deleted'
+        Assert-True ((Find-Element 'Edit Staging').matchCount -eq 0) 'Staging was not deleted'
+        Close-WorkspaceManager
 
-        Click-Element 'Switch workspace'
-        Start-Sleep -Milliseconds 500
-        Click-Element 'Edit Local SQL Server'
-        Wait-ForText 'Workspace settings'
+        Open-WorkspaceSettings 'Local SQL Server'
         Click-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1500
+        Click-Element 'Back'
+        Wait-ForText 'Welcome to Larik SQL Studio' 10
 
         Assert-True ((Find-Element 'Welcome to Larik SQL Studio').matchCount -gt 0) 'the empty onboarding surface did not return'
         Assert-True ((Find-Element 'Create your first workspace').matchCount -gt 0) 'onboarding lost its way to start'

@@ -19,7 +19,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 
 | Type | Purpose |
 |---|---|
-| `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`, `DescribeEndpoint`. |
+| `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`, `DescribeEndpoint`, `DescribeIdentity`. |
 | `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `GetDatabaseDetailsAsync` (optional; marks databases the login cannot open), `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
@@ -64,6 +64,15 @@ public sealed class MyProvider : IDatabaseProvider
     public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new MyConnection(profile);
 }
 ```
+
+A provider can also describe the saved login for the Workspaces page:
+
+```csharp
+public string? DescribeIdentity(ConnectionProfile profile) =>
+    string.IsNullOrWhiteSpace(profile.Get("user")) ? null : profile.Get("user");
+```
+
+The default returns null, so an older provider simply shows no identity.
 
 The connection dialog builds itself from `Settings`. Password fields are stored in Windows
 Credential Manager, never in the SQLite state file. `IsAdvanced` moves rare fields into the
@@ -490,6 +499,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] Assembly targets `net10.0`; references `Larik.Data` only at the contract boundary.
 - [ ] `Id` is stable (stored in `spaces.provider_id`); `Dialect` matches snippet scopes.
 - [ ] `DescribeEndpoint` reports the host/port shown in the rail (or leave the default null).
+- [ ] `DescribeIdentity` names the configured login (or the integrated-auth phrase); null hides the line.
 - [ ] `Settings` covers every connection field; secrets use `ProviderSettingKind.Password`.
 - [ ] `CreateConnection` returns a fresh session; `OpenAsync` fails fast with a useful message.
 - [ ] Per-tab state (temp tables, `SET`, transactions) lives on that instance, not in a shared field.
