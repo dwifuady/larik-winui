@@ -211,9 +211,12 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   beside the workspace it opens instead of in the status bar. The database row only appears once a
   connection exists, and the toolbar badge repeats the database only while the rail is collapsed —
   it opens the same workspace panel, so connecting and switching stay reachable with the rail shut.
+  The picker puts databases the login can open first, then the rest alphabetically.
 - **New-tab command palette**: the New tab row opens a searchable palette instead of a modal
   database picker. Type to filter the workspace's databases, use Up/Down, and press Enter to open
-  the tab (Esc or the backdrop cancels). With no databases available, Enter opens an unbound tab.
+  the tab (Esc or the backdrop cancels). Databases the login can open lead the list, alphabetically,
+  followed by the ones it can only see; the current tab's database stays first in its group. With no
+  databases available, Enter opens an unbound tab.
 - **Archive & history**: the TABS header's archive button opens a page listing
   archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
   back in its workspace (pin state and section included); Delete or **Clear all** removes history.
