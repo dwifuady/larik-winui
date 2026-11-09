@@ -1798,7 +1798,7 @@ public partial class StudioViewModel : ObservableObject
         {
             LoadSecrets(space);
             await space.Connection.ConnectAsync(_lifetime.Token);
-            var databases = await space.Connection.GetDatabasesAsync(_lifetime.Token);
+            var databases = await space.Connection.GetDatabaseDetailsAsync(_lifetime.Token);
             space.UpdateDatabases(databases);
 
             // The connection is new, so any cached schema may be stale.

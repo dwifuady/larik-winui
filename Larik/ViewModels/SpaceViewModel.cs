@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Larik.Data;
 using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
@@ -163,16 +164,19 @@ public partial class SpaceViewModel : ObservableObject
 
     private static readonly SolidColorBrush TransparentBrush = new(Microsoft.UI.Colors.Transparent);
 
-    /// <summary>Replaces the database list with what the server reported, keeping the selection by name.</summary>
-    public void UpdateDatabases(IEnumerable<string> names)
+    /// <summary>
+    /// Replaces the database list with what the server reported, accessible databases first and
+    /// alphabetical within each group, while keeping the selection by name.
+    /// </summary>
+    public void UpdateDatabases(IEnumerable<DatabaseInfo> databases)
     {
         var selectedName = ActiveDatabase?.Name ?? PreferredDatabase;
-        var incoming = names.ToList();
+        var incoming = DatabaseInfo.InDisplayOrder(databases).ToList();
 
         Databases.Clear();
-        foreach (var name in incoming)
+        foreach (var database in incoming)
         {
-            Databases.Add(new DatabaseViewModel(name));
+            Databases.Add(new DatabaseViewModel(database));
         }
 
         ActiveDatabase = Databases.FirstOrDefault(d => string.Equals(d.Name, selectedName, StringComparison.OrdinalIgnoreCase))

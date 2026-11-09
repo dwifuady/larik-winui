@@ -20,7 +20,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `GetDatabaseDetailsAsync` (optional; marks databases the login cannot open), `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
 | `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`, and `Statement` (the SQL that produced the result, used to resolve references). |
@@ -397,6 +397,8 @@ manifest, unload) only when third-party plugins are actually expected.
    - one physical connection **per database** (Postgres cannot switch database on a live
      connection), or a pool keyed by database; `ExecuteAsync(sql, database, ...)` selects it;
    - `GetDatabasesAsync` from `pg_database`;
+   - `GetDatabaseDetailsAsync` from `pg_database` + `has_database_privilege(current_user, datname,
+     'CONNECT')`, so a least-privileged login's unreachable databases sort after the usable ones;
    - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema`,
      `TableSchema.Kind` (base table vs view), `ColumnDetails` from `format_type(a.atttypid,
      a.atttypmod)`, and `ForeignKeySchema.ReferencedSchema`;
@@ -475,7 +477,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] If the engine supports interactive transactions, implement `SupportsTransactions`,
       `GetTransactionStateAsync`, `CommitTransactionAsync` and `RollbackTransactionAsync`; otherwise
       leave the defaults.
-- [ ] `GetDatabasesAsync` works for a least-privileged login.
+- [ ] `GetDatabasesAsync` works for a least-privileged login; `GetDatabaseDetailsAsync` marks names the login can see but cannot open.
 - [ ] `ExecuteAsync` honours `EffectiveMaxRows`, sets `IsTruncated`/`RowLimit`, and reports errors via
       `QueryResult.Error`.
 - [ ] `ExecuteBatchAsync` returns one result per result set.

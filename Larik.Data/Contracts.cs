@@ -169,6 +169,27 @@ public sealed class QueryResult
 }
 
 /// <summary>
+/// One database a connection exposes. <see cref="IsAccessible"/> separates the names the login can
+/// actually open from the ones it can only see, so the selectors can put the usable databases first
+/// without hiding the rest.
+/// </summary>
+public sealed record DatabaseInfo(string Name, bool IsAccessible = true)
+{
+    /// <summary>
+    /// The order both database selectors use: databases the login can open first, then the rest,
+    /// alphabetical inside each group. A <paramref name="preferred"/> name moves to the top of its
+    /// own group so the current tab's database stays the first Enter target.
+    /// </summary>
+    public static IEnumerable<DatabaseInfo> InDisplayOrder(
+        IEnumerable<DatabaseInfo> databases,
+        string? preferred = null) =>
+        databases
+            .OrderByDescending(database => database.IsAccessible)
+            .ThenByDescending(database => string.Equals(database.Name, preferred, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(database => database.Name, StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
 /// A foreign key on a table: <see cref="Column"/> points at <see cref="ReferencedTable"/>.<see cref="ReferencedColumn"/>.
 /// <see cref="Constraint"/> groups composite keys.
 /// </summary>
@@ -320,6 +341,16 @@ public interface IDatabaseConnection : IAsyncDisposable
 
     /// <summary>Databases visible on this connection.</summary>
     Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Databases visible on this connection, marking the ones the login cannot open. Optional: the
+    /// default reports every name from <see cref="GetDatabasesAsync"/> as accessible, so providers
+    /// written before this member existed keep working and keep their database list unchanged.
+    /// </summary>
+    async Task<IReadOnlyList<DatabaseInfo>> GetDatabaseDetailsAsync(CancellationToken cancellationToken = default) =>
+        (await GetDatabasesAsync(cancellationToken))
+            .Select(name => new DatabaseInfo(name))
+            .ToList();
 
     /// <summary>
     /// The database the open session is using, when the engine can report it. A script's

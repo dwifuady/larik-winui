@@ -116,8 +116,8 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         State = ConnectionState.Disconnected;
     }
 
-    public Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default) =>
-        RequireSession().GetDatabasesAsync(cancellationToken);
+    public Task<IReadOnlyList<DatabaseInfo>> GetDatabaseDetailsAsync(CancellationToken cancellationToken = default) =>
+        RequireSession().GetDatabaseDetailsAsync(cancellationToken);
 
     /// <summary>
     /// Creates an unopened session for a query tab. Each tab owns its session, so transactions,

@@ -1757,10 +1757,9 @@ public sealed partial class MainPage : Page
         }
 
         var preferred = ViewModel.ActiveTab?.Database ?? space.PreferredDatabase;
-        _paletteDatabases = space.Databases
+        _paletteDatabases = DatabaseInfo
+            .InDisplayOrder(space.Databases.Select(database => database.Info), preferred)
             .Select(database => database.Name)
-            .OrderByDescending(name => string.Equals(name, preferred, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         _newTabPaletteOpen = true;

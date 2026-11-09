@@ -146,20 +146,34 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         }
     }
 
-    public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default) =>
+        (await GetDatabaseDetailsAsync(cancellationToken))
+            .Select(database => database.Name)
+            .ToList();
+
+    /// <summary>
+    /// <c>sys.databases</c> can show a name the login cannot open (HAS_DBACCESS returns 0), so the
+    /// pickers can keep those after the usable ones instead of letting them clutter the top.
+    /// </summary>
+    public async Task<IReadOnlyList<DatabaseInfo>> GetDatabaseDetailsAsync(CancellationToken cancellationToken = default)
     {
         await OpenAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             await using var command = _connection!.CreateCommand();
-            command.CommandText = "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name;";
+            command.CommandText = """
+                SELECT name, COALESCE(HAS_DBACCESS(name), 0)
+                FROM sys.databases
+                WHERE state_desc = 'ONLINE'
+                ORDER BY name;
+                """;
 
-            var databases = new List<string>();
+            var databases = new List<DatabaseInfo>();
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                databases.Add(reader.GetString(0));
+                databases.Add(new DatabaseInfo(reader.GetString(0), reader.GetInt32(1) == 1));
             }
 
             return databases;
