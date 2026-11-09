@@ -167,7 +167,7 @@ jobs:
           $notes = @(
               '## Install'
               ''
-              '**Installer (recommended):** download `Larik-<version>-win-<arch>-setup.exe` and run it. It installs per-user to `%LOCALAPPDATA%\Programs\Larik SQL Studio`, needs no admin rights, and uninstalls from Apps & Features.'
+              '**Installer (recommended):** download `Larik-<version>-win-<arch>-setup.exe` and run it. It installs per-user to `%LOCALAPPDATA%\Programs\Larik`, needs no admin rights, and uninstalls from Apps & Features.'
               ''
               '**Portable:** download the ZIP, unpack it anywhere, and run `Larik.exe`.'
               ''
@@ -175,7 +175,7 @@ jobs:
               ''
               'The SQL Server provider needs a reachable SQL Server (LocalDB works). The built-in Demo provider works without a server, so the app opens and runs offline.'
               ''
-              'Larik SQL Studio is free software under the MIT license. See `THIRD-PARTY-NOTICES.md` in the ZIP for bundled components.'
+              'Larik is free software under the MIT license. See `THIRD-PARTY-NOTICES.md` in the ZIP for bundled components.'
               ''
               '## Changes'
               ''
@@ -202,6 +202,6 @@ jobs:
           )
 
           gh release create $tag `
-              --title "Larik SQL Studio $tag" `
+              --title "Larik $tag" `
               --notes-file RELEASE_NOTES.md `
               @assets

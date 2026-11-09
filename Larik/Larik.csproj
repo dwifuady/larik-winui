@@ -17,7 +17,7 @@
 
     <!--  Version is overridden from the git tag by the release workflow.  -->
     <Version>0.1.0</Version>
-    <Product>Larik SQL Studio</Product>
+    <Product>Larik</Product>
     <Company>Larik</Company>
   </PropertyGroup>
 

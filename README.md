@@ -1,4 +1,4 @@
-# Larik SQL Studio — WinUI 3
+# Larik — native WinUI 3 SQL studio
 
 A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app,
 now talking to **real databases through pluggable providers**:
@@ -13,9 +13,9 @@ Published for `win-x64` and `win-arm64` from
 [Releases](https://github.com/dwifuady/larik-winui/releases):
 
 - **Installer** — `Larik-<version>-win-<arch>-setup.exe`. Per-user install to
-  `%LOCALAPPDATA%\Programs\Larik SQL Studio`, no admin rights, a
-  **Larik SQL Studio (WinUI)** Start menu entry, and it uninstalls from
-  **Apps & Features**. It installs and runs beside the Tauri app.
+  `%LOCALAPPDATA%\Programs\Larik`, no admin rights, a **Larik** Start menu entry,
+  and it uninstalls from **Apps & Features**. It installs and runs beside the
+  Tauri app, which keeps the name *Larik SQL Studio*.
 - **Portable** — `Larik-<version>-win-<arch>.zip`. Unpack anywhere and run
   `Larik.exe`. Both builds keep their data in `%LOCALAPPDATA%\Larik WinUI`.
 
@@ -514,6 +514,6 @@ overrides it from the tag. The release publishes these asset names:
 
 ## License
 
-Larik SQL Studio is free software under the **MIT License** (see `LICENSE`).
+Larik is free software under the **MIT License** (see `LICENSE`).
 Bundled components and their licenses are listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

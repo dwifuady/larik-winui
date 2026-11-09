@@ -1,4 +1,4 @@
-; Inno Setup script for the Larik SQL Studio (WinUI) installer.
+; Inno Setup script for the Larik installer.
 ;
 ; Per-user install: no elevation, no admin rights, uninstalls from Apps & Features.
 ;
@@ -23,21 +23,21 @@
 
 [Setup]
 AppId={{E701D625-402C-4E6D-AE74-0758E2C65A41}
-AppName=Larik SQL Studio
+AppName=Larik
 AppVersion={#AppVersion}
-AppVerName=Larik SQL Studio {#AppVersion}
+AppVerName=Larik {#AppVersion}
 AppPublisher=Larik
 AppPublisherURL=https://github.com/dwifuady/larik-winui
 AppSupportURL=https://github.com/dwifuady/larik-winui/issues
 AppUpdatesURL=https://github.com/dwifuady/larik-winui/releases
 VersionInfoVersion={#AppVersion}.0
 VersionInfoProductVersion={#AppVersion}
-VersionInfoProductName=Larik SQL Studio
+VersionInfoProductName=Larik
 
-; Per-user by default: installs to %LOCALAPPDATA%\Programs\Larik SQL Studio with no UAC prompt.
+; Per-user by default: installs to %LOCALAPPDATA%\Programs\Larik with no UAC prompt.
 PrivilegesRequired=lowest
-DefaultDirName={autopf}\Larik SQL Studio
-DefaultGroupName=Larik SQL Studio
+DefaultDirName={autopf}\Larik
+DefaultGroupName=Larik
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
 
@@ -56,9 +56,9 @@ OutputDir={#OutputDir}
 OutputBaseFilename=Larik-{#AppVersion}-win-{#Arch}-setup
 SetupIconFile=..\Larik\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\Larik.exe
-; The Tauri app is also called "Larik SQL Studio" and installs side by side,
-; so the WinUI build keeps a distinct Apps & Features name and shortcut.
-UninstallDisplayName=Larik SQL Studio (WinUI) {#AppVersion}
+; The Tauri app is called "Larik SQL Studio" and installs side by side, so this
+; build uses the short brand name "Larik" for its shortcut and uninstall entry.
+UninstallDisplayName=Larik {#AppVersion}
 
 Compression=lzma2/max
 SolidCompression=yes
@@ -78,8 +78,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Larik SQL Studio (WinUI)"; Filename: "{app}\Larik.exe"
-Name: "{autodesktop}\Larik SQL Studio (WinUI)"; Filename: "{app}\Larik.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Larik"; Filename: "{app}\Larik.exe"
+Name: "{autodesktop}\Larik"; Filename: "{app}\Larik.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Larik.exe"; Description: "{cm:LaunchProgram,Larik SQL Studio}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Larik.exe"; Description: "{cm:LaunchProgram,Larik}"; Flags: nowait postinstall skipifsilent

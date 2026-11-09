@@ -1,6 +1,6 @@
 # Third-party notices
 
-Larik SQL Studio (WinUI) is MIT licensed; see `LICENSE`. This build ships the
+Larik is MIT licensed; see `LICENSE`. This build ships the
 following third-party components. Versions are the ones restored by
 `Larik/Larik.csproj` at release time.
 
