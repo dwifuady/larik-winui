@@ -96,6 +96,12 @@ public sealed class QueryExecutionOptions
 }
 
 /// <summary>
+/// One equality predicate for a filtered row lookup (for example a foreign-key reference). The
+/// value is the already-formatted cell text; the dialect turns it into a SQL literal.
+/// </summary>
+public sealed record RowFilter(string Column, string? Value, string? DataType = null);
+
+/// <summary>
 /// The session's transaction state as reported by the engine. SQL Server fills
 /// <see cref="TransactionCount"/> from <c>@@TRANCOUNT</c> and <see cref="XactState"/> from
 /// <c>XACT_STATE()</c> (1 = committable, 0 = no transaction, -1 = doomed).
@@ -143,6 +149,13 @@ public sealed class QueryResult
     /// executed text is what the user wrote.
     /// </summary>
     public string? GeneratedQuery { get; init; }
+
+    /// <summary>
+    /// The statement/batch that produced this result, when the provider can report it. The shell
+    /// uses it to map result columns back to their source table (foreign-key previews) without
+    /// guessing from whatever is in the editor now. Null keeps older providers working.
+    /// </summary>
+    public string? Statement { get; init; }
 
     public static QueryResult Error(string message, TimeSpan elapsed, string? database = null) => new()
     {
@@ -350,6 +363,18 @@ public interface IDatabaseConnection : IAsyncDisposable
     /// </summary>
     Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(string? database, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<RoutineSchema>>([]);
+
+    /// <summary>
+    /// A cheap row-count estimate for one table, used to choose between listing a small reference
+    /// table and looking up only the matching rows in a large one. Optional: null means "unknown",
+    /// which keeps older providers working (the shell then does a filtered lookup).
+    /// </summary>
+    Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<long?>(null);
 
     /// <summary>
     /// True when the provider can report and finish transactions the user started in SQL.

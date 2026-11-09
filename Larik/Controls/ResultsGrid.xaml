@@ -190,6 +190,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
                         <StackPanel VerticalAlignment="Center" Spacing="1">
@@ -207,7 +208,21 @@
                         </StackPanel>
 
                         <Button
+                            x:Name="ReferenceToggleButton"
                             Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            AutomationProperties.Name="Preview referenced row"
+                            Click="ReferenceToggle_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Preview referenced rows (Shift+Space)"
+                            Visibility="Collapsed">
+                            <FontIcon FontSize="11" Glyph="&#xE71B;" />
+                        </Button>
+
+                        <Button
+                            x:Name="PreviewFormatButton"
+                            Grid.Column="2"
                             Height="28"
                             Padding="6,0"
                             AutomationProperties.Name="Cell preview format"
@@ -234,7 +249,7 @@
                         </Button>
 
                         <Button
-                            Grid.Column="2"
+                            Grid.Column="3"
                             Width="28"
                             Height="28"
                             AutomationProperties.Name="Copy cell value"
@@ -245,7 +260,7 @@
                         </Button>
 
                         <Button
-                            Grid.Column="3"
+                            Grid.Column="4"
                             Width="28"
                             Height="28"
                             AutomationProperties.Name="Close cell preview"
@@ -257,6 +272,7 @@
                     </Grid>
 
                     <ScrollViewer
+                        x:Name="ValueView"
                         Grid.Row="1"
                         Padding="12,4,12,10"
                         HorizontalScrollBarVisibility="Disabled"
@@ -269,6 +285,50 @@
                             IsTextSelectionEnabled="True"
                             TextWrapping="Wrap" />
                     </ScrollViewer>
+
+                    <Grid
+                        x:Name="ReferenceView"
+                        Grid.Row="1"
+                        AutomationProperties.Name="Reference preview"
+                        Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock
+                            x:Name="ReferenceSummary"
+                            Margin="12,4,12,6"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextWrapping="Wrap" />
+
+                        <Grid Grid.Row="1">
+                            <local:ReferenceTableView
+                                x:Name="ReferenceTable"
+                                Visibility="Collapsed" />
+                            <local:ReferenceRecordsView
+                                x:Name="ReferenceRecords"
+                                Visibility="Collapsed" />
+
+                            <TextBlock
+                                x:Name="ReferenceStatus"
+                                Margin="14,10,14,10"
+                                FontSize="11.5"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                TextWrapping="Wrap"
+                                Visibility="Collapsed" />
+                        </Grid>
+
+                        <TextBlock
+                            x:Name="ReferenceFooter"
+                            Grid.Row="2"
+                            Margin="12,6,12,10"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextWrapping="Wrap" />
+                    </Grid>
 
                     <TextBlock
                         x:Name="CellPreviewFooter"

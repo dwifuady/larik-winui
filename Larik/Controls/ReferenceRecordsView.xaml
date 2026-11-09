@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Larik.Controls.ReferenceRecordsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:models="using:Larik.Models">
+    <UserControl.Resources>
+        <DataTemplate x:Key="ReferenceRecordTemplate" x:DataType="models:ReferenceRowItem">
+            <Border
+                Padding="10,6"
+                Background="{x:Bind Background}"
+                BorderBrush="{x:Bind BorderBrush}"
+                BorderThickness="{x:Bind BorderThickness}"
+                CornerRadius="4">
+                <StackPanel Spacing="2">
+                    <TextBlock
+                        FontSize="8"
+                        FontWeight="SemiBold"
+                        Foreground="{ThemeResource StudioAccentBrush}"
+                        Text="MATCH"
+                        Visibility="{x:Bind MatchVisibility}" />
+                    <ItemsControl ItemsSource="{x:Bind Cells}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="models:ReferenceCellItem">
+                                <Grid Padding="0,1" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        FontSize="10"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="{x:Bind Name}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        FontFamily="{StaticResource StudioMonoFont}"
+                                        FontSize="11"
+                                        Foreground="{x:Bind ValueBrush}"
+                                        Text="{x:Bind Value}"
+                                        TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <ListView
+        x:Name="RowsList"
+        AutomationProperties.Name="Reference records"
+        ItemTemplate="{StaticResource ReferenceRecordTemplate}"
+        SelectionMode="None"
+        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+        ScrollViewer.VerticalScrollBarVisibility="Auto">
+        <ListView.ItemContainerStyle>
+            <Style TargetType="ListViewItem">
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0,0,0,2" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            </Style>
+        </ListView.ItemContainerStyle>
+    </ListView>
+</UserControl>

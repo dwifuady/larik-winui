@@ -1676,6 +1676,9 @@ public sealed partial class MainPage : Page
             ? StudioColors.Danger
             : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
 
+        ResultsGrid.ReferenceController = result is null
+            ? null
+            : ViewModel.CreateCellReferenceController(result);
         ResultsGrid.ShowResult(result, ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
         BringActiveResultTabIntoView();
     }

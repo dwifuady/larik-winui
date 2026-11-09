@@ -88,7 +88,7 @@ appends a new one, a transaction opened in one tab does not leak into another ta
 running `WAITFOR`, each result remembers its scroll row across result/query tab switches, a
 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
 results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
-Space opens the cell preview and Esc closes it,
+Space opens the cell preview and Esc closes it, Shift+Space previews the referenced row,
 the grid menu exports the whole result to a CSV file through the real save dialog,
 Ctrl+Space selects a column, a header drag resizes it, the window rectangle is saved with the
 session, the connection dialog renders the provider's
@@ -149,6 +149,12 @@ and procedures with their parameters from `sys.procedures`/`sys.parameters`; com
 `EXEC` is rendered by the dialect's `RoutineCall`, which is why PostgreSQL can use `CALL` without a
 shell change.
 
+**Foreign-key reference previews** use `QueryResult.Statement` (the SQL that produced the result,
+optional and null for older providers) plus the same `TableSchema.ForeignKeys` metadata. The dialect
+owns the lookup SQL through `RowsStatement` and `FormatLiteral`; `IDatabaseConnection.EstimateRowCountAsync`
+(optional, `sys.partitions` on SQL Server) chooses between listing a small lookup table and fetching
+only matching rows from a large one.
+
 `ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
 connection dialog's **Advanced** section instead of competing with the server and credentials. The
 SQL Server provider's `queryTimeout` (seconds, `0` waits indefinitely) lives there: a statement
@@ -184,6 +190,7 @@ back to the bare name for providers that report no schema.
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
 `sys.databases` for the picker, `sys.objects`/`sys.schemas`/`sys.columns` for schema-qualified
 completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
+`sys.partitions` for reference-preview row estimates, and
 `DB_NAME()` so a `USE` reaches the shell) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
 
@@ -346,7 +353,14 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   the column type and row number, explicit NULL/empty states and a copy button. Arrow keys keep it
   in step with the focused cell; it stays open while switching result or query tabs (showing the
   active cell in the new context, and returning to the cell you left), and Esc or its close button
-  turns it off until you open it again. JSON and XML values are
+  turns it off until you open it again. **Shift+Space** opens the foreign-key reference instead: for a
+  small lookup table the whole table is shown as a real column/row grid with the matching row
+  highlighted; for a large one only the matching rows are fetched (a metadata row estimate chooses)
+  and shown as record cards, where a wide row reads better in the narrow pane. A composite key
+  filters on the columns present in the result. The link button toggles value/reference for the same
+  cell, and the resolver only previews a reference when the source table is unambiguous. A small link
+  icon in the column header marks a foreign-key column (tooltip names the target) and opens the same
+  preview. JSON and XML values are
   auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector overrides the guess
   (invalid input falls back to the raw text with a note), Copy takes the formatted value, and the
   panel's left edge can be dragged between 240 and 720 px while the grid keeps a usable width.
@@ -398,6 +412,7 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
 | Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but the SQL Server provider reads `sys.procedures` only. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
 | Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
+| Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |

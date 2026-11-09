@@ -144,6 +144,43 @@ public interface ISqlDialect : IEditorLanguage
         return $"SELECT * FROM {qualified}";
     }
 
+    /// <summary>
+    /// Selects rows from one table, optionally filtered and ordered. The reference preview uses it
+    /// to list a small lookup table or fetch the matching rows of a large one.
+    /// </summary>
+    string RowsStatement(
+        string? schema,
+        string table,
+        IReadOnlyList<RowFilter> filters,
+        string? orderByColumn,
+        int limit)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(table)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
+
+        var where = filters.Count == 0
+            ? string.Empty
+            : " WHERE " + string.Join(
+                " AND ",
+                filters.Select(filter => filter.Value is null
+                    ? $"{QuoteIdentifier(filter.Column)} IS NULL"
+                    : $"{QuoteIdentifier(filter.Column)} = {FormatLiteral(filter.Value, filter.DataType)}"));
+
+        var order = string.IsNullOrWhiteSpace(orderByColumn)
+            ? string.Empty
+            : $" ORDER BY {QuoteIdentifier(orderByColumn)}";
+
+        return $"SELECT * FROM {qualified}{where}{order}";
+    }
+
+    /// <summary>
+    /// Formats a cell value as a SQL literal for <see cref="RowsStatement"/>. The default quotes
+    /// everything; dialects with native numeric/date/binary literals should override it.
+    /// </summary>
+    string FormatLiteral(string? value, string? dataType) =>
+        value is null ? "NULL" : $"'{value.Replace("'", "''")}'";
+
     /// <summary>Quotes an identifier the way this engine requires ("[x]" or "\"x\"").</summary>
     string QuoteIdentifier(string name);
 }

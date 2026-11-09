@@ -381,7 +381,6 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             LEFT JOIN sys.types AS ty ON ty.user_type_id = pa.user_type_id
             ORDER BY s.name, p.name, pa.parameter_id;
             """;
-
         var order = new List<string>();
         var builders = new Dictionary<string, (string Schema, string Name, List<RoutineParameter> Parameters)>(
             StringComparer.OrdinalIgnoreCase);
@@ -433,6 +432,50 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                 };
             })
             .ToList();
+    }
+
+    /// <summary>sys.partitions row estimate: metadata only, no table scan.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            SwitchDatabase(database);
+
+            var qualified = string.IsNullOrWhiteSpace(schema)
+                ? TSqlDialect.Instance.QuoteIdentifier(table)
+                : $"{TSqlDialect.Instance.QuoteIdentifier(schema)}.{TSqlDialect.Instance.QuoteIdentifier(table)}";
+            var objectName = qualified.Replace("'", "''");
+
+            await using var command = _connection!.CreateCommand();
+            command.CommandText = $"""
+                SELECT SUM(p.[rows])
+                FROM sys.partitions AS p
+                WHERE p.[object_id] = OBJECT_ID(N'{objectName}')
+                  AND p.[index_id] IN (0, 1);
+                """;
+            command.CommandTimeout = 5;
+
+            var value = await command.ExecuteScalarAsync(cancellationToken);
+            return value is null or DBNull
+                ? null
+                : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch (Exception)
+        {
+            // The estimate only picks a preview mode; a permission or metadata failure means
+            // "unknown", which falls back to the filtered lookup.
+            return null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<Dictionary<string, List<string>>> ReadPrimaryKeysAsync(CancellationToken cancellationToken)
@@ -560,6 +603,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                     results.Add(await ReadResultSetAsync(
                         reader,
                         database,
+                        sql,
                         rowLimit,
                         stopwatch,
                         cancellationToken));
@@ -681,6 +725,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
     private static async Task<QueryResult> ReadResultSetAsync(
         SqlDataReader reader,
         string? database,
+        string sql,
         int rowLimit,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
@@ -724,6 +769,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             Message = $"{rows.Count} rows",
             Elapsed = stopwatch.Elapsed,
             Database = database,
+            Statement = sql,
             IsTruncated = truncated,
             RowLimit = rowLimit,
         };

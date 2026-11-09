@@ -20,16 +20,16 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
-| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`. |
+| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`, and `Statement` (the SQL that produced the result, used to resolve references). |
 | `TableSchema` / `ForeignKeySchema` | Table or view name, optional `Schema`, `Kind` (`Table`/`View`), columns, `ColumnDetails` (types), primary key, foreign keys (with `ReferencedSchema`). |
 | `RoutineSchema` / `RoutineParameter` | Stored procedure or function: optional `Schema`, `Kind`, ordered parameters with type/output/default. |
 | `QueryExecutionOptions` | `MaxRows` with a 5,000 default / 100,000 ceiling. |
 | `SessionTransactionState` | `TransactionCount`, `XactState`, `HasTransaction`, `IsDoomed`, `CanCommit`, `CanRollback`. |
 | `IEditorLanguage` | `Id`, `Tokenize`, `Split`, `SplitBatches`, `StatementAt`. Non-SQL engines implement this. |
-| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `RoutineContextKeywords`, `RoutineCall`, `RoutineInvocation`, `PreviewStatement`, `QuoteIdentifier`. |
+| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `RoutineContextKeywords`, `RoutineCall`, `RoutineInvocation`, `PreviewStatement`, `RowsStatement`, `FormatLiteral`, `QuoteIdentifier`. |
 | `SqlLanguage` / `SqlLanguageOptions` | Reusable SQL lexer/splitter; provider assemblies subclass it. |
 
 `IDatabaseConnection` already uses default interface members for the row-cap overload,
@@ -84,10 +84,11 @@ Therefore:
    the record body instead (`ForeignKeySchema.ReferencedSchema` follows this rule; the four-argument
    constructor is unchanged).
 4. **New metadata is optional and nullable.** `QueryResult.GeneratedQuery`, `TableSchema.Schema` and
-   `ForeignKeySchema.ReferencedSchema` are all null for existing providers; `TableSchema.Kind`
-   defaults to `Table`, `ColumnDetails`/`Routines`/`Parameters` default to empty, and
-   `GetRoutinesAsync` returns `[]`, so an older provider behaves exactly as before and nothing is
-   persisted in a new format.
+   `ForeignKeySchema.ReferencedSchema` are all null for existing providers; `QueryResult.Statement`,
+   `TableSchema.Kind` defaults to `Table`, `ColumnDetails`/`Routines`/`Parameters` default to empty,
+   `GetRoutinesAsync` returns `[]`, `EstimateRowCountAsync` returns null, and the dialect's
+   `RowsStatement`/`FormatLiteral` have defaults, so an older provider behaves exactly as before and
+   nothing is persisted in a new format.
 5. **Prefer string tags over contract enums** for open sets. `StatementSpan.Language` is a string so
    a future MongoDB language can tag spans `"shell"`, `"line"`, `"sql"` without a contract change.
 
@@ -311,6 +312,27 @@ only the quoted name; T-SQL overrides it with named arguments
 instead of hard-coding `SELECT TOP`, so PostgreSQL can answer with `LIMIT` and a provider without a
 row-limit clause falls back to plain `SELECT`.
 
+### Foreign-key reference previews
+
+`QueryResult.Statement` lets the shell map an output column back to its source table (the resolver
+uses the same lexer as completion, so aliased/ambiguous columns are deliberately skipped). It then
+looks up `TableSchema.ForeignKeys` and asks the dialect for the rows:
+
+```csharp
+dialect.RowsStatement(
+    targetSchema,
+    targetTable,
+    filters,                 // RowFilter(column, formattedValue, sourceDataType)
+    orderByColumn,           // key column for full-list mode
+    limit);
+```
+
+`FormatLiteral` turns the already-formatted cell text into an engine literal (T-SQL keeps numeric,
+bit and `0x` values bare and escapes strings). `EstimateRowCountAsync` is the optional size hint:
+a target at or below the list limit is shown in full with matching rows highlighted; a larger one
+is fetched with the available key filters only. Returning null (the default) means "unknown" and
+also uses the filtered lookup.
+
 ---
 
 ## 6. Result details
@@ -391,8 +413,9 @@ manifest, unload) only when third-party plugins are actually expected.
    `@` variables. `RoutineContextKeywords` should be `CALL` (procedures), and `RoutineCall` should
    render positional arguments (`"public"."refresh_stats"(NULL, NULL)`, or `CALL ...` for a
    procedure); scalar functions used in expressions are a later completion scope. Override
-   `PreviewStatement` with `SELECT * FROM <name> LIMIT n`. Add dollar-quote
-   support to `SqlLanguageOptions` when you get there.
+   `PreviewStatement` with `SELECT * FROM <name> LIMIT n`, `RowsStatement` with `LIMIT` and a typed
+   `FormatLiteral`, and answer `EstimateRowCountAsync` from `pg_class.reltuples` when available. Add
+   dollar-quote support to `SqlLanguageOptions` when you get there.
 5. Register in `Larik/App.xaml.cs` (`typeof(PostgresProvider).Assembly`) and reference the project
    from `Larik.csproj`. No shell/editor changes.
 6. Add contract tests: split/token cases, schema mapping, execution/row-cap against a real server.
@@ -461,6 +484,8 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] Views report `Kind = View`; populate `ColumnDetails` when the engine exposes types.
 - [ ] Procedures/functions (if any) come from `GetRoutinesAsync` with ordered parameters; returning
       `[]` is a valid choice that simply hides routine completion.
+- [ ] `QueryResult.Statement` carries the executed SQL (needed for foreign-key reference previews),
+      and `EstimateRowCountAsync` can answer cheaply when the engine has catalog metadata.
 - [ ] `EditorLanguage` reuses `SqlLanguage` for SQL engines; no SQL assumptions for non-SQL engines.
 - [ ] Splitting handles strings, quoted identifiers, comments and the engine's terminator.
 - [ ] Tests: token/split golden cases, caret semantics, schema mapping, row cap.

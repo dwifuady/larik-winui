@@ -866,6 +866,55 @@ try {
         Start-Sleep -Milliseconds 300
     }
 
+    Test-UI 'Shift+Space previews the referenced rows of a foreign key' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select top 5 dbms_id from dbo.MSdbms_datatype;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'dbms_id' 30
+        Start-Sleep -Milliseconds 1500
+
+        Focus-Element 'Results grid'
+        Send-Keys 'home'
+        Assert-True ((Find-Element 'References dbo.MSdbms.dbms_id').matchCount -gt 0) 'the foreign-key header icon is missing'
+        Send-Keys 'shift+space'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'MSdbms' 20
+        Assert-True ((Find-Element 'MSSQLSERVER').matchCount -gt 0) 'the full lookup table was not listed'
+        Assert-True ((Find-Element 'match on row 1').matchCount -gt 0) 'the matching reference row is not reported'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Reference preview').matchCount -eq 0) 'Esc did not close the reference preview'
+
+        # The header link icon is the discoverable equivalent of Shift+Space.
+        Click-Element 'References dbo.MSdbms.dbms_id'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'MSSQLSERVER' 20
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'a large reference table is looked up by key, not listed in full' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select top 5 default_datatype_mapping_id from dbo.MSdbms_map;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'default_datatype_mapping_id' 30
+        Start-Sleep -Milliseconds 1500
+
+        Focus-Element 'Results grid'
+        Send-Keys 'home'
+        Send-Keys 'shift+space'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'Matching rows' 20
+        Assert-True ((Find-Element 'Full list').matchCount -eq 0) 'a large reference table was listed in full'
+        Assert-True ((Find-Element 'match on row 1').matchCount -gt 0) 'the matching lookup row is not reported'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
+    }
+
     Test-UI 'Ctrl+K browses the schema and inserts a table name' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'

@@ -180,6 +180,7 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
             Message = $"{rows.Count} rows",
             Elapsed = stopwatch.Elapsed,
             Database = database,
+            Statement = trimmed,
             IsTruncated = truncated,
             RowLimit = rowLimit,
         };

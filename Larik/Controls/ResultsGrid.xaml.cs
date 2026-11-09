@@ -73,6 +73,16 @@ public sealed partial class ResultsGrid : UserControl
     private bool _resizingPreview;
     private double _previewResizeStartX;
     private double _previewResizeStartWidth;
+    private PreviewMode _previewMode = PreviewMode.Value;
+    private CancellationTokenSource? _referenceCancellation;
+    private Brush _referenceMatchBrush = null!;
+    private Brush _referenceBorderBrush = null!;
+
+    private enum PreviewMode
+    {
+        Value,
+        Reference,
+    }
 
     /// <summary>Per-result scroll/selection state, so each result tab remembers where it was.</summary>
     private sealed class ResultViewState
@@ -110,6 +120,12 @@ public sealed partial class ResultsGrid : UserControl
 
     /// <summary>Raised after a copy so the shell can report it in the status bar.</summary>
     public event EventHandler<string>? StatusChanged;
+
+    /// <summary>
+    /// Resolves foreign-key references for the current result. Null disables Shift+Space reference
+    /// previews; the shell supplies a new controller whenever the active result changes.
+    /// </summary>
+    public ICellReferenceController? ReferenceController { get; set; }
 
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
@@ -172,7 +188,7 @@ public sealed partial class ResultsGrid : UserControl
         // result and query tab switches, showing whatever cell is active in the new context.
         if (_previewRequested && _hasSelection)
         {
-            ShowCellPreview(_focusRow, _focusColumn);
+            ShowCellPreview(_focusRow, _focusColumn, _previewMode);
         }
     }
 
@@ -195,7 +211,6 @@ public sealed partial class ResultsGrid : UserControl
         MessagesText.Text = string.Empty;
         MessagesScroll.Visibility = Visibility.Collapsed;
     }
-
     // ---------------------------------------------------------------- layout + rows
 
     private ResultLayout GetOrBuildLayout(QueryResult result)
@@ -278,6 +293,7 @@ public sealed partial class ResultsGrid : UserControl
         for (var index = 0; index < layout.Columns.Count; index++)
         {
             var column = layout.Columns[index];
+            var referenceLabel = ReferenceController?.Describe(index);
             var container = new Grid
             {
                 Width = column.Width,
@@ -290,7 +306,7 @@ public sealed partial class ResultsGrid : UserControl
                 Background = _headerBackground,
                 BorderBrush = _dividerBrush,
                 BorderThickness = new Thickness(0, 0, 1, 0),
-                Padding = new Thickness(12, 0, 12, 0),
+                Padding = new Thickness(8, 0, referenceLabel is null ? 8 : 20, 0),
             };
 
             surface.Child = new TextBlock
@@ -313,6 +329,30 @@ public sealed partial class ResultsGrid : UserControl
             };
 
             container.Children.Add(surface);
+
+            if (referenceLabel is not null)
+            {
+                var referenceButton = new Button
+                {
+                    Width = 14,
+                    Height = 18,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                    Content = new FontIcon { Glyph = "\uE71B", FontSize = 9 },
+                };
+                AutomationProperties.SetName(referenceButton, referenceLabel);
+                ToolTipService.SetToolTip(referenceButton, $"{referenceLabel} (Shift+Space)");
+                referenceButton.Click += (_, _) =>
+                {
+                    MoveTo(_focusRow, headerIndex, extend: false);
+                    ShowCellPreview(_focusRow, headerIndex, PreviewMode.Reference);
+                };
+                container.Children.Add(referenceButton);
+            }
 
             var handle = new ColumnResizeHandle
             {
@@ -565,8 +605,12 @@ public sealed partial class ResultsGrid : UserControl
                 SelectColumn(_focusColumn, extend: false);
                 e.Handled = true;
                 break;
+            case VirtualKey.Space when shift:
+                ToggleCellPreview(reference: true);
+                e.Handled = true;
+                break;
             case VirtualKey.Space:
-                ToggleCellPreview();
+                ToggleCellPreview(reference: false);
                 e.Handled = true;
                 break;
             case VirtualKey.Escape when _previewOpen:
@@ -753,37 +797,83 @@ public sealed partial class ResultsGrid : UserControl
     // ---------------------------------------------------------------- cell preview
 
     /// <summary>
-    /// Space (or the context menu) opens the focused cell's full value beside the grid. Cells are
-    /// ellipsized, so this is the only way to read a long value without copying it.
+    /// Space opens the focused cell's value; Shift+Space opens the referenced rows when the column
+    /// has a foreign key (and falls back to the value otherwise). Pressing the same combination on
+    /// the same cell closes the panel.
     /// </summary>
-    private void ToggleCellPreview()
+    private void ToggleCellPreview(bool reference)
     {
         if (_layout is null || !_hasSelection || _rows.Count == 0)
         {
             return;
         }
 
-        if (_previewOpen && _previewRow == _focusRow && _previewColumn == _focusColumn)
+        var mode = reference && ReferenceController?.CanPreview(_focusColumn) == true
+            ? PreviewMode.Reference
+            : PreviewMode.Value;
+
+        if (_previewOpen && _previewRow == _focusRow && _previewColumn == _focusColumn && _previewMode == mode)
         {
             CloseCellPreview();
             return;
         }
 
-        ShowCellPreview(_focusRow, _focusColumn);
+        ShowCellPreview(_focusRow, _focusColumn, mode);
     }
 
-    private void ShowCellPreview(int row, int column)
+    private void ShowCellPreview(int row, int column, PreviewMode mode = PreviewMode.Value)
     {
         if (_layout is null || row < 0 || row >= _rows.Count || column < 0 || column >= _layout.Columns.Count)
         {
             return;
         }
 
+        if (mode == PreviewMode.Reference && ReferenceController?.CanPreview(column) != true)
+        {
+            mode = PreviewMode.Value;
+        }
+
+        _referenceCancellation?.Cancel();
+        _referenceCancellation?.Dispose();
+        _referenceCancellation = null;
+
         _previewRequested = true;
         _previewOpen = true;
         _previewRow = row;
         _previewColumn = column;
+        _previewMode = mode;
         PreviewHost.Visibility = Visibility.Visible;
+
+        var canPreviewReference = ReferenceController?.CanPreview(column) == true;
+        ReferenceToggleButton.Visibility = canPreviewReference ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(
+            ReferenceToggleButton,
+            mode == PreviewMode.Reference
+                ? "Show the cell value (Space)"
+                : "Preview referenced rows (Shift+Space)");
+        PreviewFormatButton.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+        ValueView.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+        ReferenceView.Visibility = mode == PreviewMode.Reference ? Visibility.Visible : Visibility.Collapsed;
+        CellPreviewFooter.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+
+        if (mode == PreviewMode.Reference)
+        {
+            CellPreviewTitle.Text = _layout.Columns[column].Name;
+            CellPreviewSubtitle.Text = "Reference";
+            ShowReferenceLoading();
+            _ = LoadReferenceAsync(row, column);
+            return;
+        }
+
+        ShowValuePreview(row, column);
+    }
+
+    private void ShowValuePreview(int row, int column)
+    {
+        if (_layout is null || row < 0 || row >= _rows.Count || column < 0 || column >= _layout.Columns.Count)
+        {
+            return;
+        }
 
         var layout = _layout.Columns[column];
         var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
@@ -842,12 +932,182 @@ public sealed partial class ResultsGrid : UserControl
         CellPreviewFooter.Text = footer;
     }
 
+    private void ShowReferenceLoading()
+    {
+        ReferenceSummary.Text = string.Empty;
+        ReferenceFooter.Text = string.Empty;
+        HideReferenceViews();
+        ReferenceStatus.Text = "Loading referenced rows…";
+        ReferenceStatus.Visibility = Visibility.Visible;
+    }
+
+    private void HideReferenceViews()
+    {
+        ReferenceTable.Clear();
+        ReferenceTable.Visibility = Visibility.Collapsed;
+        ReferenceRecords.Clear();
+        ReferenceRecords.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task LoadReferenceAsync(int row, int column)
+    {
+        var controller = ReferenceController;
+        if (controller is null)
+        {
+            ShowValuePreview(row, column);
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _referenceCancellation = cancellation;
+
+        try
+        {
+            var snapshot = await controller.PreviewAsync(row, column, cancellation.Token);
+            if (cancellation.IsCancellationRequested
+                || !_previewOpen
+                || _previewMode != PreviewMode.Reference
+                || _previewRow != row
+                || _previewColumn != column)
+            {
+                return;
+            }
+
+            RenderReference(snapshot);
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing the pane or moving to another cell cancels the lookup silently.
+        }
+        catch (Exception exception)
+        {
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            HideReferenceViews();
+            ReferenceStatus.Text = $"Reference preview failed: {exception.Message}";
+            ReferenceStatus.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            if (ReferenceEquals(_referenceCancellation, cancellation))
+            {
+                _referenceCancellation = null;
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private void RenderReference(CellReferenceSnapshot snapshot)
+    {
+        if (snapshot.Reference is not { } reference)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = snapshot.Error ?? "This cell has no reference.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        CellPreviewTitle.Text = reference.SourceColumn;
+        CellPreviewSubtitle.Text = $"References {snapshot.TargetLabel}";
+
+        var mode = snapshot.IsList ? "full list" : "matching rows";
+        var estimate = snapshot.EstimatedRows is { } rowEstimate ? $" · ~{rowEstimate:N0} rows" : string.Empty;
+        ReferenceSummary.Text = $"{reference.Constraint} · {mode}{estimate}";
+
+        if (snapshot.IsNullValue)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = "This cell is NULL — no referenced row.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        if (snapshot.Error is { } error)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = error;
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        var result = snapshot.Result;
+        if (result is null || result.Rows.Count == 0)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = snapshot.Warning ?? "No referenced rows found.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        if (snapshot.IsList)
+        {
+            ReferenceRecords.Clear();
+            ReferenceRecords.Visibility = Visibility.Collapsed;
+            ReferenceTable.Show(
+                result,
+                snapshot.MatchedRows,
+                _referenceMatchBrush,
+                _referenceBorderBrush,
+                _dividerBrush);
+            ReferenceTable.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ReferenceTable.Clear();
+            ReferenceTable.Visibility = Visibility.Collapsed;
+            ReferenceRecords.Show(
+                result,
+                snapshot.MatchedRows,
+                _referenceMatchBrush,
+                _referenceBorderBrush);
+            ReferenceRecords.Visibility = Visibility.Visible;
+        }
+
+        ReferenceStatus.Visibility = Visibility.Collapsed;
+        var footer = snapshot.IsList
+            ? $"Full list · {result.Rows.Count:N0} row{(result.Rows.Count == 1 ? string.Empty : "s")}"
+            : $"Matching rows · {result.Rows.Count:N0} row{(result.Rows.Count == 1 ? string.Empty : "s")}";
+
+        if (snapshot.MatchedRows.Count > 0)
+        {
+            footer += $" · match on row {snapshot.MatchedRows[0] + 1:N0}";
+        }
+        else if (snapshot.Warning is null)
+        {
+            footer += " · no match in loaded rows";
+        }
+
+        if (snapshot.Truncated)
+        {
+            footer += " · truncated";
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.Warning))
+        {
+            footer += $" · {snapshot.Warning}";
+        }
+
+        ReferenceFooter.Text = footer;
+    }
+
     private void HideCellPreview()
     {
         if (!_previewOpen)
         {
             return;
         }
+
+        _referenceCancellation?.Cancel();
+        _referenceCancellation?.Dispose();
+        _referenceCancellation = null;
 
         _previewOpen = false;
         _previewRow = -1;
@@ -856,6 +1116,8 @@ public sealed partial class ResultsGrid : UserControl
         PreviewHost.Visibility = Visibility.Collapsed;
         CellPreviewValue.Text = string.Empty;
         CellPreviewFooter.Text = string.Empty;
+        HideReferenceViews();
+        ReferenceView.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>User closed the pane: it stays closed across results until opened again.</summary>
@@ -870,9 +1132,23 @@ public sealed partial class ResultsGrid : UserControl
     {
         if (_previewOpen)
         {
-            ShowCellPreview(_focusRow, _focusColumn);
+            ShowCellPreview(_focusRow, _focusColumn, _previewMode);
         }
     }
+
+    private void ReferenceToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_previewOpen || _previewRow < 0 || _previewColumn < 0)
+        {
+            return;
+        }
+
+        ShowCellPreview(
+            _previewRow,
+            _previewColumn,
+            _previewMode == PreviewMode.Reference ? PreviewMode.Value : PreviewMode.Reference);
+    }
+
 
     private void PreviewCell_Click(object sender, RoutedEventArgs e) =>
         ShowCellPreview(_focusRow, _focusColumn);
@@ -1164,6 +1440,8 @@ public sealed partial class ResultsGrid : UserControl
         _selectionBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x2E));
         _activeCellBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x70));
         _headerSelectionBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x42));
+        _referenceMatchBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x24));
+        _referenceBorderBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0xC0));
     }
 
     private static Brush BrushOr(string key, Brush fallback) =>

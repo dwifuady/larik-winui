@@ -299,6 +299,7 @@ public sealed class EditorLanguageTests
             Message = "ok",
         };
         Assert.Null(result.GeneratedQuery);
+        Assert.Null(result.Statement);
 
         var table = new TableSchema { Name = "users", Columns = ["id"] };
         Assert.Null(table.Schema);
@@ -343,8 +344,47 @@ public sealed class EditorLanguageTests
     public void T_sql_preview_quotes_the_object_and_caps_the_rows()
     {
         Assert.Equal(
-            "SELECT TOP 100 * FROM [dbo].[Orders]",
+            "SELECT TOP (100) * FROM [dbo].[Orders]",
             Tsql.PreviewStatement("dbo", "Orders", 100));
+    }
+
+    [Fact]
+    public void T_sql_reference_lookup_builds_a_typed_filter()
+    {
+        var sql = Tsql.RowsStatement(
+            "dbo",
+            "MSdbms_datatype",
+            [new RowFilter("dbms_id", "1", "int")],
+            orderByColumn: null,
+            limit: 25);
+
+        Assert.Equal(
+            "SELECT TOP (25) * FROM [dbo].[MSdbms_datatype] WHERE [dbms_id] = 1",
+            sql);
+    }
+
+    [Fact]
+    public void T_sql_reference_list_orders_by_the_key_column()
+    {
+        var sql = Tsql.RowsStatement(
+            "dbo",
+            "MSdbms",
+            [],
+            orderByColumn: "dbms_id",
+            limit: 200);
+
+        Assert.Equal(
+            "SELECT TOP (200) * FROM [dbo].[MSdbms] ORDER BY [dbms_id]",
+            sql);
+    }
+
+    [Fact]
+    public void T_sql_formats_literals_for_the_reference_filter()
+    {
+        Assert.Equal("N'it''s'", Tsql.FormatLiteral("it's", "nvarchar"));
+        Assert.Equal("1", Tsql.FormatLiteral("1", "bit"));
+        Assert.Equal("0x0A", Tsql.FormatLiteral("0x0A", "varbinary"));
+        Assert.Equal("NULL", Tsql.FormatLiteral(null, "int"));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Larik.Data;
 
@@ -114,7 +115,76 @@ public sealed class TSqlDialect : SqlLanguage, ISqlDialect
 
     /// <summary><c>SELECT TOP 100 * FROM [dbo].[Orders]</c>; the schema browser's preview.</summary>
     public string PreviewStatement(string? schema, string name, int limit) =>
-        $"SELECT TOP {Math.Max(1, limit)} * FROM {QualifiedName(schema, name)}";
+        RowsStatement(schema, name, [], orderByColumn: null, limit);
+
+    public string RowsStatement(
+        string? schema,
+        string table,
+        IReadOnlyList<RowFilter> filters,
+        string? orderByColumn,
+        int limit)
+    {
+        var where = filters.Count == 0
+            ? string.Empty
+            : " WHERE " + string.Join(
+                " AND ",
+                filters.Select(filter => filter.Value is null
+                    ? $"{QuoteIdentifier(filter.Column)} IS NULL"
+                    : $"{QuoteIdentifier(filter.Column)} = {FormatLiteral(filter.Value, filter.DataType)}"));
+
+        var order = string.IsNullOrWhiteSpace(orderByColumn)
+            ? string.Empty
+            : $" ORDER BY {QuoteIdentifier(orderByColumn)}";
+
+        return $"SELECT TOP ({Math.Max(1, limit)}) * FROM {QualifiedName(schema, table)}{where}{order}";
+    }
+
+    /// <summary>
+    /// T-SQL literals: numbers/bit stay bare, binary values keep their <c>0x</c> form, everything
+    /// else is an escaped Unicode string. The grid's values are already provider-formatted, so this
+    /// is a conversion back to a literal, not a parser for arbitrary user input.
+    /// </summary>
+    public string FormatLiteral(string? value, string? dataType)
+    {
+        if (value is null)
+        {
+            return "NULL";
+        }
+
+        var type = (dataType ?? string.Empty).Split('(', 2)[0].Trim().ToLowerInvariant();
+        if (type == "bit")
+        {
+            return value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                ? "1"
+                : value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                    ? "0"
+                    : value;
+        }
+
+        if (NumericTypes.Contains(type)
+            && decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        {
+            return value;
+        }
+
+        if (BinaryTypes.Contains(type))
+        {
+            return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value : $"0x{value}";
+        }
+
+        return $"N'{value.Replace("'", "''")}'";
+    }
+
+    private static readonly HashSet<string> NumericTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney",
+        "float", "real",
+    };
+
+    private static readonly HashSet<string> BinaryTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "binary", "varbinary", "image", "timestamp", "rowversion",
+    };
 
     public string QuoteIdentifier(string name) => $"[{name.Replace("]", "]]")}]";
 

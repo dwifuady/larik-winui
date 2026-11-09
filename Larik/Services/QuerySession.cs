@@ -118,6 +118,25 @@ public sealed class QuerySession
         }
     }
 
+    /// <summary>A metadata-only row-count estimate for one table, or null when unsupported.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var session = await EnsureOpenCoreAsync(cancellationToken);
+            return await session.EstimateRowCountAsync(database, schema, table, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>
     /// The database the session actually uses, when the provider can tell. A <c>USE</c> inside a
     /// script changes it; the shell adopts the answer so the next run does not switch back.

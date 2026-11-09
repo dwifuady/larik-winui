@@ -727,6 +727,88 @@ public partial class StudioViewModel : ObservableObject
     public Task RunSqlAsync(string sql, bool append = false) => RunBatchesAsync([sql], append);
 
     /// <summary>
+    /// Runs a reference-preview lookup on the active tab's own session without touching the query
+    /// tab's results or status. The session keeps temp tables and transaction context, which is what
+    /// a reference to a temp/user table needs.
+    /// </summary>
+    public async Task<QueryResult> RunCellReferenceQueryAsync(
+        string sql,
+        int maxRows,
+        CancellationToken cancellationToken)
+    {
+        var tab = ActiveTab;
+        var space = ActiveSpace;
+        if (tab is null || space?.Connection.IsConnected != true)
+        {
+            return QueryResult.Error("Connect the workspace to preview referenced rows.", TimeSpan.Zero);
+        }
+
+        var database = DatabaseNameFor(space, tab);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetime.Token);
+        var results = await tab.Session.ExecuteBatchAsync(
+            sql,
+            database,
+            new QueryExecutionOptions { MaxRows = maxRows },
+            linked.Token);
+
+        return results.FirstOrDefault(result => !result.IsError && result.Columns.Count > 0)
+               ?? results.FirstOrDefault(result => result.IsError)
+               ?? QueryResult.Error("No reference rows returned.", TimeSpan.Zero, database);
+    }
+
+    /// <summary>A row-count estimate for choosing list vs lookup; null when the provider cannot tell.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        var tab = ActiveTab;
+        var space = ActiveSpace;
+        if (tab is null || space?.Connection.IsConnected != true)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _lifetime.Token);
+            return await tab.Session.EstimateRowCountAsync(
+                DatabaseNameFor(space, tab),
+                schema,
+                table,
+                linked.Token);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Creates the reference resolver for a result. Null when the active provider has no SQL
+    /// dialect, because building a safe lookup is the dialect's job.
+    /// </summary>
+    public ICellReferenceController? CreateCellReferenceController(QueryResult result)
+    {
+        if (ActiveLanguage is not ISqlDialect dialect)
+        {
+            return null;
+        }
+
+        return new CellReferenceController(
+            result,
+            string.IsNullOrWhiteSpace(result.Statement) ? ActiveTab?.Content : result.Statement,
+            Tables,
+            dialect,
+            RunCellReferenceQueryAsync,
+            EstimateRowCountAsync);
+    }
+
+    /// <summary>
     /// Runs one or more GO-delimited batches in order on the tab's own session. Semicolons stay
     /// inside a batch, so declared variables and temp tables keep their scope exactly as they do
     /// when SQL Server receives a native batch; <c>GO</c> starts a new server batch.
