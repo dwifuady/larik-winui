@@ -126,6 +126,28 @@
                 </Button>
             </Grid>
         </DataTemplate>
+        <!--  Workspace identity: the chosen icon, or the first letter until one is picked.  -->
+        <DataTemplate x:Key="SpaceIconTemplate" x:DataType="vm:SpaceViewModel">
+            <Grid Width="16" Height="16">
+                <FontIcon
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    FontSize="14"
+                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                    Glyph="{x:Bind IconGlyph, Mode=OneWay}"
+                    Opacity="{x:Bind IndicatorOpacity, Mode=OneWay}"
+                    Visibility="{x:Bind IconGlyphVisibility, Mode=OneWay}" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    FontSize="9"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                    Opacity="{x:Bind IndicatorOpacity, Mode=OneWay}"
+                    Text="{x:Bind Monogram, Mode=OneWay}"
+                    Visibility="{x:Bind MonogramVisibility, Mode=OneWay}" />
+            </Grid>
+        </DataTemplate>
     </Page.Resources>
 
     <Page.KeyboardAccelerators>
@@ -186,11 +208,12 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <Ellipse
-                            Width="10"
-                            Height="10"
+                        <ContentControl
                             VerticalAlignment="Center"
-                            Fill="{x:Bind ViewModel.ActiveSpace.AccentBrush, Mode=OneWay}" />
+                            Content="{x:Bind ViewModel.ActiveSpace, Mode=OneWay}"
+                            ContentTemplate="{StaticResource SpaceIconTemplate}"
+                            IsHitTestVisible="False"
+                            Padding="0" />
 
                         <TextBlock
                             Grid.Column="1"
@@ -488,7 +511,9 @@
                     ReorderMode="Enabled"
                     SelectionMode="None" />
 
-                <!--  Workspace indicator: one dot per workspace, the active one ringed. The row is also a switcher.  -->
+                <!--  Workspace footer: up to six icons, then a position pill. Ten unlabelled marks
+                      identify nothing, so past six the footer stops being a map and opens the
+                      labelled list instead. Both rows switch workspaces.  -->
                 <Grid
                     Grid.Row="7"
                     Padding="8,7,8,7"
@@ -514,17 +539,12 @@
                         <FontIcon FontSize="12" Glyph="&#xE713;" />
                     </Button>
 
-                    <ScrollViewer
-                        Grid.Column="1"
-                        HorizontalContentAlignment="Center"
-                        HorizontalScrollBarVisibility="Hidden"
-                        HorizontalScrollMode="Enabled"
-                        VerticalScrollBarVisibility="Disabled"
-                        VerticalScrollMode="Disabled">
+                    <Grid Grid.Column="1">
                         <ItemsControl
                             HorizontalAlignment="Center"
                             AutomationProperties.Name="Workspaces"
-                            ItemsSource="{x:Bind ViewModel.Spaces}">
+                            ItemsSource="{x:Bind ViewModel.FooterSpaces, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.FooterIconsVisibility, Mode=OneWay}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal" Spacing="2" />
@@ -537,29 +557,70 @@
                                         Height="24"
                                         Padding="0"
                                         AutomationProperties.Name="{x:Bind IndicatorName, Mode=OneWay}"
+                                        Background="{x:Bind IndicatorChipBrush, Mode=OneWay}"
                                         Click="WorkspaceIndicator_Click"
+                                        Content="{x:Bind}"
+                                        ContentTemplate="{StaticResource SpaceIconTemplate}"
+                                        CornerRadius="6"
                                         Style="{StaticResource StudioIconButtonStyle}"
-                                        ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}">
-                                        <Grid Width="16" Height="16">
-                                            <Ellipse
-                                                Width="15"
-                                                Height="15"
-                                                Stroke="{x:Bind AccentBrush, Mode=OneWay}"
-                                                StrokeThickness="1.5"
-                                                Visibility="{x:Bind IndicatorRingVisibility, Mode=OneWay}" />
-                                            <Ellipse
-                                                Width="{x:Bind IndicatorDotSize, Mode=OneWay}"
-                                                Height="{x:Bind IndicatorDotSize, Mode=OneWay}"
-                                                Fill="{x:Bind AccentBrush, Mode=OneWay}"
-                                                Opacity="{x:Bind IndicatorDotOpacity, Mode=OneWay}" />
-                                        </Grid>
-                                    </Button>
+                                        ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                    </ScrollViewer>
 
-                    <!--  Balances the settings button so the dots stay centred in the rail.  -->
+                        <StackPanel
+                            HorizontalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="2"
+                            Visibility="{x:Bind ViewModel.FooterPillVisibility, Mode=OneWay}">
+                            <Button
+                                Width="20"
+                                Height="24"
+                                Padding="0"
+                                AutomationProperties.Name="Previous workspace"
+                                Click="WorkspacePrevious_Click"
+                                IsEnabled="{x:Bind ViewModel.CanGoToPreviousSpace, Mode=OneWay}"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Previous workspace">
+                                <FontIcon FontSize="9" Glyph="&#xE76B;" />
+                            </Button>
+
+                            <Button
+                                Width="24"
+                                Height="24"
+                                Padding="0"
+                                AutomationProperties.HelpText="Opens the workspace list"
+                                AutomationProperties.Name="{x:Bind ViewModel.ActiveSpace.IndicatorName, Mode=OneWay}"
+                                Background="{x:Bind ViewModel.ActiveSpace.IndicatorChipBrush, Mode=OneWay}"
+                                Click="WorkspacePill_Click"
+                                Content="{x:Bind ViewModel.ActiveSpace, Mode=OneWay}"
+                                ContentTemplate="{StaticResource SpaceIconTemplate}"
+                                CornerRadius="6"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Switch workspace" />
+
+                            <Button
+                                Width="20"
+                                Height="24"
+                                Padding="0"
+                                AutomationProperties.Name="Next workspace"
+                                Click="WorkspaceNext_Click"
+                                IsEnabled="{x:Bind ViewModel.CanGoToNextSpace, Mode=OneWay}"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Next workspace">
+                                <FontIcon FontSize="9" Glyph="&#xE76C;" />
+                            </Button>
+
+                            <TextBlock
+                                Margin="6,0,0,0"
+                                VerticalAlignment="Center"
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Text="{x:Bind ViewModel.WorkspacePositionText, Mode=OneWay}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!--  Balances the settings button so the icons stay centred in the rail.  -->
                     <Border
                         Grid.Column="2"
                         Width="28"
@@ -636,6 +697,13 @@
                         ToolTipService.ToolTip="{x:Bind ViewModel.ActiveSpace.ConnectionLine, Mode=OneWay}"
                         Visibility="{x:Bind ViewModel.ContextBadgeVisibility, Mode=OneWay}">
                         <StackPanel Orientation="Horizontal" Spacing="5">
+                            <!--  With the rail hidden this badge is the only place the workspace shows.  -->
+                            <ContentControl
+                                VerticalAlignment="Center"
+                                Content="{x:Bind ViewModel.ActiveSpace, Mode=OneWay}"
+                                ContentTemplate="{StaticResource SpaceIconTemplate}"
+                                IsHitTestVisible="False"
+                                Padding="0" />
                             <Ellipse
                                 Width="5"
                                 Height="5"

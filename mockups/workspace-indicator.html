@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workspace indicator — options</title>
+<style>
+  :root{
+    --ink: var(--foreground, #f5f5f7);
+    --muted: var(--muted, #8b8b93);
+    --line: rgba(127,127,127,.28);
+    --app-bg:#161618;
+    --t1:#f5f5f7;
+    --t2:rgba(255,255,255,.72);
+    --hair:rgba(255,255,255,.08);
+    --accent:#6366f1;
+    --radius:12px;
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{font-family:var(--font);color:var(--ink);font-size:14px;line-height:1.5;margin:0;-webkit-font-smoothing:antialiased}
+  h1{font-size:26px;line-height:1.2;margin:2px 0 8px;letter-spacing:-.02em;font-weight:650}
+  h2{font-size:15px;margin:0 0 10px;font-weight:650;letter-spacing:-.01em}
+  p{margin:0 0 10px}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;font-weight:600}
+  .lede{color:var(--muted);max-width:62ch;font-size:14px}
+  .wrap{max-width:700px;margin:0 auto}
+  section{margin:22px 0}
+  .kicker{font-size:12px;color:var(--muted);margin-top:-4px}
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 16px}
+  .fact{border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+  .fact b{display:block;font-size:20px;font-weight:650;letter-spacing:-.02em;line-height:1.15}
+  .fact span{font-size:12px;color:var(--muted);display:block;margin-top:2px}
+  .ruler{border:1px solid var(--line);border-radius:var(--radius);padding:14px 14px 12px}
+  .track{display:flex;gap:2px;align-items:stretch;height:30px;position:relative}
+  .cell{width:26px;border-radius:5px;background:rgba(127,127,127,.16);display:grid;place-items:center}
+  .cell i{width:9px;height:9px;border-radius:50%;background:rgba(127,127,127,.55);display:block}
+  .cell.active i{width:11px;height:11px;background:var(--accent)}
+  .cell.clip{flex:1;background:linear-gradient(90deg,rgba(239,68,68,.06),transparent);border:1px dashed rgba(239,68,68,.35);border-radius:5px}
+  .ruler-cap{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:8px}
+  .ruler-cap b{color:var(--ink);font-weight:600}
+  .scrub{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 14px}
+  .scrub .lbl{font-size:12px;color:var(--muted);margin-right:2px}
+  .chip{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;padding:5px 13px;font:inherit;font-size:12.5px;cursor:pointer}
+  .chip[aria-pressed="true"]{background:var(--accent);border-color:transparent;color:#161618;font-weight:650}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border:1px solid var(--line);border-radius:var(--radius);padding:12px;position:relative}
+  .card.rec{border-color:rgba(99,102,241,.65);box-shadow:0 0 0 1px rgba(99,102,241,.25)}
+  .card-head{display:flex;align-items:baseline;gap:8px;margin:2px 4px 10px}
+  .card-head h3{font-size:13.5px;margin:0;font-weight:650}
+  .card-head .tag{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#a9abff;font-weight:700}
+  .card-head .tag.plain{color:var(--muted)}
+  .card ul{margin:10px 4px 0;padding-left:17px;font-size:12.5px;color:var(--muted)}
+  .card li{margin:3px 0}
+  .card li b{color:var(--ink);font-weight:600}
+  .rail{background:var(--app-bg);border:1px solid var(--hair);border-radius:9px;padding:0;position:relative;width:252px;margin:0 auto}
+  .rail-tabs{padding:12px 10px 0;display:grid;gap:6px}
+  .tab-line{height:26px;border-radius:6px;background:rgba(255,255,255,.045);display:flex;align-items:center;gap:8px;padding:0 9px}
+  .tab-line i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.25)}
+  .tab-line span{height:6px;border-radius:3px;background:rgba(255,255,255,.13);flex:1;max-width:120px}
+  .tab-line.on{background:rgba(196,181,253,.14)}
+  .tab-line.on i{background:#C4B5FD}
+  .tab-line.on span{background:rgba(255,255,255,.35)}
+  .rail-spacer{height:18px}
+  .footer{display:grid;grid-template-columns:28px 1fr 28px;gap:4px;align-items:center;padding:7px 8px;border-top:1px solid var(--hair);min-height:38px}
+  .gear{width:28px;height:24px;display:grid;place-items:center;border:0;background:transparent;color:var(--t2);border-radius:6px;cursor:default}
+  .gear svg{width:12px;height:12px;opacity:.8}
+  .strip{display:flex;align-items:center;justify-content:center;gap:2px;min-width:0;overflow:hidden;height:24px;position:relative}
+  .strip.fade-l{-webkit-mask-image:linear-gradient(90deg,transparent,#000 18px,#000);mask-image:linear-gradient(90deg,transparent,#000 18px,#000)}
+  .strip.fade-r{-webkit-mask-image:linear-gradient(270deg,transparent,#000 18px,#000);mask-image:linear-gradient(270deg,transparent,#000 18px,#000)}
+  .strip.fade-lr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 16px,#000 calc(100% - 16px),transparent);mask-image:linear-gradient(90deg,transparent,#000 16px,#000 calc(100% - 16px),transparent)}
+  .strip.grid{display:grid;grid-template-columns:repeat(6,26px);justify-content:center;height:auto}
+  .dot-btn{width:26px;height:24px;padding:0;border:0;background:transparent;border-radius:6px;cursor:pointer;display:grid;place-items:center;position:relative;flex:0 0 auto}
+  .dot-btn:hover{background:rgba(255,255,255,.07)}
+  .dot-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .ring{position:absolute;width:15px;height:15px;border:1.5px solid currentColor;border-radius:50%}
+  .dot{display:block;border-radius:50%}
+  .chev{width:20px;height:24px;border:0;background:transparent;color:rgba(255,255,255,.38);font-size:15px;line-height:1;border-radius:5px;cursor:pointer;padding:0}
+  .chev:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.9)}
+  .pos{font-size:10.5px;color:rgba(255,255,255,.45);font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:6px;letter-spacing:.02em}
+  .fade-hint{font-size:9.5px;color:rgba(255,255,255,.3);padding:0 2px;line-height:24px;white-space:nowrap}
+  .popover{position:absolute;left:10px;right:10px;bottom:44px;background:#232326;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px;display:none;z-index:5;box-shadow:0 12px 32px rgba(0,0,0,.55)}
+  .popover.open{display:block}
+  .pop-head{font-size:9.5px;letter-spacing:.12em;color:rgba(255,255,255,.42);font-weight:700;padding:5px 8px 3px}
+  .pop-row{display:grid;grid-template-columns:8px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;font-size:12px;color:var(--t2);cursor:pointer}
+  .pop-row:hover{background:rgba(255,255,255,.07)}
+  .pop-row.active{color:var(--t1);font-weight:600}
+  .pop-row .pd{width:8px;height:8px;border-radius:50%}
+  .pop-row .sub{font-size:10px;color:rgba(255,255,255,.4);font-weight:400;display:block}
+  .pop-list{max-height:148px;overflow:auto}
+  .pop-sep{height:1px;background:rgba(255,255,255,.08);margin:5px 6px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  td.yes{color:#22c55e}
+  td.no{color:#ef4444}
+  td.meh{color:#d97706}
+  tr:last-child td{border-bottom:0}
+  .callout{border:1px solid rgba(99,102,241,.45);background:rgba(99,102,241,.08);border-radius:var(--radius);padding:14px 16px}
+  .callout h2{margin-bottom:6px}
+  .callout ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+  .callout li{margin:4px 0}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .small{font-size:12px;color:var(--muted)}
+  @media (max-width:640px){.cards,.facts,.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Rail footer · workspace indicator</p>
+    <h1>Where am I, out of how many?</h1>
+    <p class="lede">Three ways to keep the footer honest past six workspaces. All three keep today's look for small counts; they only differ in what happens when the row stops fitting.</p>
+  </header>
+
+  <section>
+    <h2>The hard limit</h2>
+    <div class="facts">
+      <div class="fact"><b>172 px</b><span>usable footer width, after the gear and its balance spacer</span></div>
+      <div class="fact"><b>26 px</b><span>per dot. 24 px is the smallest a hit target may be, so we cannot shrink our way out</span></div>
+      <div class="fact"><b>10</b><span>colours in the palette — colour stops being an identity at exactly 10 workspaces</span></div>
+    </div>
+    <div class="ruler">
+      <div class="track">
+        <span class="cell"><i></i></span><span class="cell"><i></i></span><span class="cell active"><i></i></span>
+        <span class="cell"><i></i></span><span class="cell"><i></i></span><span class="cell"><i></i></span>
+        <span class="cell clip"></span>
+      </div>
+      <div class="ruler-cap"><span><b>6 dots fit.</b> The 7th has nowhere to go.</span><span>172 px, 6 × 26 px + gaps</span></div>
+    </div>
+    <p class="kicker" style="margin-top:10px">Today the row is a horizontal scroller with hidden scrollbars. A mouse wheel scrolls vertically, so workspaces 7+ are only reachable from the switcher at the top — and nothing on screen says they exist.</p>
+  </section>
+
+  <section>
+    <h2>Scrub the count, watch the three answers</h2>
+    <div class="scrub">
+      <span class="lbl">Workspaces</span>
+      <button class="chip" data-count="3" aria-pressed="false">3</button>
+      <button class="chip" data-count="6" aria-pressed="false">6</button>
+      <button class="chip" data-count="10" aria-pressed="true">10</button>
+      <button class="chip" data-count="24" aria-pressed="false">24</button>
+      <span class="lbl" style="margin-left:6px">· click any dot to move the active workspace</span>
+    </div>
+
+    <div class="cards">
+      <div class="card rec" data-card="pill">
+        <div class="card-head"><h3>Position pill</h3><span class="tag">Recommended</span></div>
+        <div class="rail">
+          <div class="rail-tabs">
+            <div class="tab-line on"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+          </div>
+          <div class="rail-spacer"></div>
+          <div class="footer">
+            <button class="gear" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2"/></svg></button>
+            <div class="strip" data-strip></div>
+            <span></span>
+          </div>
+          <div class="popover" data-popover>
+            <div class="pop-head">WORKSPACES</div>
+            <div class="pop-list" data-poplist></div>
+            <div class="pop-sep"></div>
+            <div class="pop-row"><span style="width:8px"></span><span>＋ New workspace</span><span></span></div>
+          </div>
+        </div>
+        <ul>
+          <li><b>1–6:</b> nothing changes. Dots, one click, ring on the active one.</li>
+          <li><b>7+:</b> <b>‹ ● › 4 / 12</b>. The dot opens the workspace list you already have; the chevrons step to the neighbour; swipe still works.</li>
+          <li>Swapping "which of these twelve identical dots?" for a named row is a decision removed, not a feature added.</li>
+        </ul>
+      </div>
+
+      <div class="card" data-card="roll">
+        <div class="card-head"><h3>Rolling page dots</h3><span class="tag plain">Keeps the map</span></div>
+        <div class="rail">
+          <div class="rail-tabs">
+            <div class="tab-line on"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+          </div>
+          <div class="rail-spacer"></div>
+          <div class="footer">
+            <button class="gear" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2"/></svg></button>
+            <div class="strip" data-strip></div>
+            <span></span>
+          </div>
+        </div>
+        <ul>
+          <li><b>1–6:</b> unchanged. <b>7+:</b> a five-dot window follows the active workspace.</li>
+          <li>A soft fade at the cut edge is the only hint that there is more — iOS home-screen page dots, in the rail.</li>
+          <li>Cost: dots stay unlabelled, so you can reliably jump to a neighbour but not to "the one for Billing"; the total is never visible.</li>
+        </ul>
+      </div>
+
+      <div class="card" data-card="grid">
+        <div class="card-head"><h3>Two-row grid</h3><span class="tag plain">Everything in reach</span></div>
+        <div class="rail">
+          <div class="rail-tabs">
+            <div class="tab-line on"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+          </div>
+          <div class="rail-spacer" style="height:8px"></div>
+          <div class="footer">
+            <button class="gear" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2"/></svg></button>
+            <div class="strip" data-strip style="height:auto"></div>
+            <span></span>
+          </div>
+        </div>
+        <ul>
+          <li>Six per row, two rows: twelve workspaces stay one click away.</li>
+          <li>Cost: the footer doubles in height and eats the tab list; still unlabelled; breaks again at 13.</li>
+          <li>This is the option that <em>looks</em> like it scales but just moves the cliff.</li>
+        </ul>
+      </div>
+
+      <div class="card" data-card="today" style="border-style:dashed">
+        <div class="card-head"><h3>Today</h3><span class="tag plain">Baseline</span></div>
+        <div class="rail">
+          <div class="rail-tabs">
+            <div class="tab-line on"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+            <div class="tab-line"><i></i><span></span></div>
+          </div>
+          <div class="rail-spacer"></div>
+          <div class="footer">
+            <button class="gear" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2"/></svg></button>
+            <div class="strip" data-strip style="justify-content:flex-start"></div>
+            <span></span>
+          </div>
+        </div>
+        <ul>
+          <li>The strip is a hidden horizontal scroller inside the footer.</li>
+          <li><b>7+ workspaces are clipped</b> with no scrollbar, no edge hint and no wheel affordance.</li>
+          <li>Reachable only through the switcher at the top — the footer silently lies about how many there are.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What each count looks like</h2>
+    <table>
+      <thead><tr><th>Workspaces</th><th>Today</th><th>Position pill</th><th>Rolling dots</th><th>Two-row grid</th></tr></thead>
+      <tbody>
+        <tr><td>1–6</td><td class="yes">Dots</td><td class="yes">Dots (unchanged)</td><td class="yes">Dots (unchanged)</td><td class="meh">Dots in one row</td></tr>
+        <tr><td>7–12</td><td class="no">Clipped</td><td class="yes">Pill + named list</td><td class="meh">5-dot window, unlabelled</td><td class="yes">Two rows</td></tr>
+        <tr><td>13+</td><td class="no">Clipped</td><td class="yes">Pill + named list</td><td class="meh">5-dot window, unlabelled</td><td class="no">Clipped again</td></tr>
+      </tbody>
+    </table>
+    <p class="small" style="margin-top:8px">Only two behaviours survive 50 workspaces: the pill and the rolling window. Only the pill also fixes identification, because it hands the choice to a list that already has names.</p>
+  </section>
+
+  <section class="two">
+    <div class="callout">
+      <h2>Recommended: position pill</h2>
+      <ul>
+        <li>Dots are a map. Past six the map has no room and the colours repeat — so stop pretending it is one.</li>
+        <li>No new screen: the pill opens the same workspace flyout that the switcher at the top already shows.</li>
+        <li>The footer answers one question — <b>where am I</b> — and defers <b>which one</b> to a labelled list.</li>
+      </ul>
+    </div>
+    <div>
+      <h2 style="margin-bottom:8px">What stays exactly as it is</h2>
+      <ul class="small" style="padding-left:17px;margin:0">
+        <li>The dot language at 1–6: colour, 9 px active, 15 px ring.</li>
+        <li>Settings gear, its balance spacer, footer height, 24 px hit targets.</li>
+        <li>Two-finger swipe between workspaces, and the labelled rows in the top switcher.</li>
+        <li>Nothing in storage or the provider seam.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>First slice</h2>
+    <p style="margin-bottom:6px">Footer renders the same ItemsControl, but capped at six; a seventh workspace flips the row to the pill. The pill's dot calls the existing ShowWorkspaceFlyout, and the chevrons call the existing SelectRelativeSpace. Two properties on StudioViewModel, one Visibility pair, no migration.</p>
+    <p class="small">Deferred on purpose: <b>Ctrl+Alt+←/→</b> and <b>Ctrl+1…9</b> to jump without the mouse, and archiving stale workspaces so the list stays short. Neither is needed to ship the fix.</p>
+  </section>
+</div>
+
+<script>
+  const P = ["#C4B5FD","#93C5FD","#67E8F9","#86EFAC","#FDE047","#FDBA74","#F9A8D4","#FCA5A5","#A5F3FC","#E9D5FF"];
+  const NAMES = ["Acme CRM","Ops Warehouse","Reporting","Sandbox","Auth Service","Billing","Analytics","Support","Legacy DB","Data Mart","QA cluster","Docs API","Staging","Fraud rules","Search index","Ingest","Mobile","Partner","Archive","Experiments","Onboarding","Habits","Fintech","Ledger"];
+  const state = { count: 10, active: 3 };
+  const name = i => NAMES[i % NAMES.length];
+  const colour = i => P[i % P.length];
+
+  function dotBtn(i, active) {
+    const b = document.createElement("button");
+    b.className = "dot-btn";
+    b.type = "button";
+    b.title = name(i);
+    b.setAttribute("aria-label", "Workspace " + name(i));
+    if (active) {
+      const r = document.createElement("span");
+      r.className = "ring";
+      r.style.color = colour(i);
+      b.appendChild(r);
+    }
+    const d = document.createElement("span");
+    d.className = "dot";
+    d.style.background = colour(i);
+    const size = active ? 9 : 7;
+    d.style.width = size + "px";
+    d.style.height = size + "px";
+    d.style.opacity = active ? "1" : ".45";
+    b.appendChild(d);
+    b.addEventListener("click", e => { e.stopPropagation(); state.active = i; render(); });
+    return b;
+  }
+
+  function chevron(dir) {
+    const c = document.createElement("button");
+    c.className = "chev";
+    c.type = "button";
+    c.textContent = dir < 0 ? "‹" : "›";
+    c.title = dir < 0 ? "Previous workspace" : "Next workspace";
+    c.addEventListener("click", e => {
+      e.stopPropagation();
+      const next = state.active + dir;
+      if (next >= 0 && next < state.count) { state.active = next; render(); }
+    });
+    return c;
+  }
+
+  function render() {
+    document.querySelectorAll("[data-card]").forEach(card => {
+      const mode = card.dataset.card;
+      const strip = card.querySelector("[data-strip]");
+      strip.innerHTML = "";
+      strip.className = "strip";
+      strip.style.justifyContent = "";
+      const n = state.count;
+      const a = state.active;
+
+      if (n <= 6 || mode === "today") {
+        for (let i = 0; i < n; i++) strip.appendChild(dotBtn(i, i === a));
+        if (mode === "today") strip.style.justifyContent = "flex-start";
+        if (mode === "grid") strip.style.justifyContent = "center";
+      } else if (mode === "pill") {
+        strip.appendChild(chevron(-1));
+        const activeDot = dotBtn(a, true);
+        activeDot.addEventListener("click", e => {
+          e.stopPropagation();
+          card.dataset.open = card.dataset.open === "1" ? "0" : "1";
+          render();
+        });
+        strip.appendChild(activeDot);
+        strip.appendChild(chevron(1));
+        const pos = document.createElement("span");
+        pos.className = "pos";
+        pos.textContent = (a + 1) + " / " + n;
+        strip.appendChild(pos);
+      } else if (mode === "roll") {
+        const width = 5;
+        let start = Math.max(0, Math.min(a - 2, n - width));
+        if (start > 0) strip.classList.add("fade-l");
+        if (start + width < n) strip.classList.add(start > 0 ? "fade-lr" : "fade-r");
+        for (let i = start; i < start + width; i++) strip.appendChild(dotBtn(i, i === a));
+        const hint = document.createElement("span");
+        hint.className = "fade-hint";
+        hint.textContent = (a + 1) + "/" + n;
+        strip.appendChild(hint);
+      } else if (mode === "grid") {
+        strip.classList.add("grid");
+        for (let i = 0; i < Math.min(n, 12); i++) strip.appendChild(dotBtn(i, i === a));
+      }
+
+      if (mode === "pill") {
+        const poplist = card.querySelector("[data-poplist]");
+        poplist.innerHTML = "";
+        for (let i = 0; i < n; i++) {
+          const row = document.createElement("div");
+          row.className = "pop-row" + (i === a ? " active" : "");
+          const dot = document.createElement("span");
+          dot.className = "pd";
+          dot.style.background = colour(i);
+          const nm = document.createElement("span");
+          nm.textContent = name(i);
+          const sub = document.createElement("span");
+          sub.className = "sub";
+          sub.textContent = i % 3 === 0 ? "Connected · warehouse" : "Not connected";
+          nm.appendChild(sub);
+          row.append(dot, nm, document.createElement("span"));
+          row.addEventListener("click", e => { e.stopPropagation(); state.active = i; render(); });
+          poplist.appendChild(row);
+        }
+        card.querySelector("[data-popover]").classList.toggle("open", card.dataset.open === "1");
+      }
+    });
+  }
+
+  document.addEventListener("click", e => {
+    const pillCard = document.querySelector("[data-card='pill']");
+    if (!pillCard.contains(e.target)) {
+      pillCard.dataset.open = "0";
+      render();
+    }
+  });
+
+  document.querySelectorAll("[data-count]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.count = Number(btn.dataset.count);
+      state.active = Math.min(state.active, state.count - 1);
+      document.querySelectorAll("[data-count]").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+      render();
+    });
+  });
+
+  render();
+</script>
+</body>
+</html>
