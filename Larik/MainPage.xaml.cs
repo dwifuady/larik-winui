@@ -264,6 +264,10 @@ public sealed partial class MainPage : Page
         var name = QualifiedTableName(table);
         RememberSchemaObject(table);
 
+        // Preview is a run too: like Ctrl+Enter, it must reveal the results pane if the user
+        // hid it, otherwise the query succeeds with nowhere to see the rows.
+        ShowResultsPane();
+
         if (closePeek)
         {
             CloseSchemaPeek();
@@ -898,10 +902,9 @@ public sealed partial class MainPage : Page
     private void WorkspaceNext_Click(object sender, RoutedEventArgs e) => ViewModel.SelectRelativeSpace(1);
 
     /// <summary>
-    /// The workspace panel. Its one job is switching, so the current workspace's identity controls
-    /// stay at the top (icon and colour), then its connection, then the list, then creation. It also
-    /// opens from the toolbar badge while the rail is collapsed, which is why the connection action is
-    /// repeated here: the rail is not always on screen to carry it.
+    /// The workspace panel. Its one job is switching: the active connection, then the workspace
+    /// list, then creation and the manager. It opens from the toolbar badge while the rail is
+    /// collapsed, which is why the connection action is repeated here.
     /// </summary>
     private void SpaceSwitcher_Click(object sender, RoutedEventArgs e) => ShowWorkspaceFlyout(SpaceSwitcherButton);
 
@@ -930,8 +933,8 @@ public sealed partial class MainPage : Page
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
 
-            // The one action for the line above it. Identity and connection settings live on the
-            // workspace's own row (the pencil), so this panel never grows a second editor.
+            // The one action for the line above it. Connection settings live on the Workspaces
+            // page, so this panel never grows a second editor.
             panel.Children.Add(CreateFlyoutAction(
                 "\uE7E8",
                 active.Connection.ConnectionActionLabel,
@@ -953,9 +956,21 @@ public sealed partial class MainPage : Page
             Text = "WORKSPACES",
         });
 
-        foreach (var space in ViewModel.Spaces)
+        foreach (var space in ViewModel.RailSpaces)
         {
             panel.Children.Add(CreateWorkspaceRow(space, flyout));
+        }
+
+        if (ViewModel.HiddenSpaceCount > 0)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Margin = new Thickness(12, 4, 12, 6),
+                FontSize = 10,
+                Foreground = mutedBrush,
+                Text = $"{ViewModel.HiddenSpaceCountLabel} · manage on the Workspaces page",
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
 
         panel.Children.Add(CreateFlyoutSeparator());
@@ -965,21 +980,42 @@ public sealed partial class MainPage : Page
             await ShowWorkspaceDialogAsync();
         }));
 
+        panel.Children.Add(CreateFlyoutAction("\uE8B7", "Manage workspaces…", () =>
+        {
+            flyout.Hide();
+            NavigateToWorkspaces();
+            return Task.CompletedTask;
+        }));
+
         flyout.Content = panel;
         flyout.ShowAt(anchor);
     }
 
-    /// <summary>A workspace row: click to switch, the pencil renames it in place.</summary>
+    /// <summary>
+    /// The Workspaces page is a shell destination. It shares this page's view model and the one
+    /// workspace editor, so editing from the list opens the same dialog with the list's XamlRoot.
+    /// </summary>
+    private void NavigateToWorkspaces() =>
+        Frame.Navigate(
+            typeof(WorkspacesPage),
+            new WorkspacesPageContext(ViewModel, (space, root) => ShowWorkspaceDialogAsync(space, root)));
+
+    /// <summary>
+    /// A workspace row: click to switch. The provider chip carries the fact the name cannot, and
+    /// editing moved to the Workspaces page so this surface keeps one job.
+    /// </summary>
     private FrameworkElement CreateWorkspaceRow(SpaceViewModel space, Flyout flyout)
     {
         var primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
         var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
         var accentBrush = (Brush)Application.Current.Resources["StudioAccentBrush"];
+        var hairlineBrush = (Brush)Application.Current.Resources["HairlineBrush"];
         var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
 
         var content = new Grid { ColumnSpacing = 8 };
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var icon = CreateSpaceIcon(space.IconGlyph, space.Monogram, 14, space.IsActive ? primaryBrush : secondaryBrush);
@@ -994,6 +1030,23 @@ public sealed partial class MainPage : Page
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
 
+        var provider = new Border
+        {
+            MaxWidth = 88,
+            Padding = new Thickness(5, 1, 5, 1),
+            VerticalAlignment = VerticalAlignment.Center,
+            BorderBrush = hairlineBrush,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Child = new TextBlock
+            {
+                FontSize = 9,
+                Foreground = secondaryBrush,
+                Text = space.ProviderName,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            },
+        };
+
         var check = new FontIcon
         {
             FontSize = 10,
@@ -1003,9 +1056,11 @@ public sealed partial class MainPage : Page
         };
 
         Grid.SetColumn(name, 1);
-        Grid.SetColumn(check, 2);
+        Grid.SetColumn(provider, 2);
+        Grid.SetColumn(check, 3);
         content.Children.Add(icon);
         content.Children.Add(name);
+        content.Children.Add(provider);
         content.Children.Add(check);
 
         var switchButton = new Button
@@ -1018,7 +1073,7 @@ public sealed partial class MainPage : Page
             Style = iconStyle,
         };
 
-        AutomationProperties.SetName(switchButton, space.Name);
+        AutomationProperties.SetName(switchButton, $"{space.Name}, {space.ProviderName}");
         ToolTipService.SetToolTip(switchButton, space.TooltipText);
         switchButton.Click += (_, _) =>
         {
@@ -1026,42 +1081,13 @@ public sealed partial class MainPage : Page
             ViewModel.SelectSpace(space);
         };
 
-        var edit = new Button
-        {
-            Width = 28,
-            Height = 36,
-            Padding = new Thickness(0),
-            Opacity = 0.8,
-            VerticalAlignment = VerticalAlignment.Center,
-            Content = new FontIcon { FontSize = 10, Glyph = "\uE70F" },
-            Style = iconStyle,
-        };
-
-        AutomationProperties.SetName(edit, $"Edit {space.Name}");
-        ToolTipService.SetToolTip(edit, "Workspace settings");
-        edit.Click += async (_, _) =>
-        {
-            flyout.Hide();
-            await ShowWorkspaceDialogAsync(space);
-        };
-
-        var inner = new Grid { Height = 36, ColumnSpacing = 2 };
-        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        inner.Children.Add(switchButton);
-        Grid.SetColumn(edit, 1);
-        inner.Children.Add(edit);
-
-        // Arc marks the active workspace with its tint, not only a check mark. The tint covers the
-        // edit affordance too so the row reads as one object, and never sits in the switch hit area.
-        var row = new Border
+        return new Border
         {
             Margin = new Thickness(4, 0, 4, 0),
             Background = space.IsActive ? space.ActiveTintBrush : null,
-            Child = inner,
+            Child = switchButton,
             CornerRadius = new CornerRadius(6),
         };
-        return row;
     }
 
     private static Border CreateFlyoutSeparator() => new()
@@ -1223,11 +1249,13 @@ public sealed partial class MainPage : Page
     /// <summary>
     /// The workspace editor. A workspace is its name, colour and single connection, so one dialog
     /// covers all three. Create mode (no <paramref name="editing"/>) starts from a ready name and
-    /// colour and creates nothing until confirmed; edit mode is the same form, prefilled, and can
-    /// be opened from any row in the switcher without leaving the current workspace.
+    /// colour and creates nothing until confirmed; edit mode is the same form, prefilled. It is
+    /// opened from onboarding and from the Workspaces page, which lends its own XamlRoot so the
+    /// dialog is shown over whichever surface is current.
     /// </summary>
-    private async Task ShowWorkspaceDialogAsync(SpaceViewModel? editing = null)
+    private async Task ShowWorkspaceDialogAsync(SpaceViewModel? editing = null, XamlRoot? ownerRoot = null)
     {
+        var ownerXamlRoot = ownerRoot ?? XamlRoot;
         var creating = editing is null;
         var providers = DatabaseProviderCatalog.Providers;
         if (providers.Count == 0)
@@ -1800,7 +1828,7 @@ public sealed partial class MainPage : Page
         var dialog = new ContentDialog
         {
             Title = creating ? "New workspace" : "Workspace settings",
-            XamlRoot = XamlRoot,
+            XamlRoot = ownerXamlRoot,
             Content = content,
             DefaultButton = ContentDialogButton.Primary,
             PrimaryButtonText = creating ? "Create & connect" : "Save",
@@ -1929,7 +1957,7 @@ public sealed partial class MainPage : Page
 
         if (deleteRequested && editing is not null)
         {
-            await ConfirmDeleteWorkspaceAsync(editing);
+            await ConfirmDeleteWorkspaceAsync(editing, ownerXamlRoot);
         }
     }
 
@@ -1937,7 +1965,7 @@ public sealed partial class MainPage : Page
     /// Confirms a workspace deletion after its settings dialog has closed. The consequence is
     /// stated up front because the workspace itself cannot be restored; its tabs can.
     /// </summary>
-    private async Task ConfirmDeleteWorkspaceAsync(SpaceViewModel space)
+    private async Task ConfirmDeleteWorkspaceAsync(SpaceViewModel space, XamlRoot root)
     {
         var withSql = space.Tabs.Count(tab => !string.IsNullOrWhiteSpace(tab.Content));
         var consequence = withSql switch
@@ -1950,7 +1978,7 @@ public sealed partial class MainPage : Page
         var dialog = new ContentDialog
         {
             Title = "Delete workspace?",
-            XamlRoot = XamlRoot,
+            XamlRoot = root,
             Content = new TextBlock
             {
                 MaxWidth = 360,
@@ -2299,6 +2327,29 @@ public sealed partial class MainPage : Page
         if (sender is FrameworkElement { DataContext: ResultSetViewModel result })
         {
             ViewModel.CloseResult(result);
+            HideResultsPaneIfEmpty();
+        }
+    }
+
+    /// <summary>
+    /// The single-result header has no tab strip close button, so it carries one. Closing the
+    /// last result takes the whole pane with it; an empty pane is just chrome.
+    /// </summary>
+    private void ResultHeaderClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.ActiveTab?.ActiveResult is { } result)
+        {
+            ViewModel.CloseResult(result);
+        }
+
+        HideResultsPaneIfEmpty();
+    }
+
+    private void HideResultsPaneIfEmpty()
+    {
+        if (ViewModel.ActiveTab?.Results.Count is 0)
+        {
+            HideResultsPane();
         }
     }
 

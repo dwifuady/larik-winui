@@ -30,6 +30,10 @@ public partial class SpaceViewModel : ObservableObject
             OnPropertyChanged(nameof(StatusBrush));
             OnPropertyChanged(nameof(ConnectionLine));
             OnPropertyChanged(nameof(Driver));
+            OnPropertyChanged(nameof(ProviderName));
+            OnPropertyChanged(nameof(Identity));
+            OnPropertyChanged(nameof(ConnectionSummary));
+            OnPropertyChanged(nameof(TooltipText));
             OnPropertyChanged(nameof(ConnectedDatabaseText));
             OnPropertyChanged(nameof(ContextBadgeText));
             OnPropertyChanged(nameof(ConnectActionVisibility));
@@ -57,6 +61,8 @@ public partial class SpaceViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(TooltipText))]
     [NotifyPropertyChangedFor(nameof(IndicatorName))]
     [NotifyPropertyChangedFor(nameof(Monogram))]
+    [NotifyPropertyChangedFor(nameof(EditActionName))]
+    [NotifyPropertyChangedFor(nameof(VisibilityActionName))]
     public partial string Name { get; set; }
 
     /// <summary>
@@ -73,7 +79,20 @@ public partial class SpaceViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IndicatorOpacity))]
     [NotifyPropertyChangedFor(nameof(IndicatorChipBrush))]
+    [NotifyPropertyChangedFor(nameof(OpenBadgeVisibility))]
     public partial bool IsActive { get; set; }
+
+    /// <summary>
+    /// Kept out of the rail footer and the switcher, but still listed on the Workspaces page.
+    /// Hiding is not disabling: tabs, sessions and the saved connection stay exactly as they are.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RowOpacity))]
+    [NotifyPropertyChangedFor(nameof(HiddenBadgeVisibility))]
+    [NotifyPropertyChangedFor(nameof(VisibilityActionLabel))]
+    [NotifyPropertyChangedFor(nameof(VisibilityActionName))]
+    [NotifyPropertyChangedFor(nameof(TooltipText))]
+    public partial bool IsHidden { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ConnectedDatabaseText))]
@@ -98,18 +117,34 @@ public partial class SpaceViewModel : ObservableObject
 
     public string Driver => Connection.Dialect;
 
+    /// <summary>The provider's user-facing name, for the switcher chip and the workspace list.</summary>
+    public string ProviderName => Connection.ProviderName;
+
+    /// <summary>The configured login (or integrated-security phrase), when the provider names one.</summary>
+    public string? Identity => Connection.Identity;
+
+    /// <summary>One line for the manager: provider · endpoint · identity, without repeating the provider.</summary>
+    public string ConnectionSummary => string.IsNullOrWhiteSpace(Identity)
+        ? Connection.Endpoint
+        : $"{Connection.Endpoint} · {Identity}";
+
     public string DatabaseCountLabel => Databases.Count == 1 ? "1 database" : $"{Databases.Count} databases";
 
-    public string TooltipText => $"{Name} — {Connection.Endpoint} — {DatabaseCountLabel}";
+    public string TooltipText => $"{Name} — {ConnectionSummary} — {DatabaseCountLabel}"
+        + (IsHidden ? " · hidden from rail" : string.Empty);
 
     public string StatusText => Connection.StatusText;
 
     /// <summary>
     /// Why the rail shows the state next to the connect action: the state word alone ("Connected")
-    /// does not say what you are connected to when nothing is open yet. Once connected the database
-    /// row carries that context, so the line stays short enough to never truncate the state itself.
+    /// does not say what you are connected as, and the database row does not carry the login. The
+    /// identity is only shown while connected; a disconnected workspace has no live user to name.
     /// </summary>
-    public string StatusHeadline => IsConnected ? StatusText : $"{StatusText} · {Connection.ProviderName}";
+    public string StatusHeadline => IsConnected
+        ? string.IsNullOrWhiteSpace(Identity)
+            ? StatusText
+            : $"{StatusText} · {Identity}"
+        : $"{StatusText} · {Connection.ProviderName}";
 
     public SolidColorBrush StatusBrush => Connection.StatusBrush;
 
@@ -161,6 +196,23 @@ public partial class SpaceViewModel : ObservableObject
 
     /// <summary>The active workspace's chip, so the marker never depends on hue alone.</summary>
     public SolidColorBrush IndicatorChipBrush => IsActive ? ActiveTintBrush : TransparentBrush;
+
+    // ---- Workspaces page state: quiet hidden rows, one explicit action word
+
+    public double RowOpacity => IsHidden ? 0.66 : 1;
+
+    public Visibility OpenBadgeVisibility => IsActive ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility HiddenBadgeVisibility => IsHidden ? Visibility.Visible : Visibility.Collapsed;
+
+    public string VisibilityActionLabel => IsHidden ? "Show" : "Hide";
+
+    /// <summary>Row-specific automation labels, so two actions are never announced identically.</summary>
+    public string EditActionName => $"Edit {Name}";
+
+    public string VisibilityActionName => IsHidden
+        ? $"Show {Name} in the rail"
+        : $"Hide {Name} from the rail";
 
     private static readonly SolidColorBrush TransparentBrush = new(Microsoft.UI.Colors.Transparent);
 

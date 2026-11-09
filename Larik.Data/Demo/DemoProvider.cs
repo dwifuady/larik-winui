@@ -16,6 +16,8 @@ public sealed class DemoProvider : IDatabaseProvider
 
     public string Dialect => "mssql";
 
+    public string? DescribeIdentity(ConnectionProfile profile) => "Demo session";
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()

@@ -61,6 +61,9 @@ public sealed class SpaceState
     /// <summary>A <see cref="SpaceIcons"/> name; null means the workspace shows its first letter.</summary>
     public string? Icon { get; set; }
 
+    /// <summary>Hidden from the rail and switcher, but kept intact on the Workspaces page.</summary>
+    public bool Hidden { get; set; }
+
     public string ProviderId { get; set; } = "mssql";
 
     public Dictionary<string, string> Profile { get; set; } = [];
@@ -131,7 +134,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed class StudioStore
 {
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -226,6 +229,7 @@ public sealed class StudioStore
                 color TEXT,
                 icon TEXT,
                 provider_id TEXT NOT NULL DEFAULT 'mssql',
+                hidden INTEGER NOT NULL DEFAULT 0,
                 active_database TEXT,
                 last_active_tab_id TEXT,
                 sort_order INTEGER NOT NULL DEFAULT 0,
@@ -279,10 +283,12 @@ public sealed class StudioStore
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
-        // workspace icon. Existing rows keep their data; the new columns are added in place.
+        // workspace icon. Version 4 adds the rail visibility flag. Existing rows keep their data;
+        // the new columns are added in place.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "icon", "TEXT");
+        EnsureColumn(connection, transaction, "spaces", "hidden", "INTEGER NOT NULL DEFAULT 0");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();
@@ -349,7 +355,7 @@ public sealed class StudioStore
         {
             command.CommandText =
                 """
-                SELECT id, name, COALESCE(color, ''), provider_id, active_database, last_active_tab_id, COALESCE(icon, '')
+                SELECT id, name, COALESCE(color, ''), provider_id, active_database, last_active_tab_id, COALESCE(icon, ''), COALESCE(hidden, 0)
                 FROM spaces
                 ORDER BY sort_order, name;
                 """;
@@ -366,6 +372,7 @@ public sealed class StudioStore
                     ActiveDatabase = reader.IsDBNull(4) ? null : reader.GetString(4),
                     ActiveTabId = reader.IsDBNull(5) ? null : reader.GetString(5),
                     Icon = reader.GetString(6) is { Length: > 0 } icon ? icon : null,
+                    Hidden = reader.GetInt64(7) != 0,
                 });
             }
         }
@@ -486,12 +493,13 @@ public sealed class StudioStore
                 connection,
                 transaction,
                 """
-                INSERT INTO spaces (id, name, color, icon, provider_id, active_database, last_active_tab_id, sort_order)
-                VALUES ($id, $name, $color, $icon, $provider, $database, $tab, $sort)
+                INSERT INTO spaces (id, name, color, icon, hidden, provider_id, active_database, last_active_tab_id, sort_order)
+                VALUES ($id, $name, $color, $icon, $hidden, $provider, $database, $tab, $sort)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     color = excluded.color,
                     icon = excluded.icon,
+                    hidden = excluded.hidden,
                     provider_id = excluded.provider_id,
                     active_database = excluded.active_database,
                     last_active_tab_id = excluded.last_active_tab_id,
@@ -502,6 +510,7 @@ public sealed class StudioStore
                 ("$name", space.Name),
                 ("$color", space.Color),
                 ("$icon", space.Icon),
+                ("$hidden", space.Hidden ? 1 : 0),
                 ("$provider", space.ProviderId),
                 ("$database", space.ActiveDatabase),
                 ("$tab", space.ActiveTabId),

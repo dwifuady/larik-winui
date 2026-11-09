@@ -250,7 +250,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
   (Ctrl+B also works). The connection state sits on one line under the workspace name with its
   single action (**Connect** / **Disconnect**) at the end of that line, so the primary action is
-  beside the workspace it opens instead of in the status bar. The database row only appears once a
+  beside the workspace it opens instead of in the status bar. Once connected that line also names
+  the login (or **Windows authentication**); while disconnected it omits the login and keeps the
+  provider instead. The database row only appears once a
   connection exists, and the toolbar badge repeats the database only while the rail is collapsed —
   it opens the same workspace panel, so connecting and switching stay reachable with the rail shut.
   The picker puts databases the login can open first, then the rest alphabetically.
@@ -286,9 +288,13 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
   Other tabs keep their own database
   and schema. An Arc-style row of **workspace icons** at the bottom of the
-  rail shows up to six workspaces, the current one tinted in its colour; clicking an icon switches
-  workspace. Past six the row becomes a position pill (`‹ icon › 4 / 10`) that steps to the
+  rail shows up to six visible workspaces, the current one tinted in its colour; clicking an icon
+  switches workspace. Past six the row becomes a position pill (`‹ icon › 4 / 10`) that steps to the
   neighbour or opens the labelled workspace list, because ten unlabelled marks identify nothing.
+  Every row in that list carries a quiet **provider chip** (`SQL Server`, `PostgreSQL`, `Demo (in-memory)`) from
+  the provider's own display name, so two look-alike workspace names are distinguishable without
+  opening either. The switcher no longer edits: it only switches, offers **New workspace**, and
+  points to **Manage workspaces…**.
   Each workspace wears a curated Fluent icon and falls back to the first letter of its name, so no
   workspace is ever a blank; the icon is picked beside the name in the workspace dialog, and the
   colour swatch next to it opens the palette in a flyout. Choosing a colour closes the flyout and
@@ -300,11 +306,20 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   open from an **Advanced connection settings** row, so the form keeps its shape); nothing is created
   until **Create & connect**, so Cancel leaves the workspace list untouched. Each workspace owns a
   palette colour (icon chip, tab strip/tint and Run button).
-  **The pencil on a workspace row opens Workspace settings**: icon, name, colour and the connection
-  in one form (a workspace *is* its connection), editable for any workspace without leaving the
-  current one. Saving rebuilds the connection only when it actually changed — renaming never drops a
-  live session — and a workspace you are not in stays disconnected instead of changing what is on
-  screen.
+  **Manage workspaces…** opens a dedicated **Workspaces page**: one ordered list with each
+  workspace's provider, endpoint and configured identity (for example
+  `PostgreSQL · db.internal:5433 · readonly_analyst`, or
+  `SQL Server · (localdb)\MSSQLLocalDB · Windows authentication`). The identity comes from the
+  provider's additive `DescribeIdentity` member, so the shell never assumes a `user` field. Rows drag
+  to reorder the switcher and rail footer, and the order is the same `sort_order` the store already
+  writes. **Hide** takes a workspace out of the rail and switcher without touching its tabs,
+  sessions, connection or place in the order; **Show** returns it there. Hiding the open workspace
+  takes effect in the rail after you switch away, so the current context never vanishes. **Edit**
+  opens the workspace settings dialog from the list; switching stays in the rail and switcher.
+  **Workspace settings**: icon, name, colour and the connection
+  in one form (a workspace *is* its connection). Saving rebuilds the connection only when it actually
+  changed — renaming never drops a live session — and a workspace you are not in stays disconnected
+  instead of changing what is on screen.
   **Workspace settings ends with a divided danger section**: quiet red **Delete workspace**, one line
   stating the consequence, and a second confirmation. The profile and its stored secrets are removed,
   but every tab that holds SQL moves to **Archive** first, so deleting a workspace never discards the
@@ -312,14 +327,15 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   The database flyout is only about databases. Switching — from the top dropdown, the
   icons, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
   the side the new workspace lives on (left/right matches the icon order), and is skipped when
-  Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
-  the ends.
+  Windows animations are turned off. A swipe moves one visible workspace per gesture and does not
+  wrap at the ends.
 - **Schema browser**: `Ctrl+K` (or the browse button beside the database row) opens a **peek**: one
   search field over tables, views, procedures and columns, recents first, grouped by schema, with the
   highlighted object's detail in a pane. Tables and views show their columns with types and PK/FK
   badges; procedures show their parameters and are inserted as a full `EXEC` call (never previewed).
   Enter inserts the dialect-quoted name at the caret (`[dbo].[Orders]`), Shift+Enter previews the top
-  100 rows into a new result tab, Up/Down move, Esc returns to the editor. The **pin** button docks
+  100 rows into a new result tab and reveals the pane if it was hidden, Up/Down move, Esc returns
+  to the editor. The **pin** button docks
   the same surface as a 300 px inspector beside the editor (columns and parameters expand under the
   selected object); the pin unpins it. Recents are kept per workspace for the session and only track
   tables/views, and the popup never replaces the tab rail.
@@ -403,9 +419,11 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
   tabs, their SQL, pins, archive history and snippet edits survive a restart, as does the **window
   rectangle** (stored under `app_state` as DIPs, never the maximized size) and the **results-pane
-  height / cell-preview width**, so the next launch opens where you left it. WAL mode, foreign keys
+  height / cell-preview width**, so the next launch opens where you left it. Workspace order and
+  the **hidden-from-rail** flag also survive. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
-  columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
+  columns/tables in place; v3 adds the workspace icon; v4 adds the rail visibility flag); a
+  pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
   SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
   Corrupt state opens the welcome surface instead of failing the launch. The store is deliberately **separate from the Tauri
@@ -418,7 +436,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
 - **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
   reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
-  the pane, and running a query while it is hidden opens it again. A batch (or a
+  the pane, and running a query while it is hidden opens it again. Closing the only result hides the
+  pane again; a single result's header carries its own close button (multiple results close from
+  their tab strip). A batch (or a
   statement returning several result sets) opens one result tab per result, DBeaver-style.
   Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
@@ -470,8 +490,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with the transient message + `Ln/Col` (connection state lives in the rail),
-  splitter between editor and results. **Settings** (snippets, about) is an app destination, so its
-  gear sits in the rail footer beside the workspace dots — the query toolbar only carries editor
+  splitter between editor and results. **Settings** (snippets, about) and the **Workspaces**
+  manager are app destinations: Workspaces opens from the switcher, while Settings sits on its
+  gear in the rail footer beside the workspace dots — the query toolbar only carries editor
   actions (Format, Run, Stop).
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
   (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
