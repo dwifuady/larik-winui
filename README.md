@@ -23,9 +23,9 @@ Requires Windows 10 1809+ and does not need a separate .NET install. Neither
 build is code-signed, so Windows SmartScreen may warn on the first run:
 **More info → Run anyway**.
 
-The SQL Server provider needs a reachable SQL Server (LocalDB works). The
-built-in **Demo** provider works without a server, so the app opens and runs
-offline.
+The SQL Server provider needs a reachable SQL Server (LocalDB works); the
+**PostgreSQL** provider needs a reachable PostgreSQL server. The built-in **Demo**
+provider works without a server, so the app opens and runs offline.
 
 ```
 C:\dev\larik-winui\
@@ -42,6 +42,9 @@ C:\dev\larik-winui\
 │   └── Demo/DemoProvider.cs      # in-memory provider (offline use + UI tests)
 ├── Larik.Data.SqlServer/         # SQL Server provider on Microsoft.Data.SqlClient
 │   └── TSqlDialect.cs            # T-SQL editor language (keywords, quoting, GO, splitting)
+├── Larik.Data.Postgres/          # PostgreSQL provider on Npgsql
+│   ├── PostgresProvider.cs       # per-database sessions, catalog schema, transactions, notices
+│   └── PostgresDialect.cs        # PostgreSQL editor language (dollar quotes, LIMIT, CALL)
 ├── Larik.Data.Tests/             # editor-language golden tests (net10.0, xUnit)
 ├── docs/PROVIDERS.md             # provider handbook (contracts, blueprints, gaps)
 ├── AGENTS.md                     # repo rules + build/verify guide for contributors/AI agents
@@ -160,7 +163,8 @@ provider assemblies plus every DLL dropped into:
 The connection dialog builds its form from `ProviderSetting` (text/password/number/boolean), so a
 new provider gets a working configuration UI with no app changes. Providers are trusted code:
 only drop DLLs you have built or reviewed. Load failures are reported in the dialog instead of
-crashing the app.
+crashing the app. The rail's endpoint line (host/port) is provider-driven through
+`DescribeEndpoint`, so the shell does not special-case a provider id.
 
 ### Editor languages
 
@@ -168,9 +172,9 @@ A provider also owns how its text is painted and split. Return an `ISqlDialect` 
 a plain `IEditorLanguage` for a non-SQL engine from `IDatabaseProvider.EditorLanguage`; null means
 the generic SQL fallback. The seam covers tokenizing on the typing debounce, statement boundaries
 for Ctrl+Enter/F5, and the keyword/function/table-context lists used by completion. SQL Server's
-`TSqlDialect` is the reference implementation. Adding PostgreSQL or MongoDB means a new provider
-assembly, not an editor change; [`docs/PROVIDERS.md`](docs/PROVIDERS.md) has the blueprints and the
-contract-compatibility rules.
+`TSqlDialect` is the reference implementation and `PostgresDialect` is the second one. Adding
+another engine (MongoDB) means a new provider assembly, not an editor change;
+[`docs/PROVIDERS.md`](docs/PROVIDERS.md) has the blueprints and the contract-compatibility rules.
 
 `TableSchema` also carries `PrimaryKey` and `ForeignKeys`. Providers that report them get
 foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes` and
@@ -225,7 +229,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 `sys.databases` for the picker, `sys.objects`/`sys.schemas`/`sys.columns` for schema-qualified
 completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
 `sys.partitions` for reference-preview row estimates, and
-`DB_NAME()` so a `USE` reaches the shell) and
+`DB_NAME()` so a `USE` reaches the shell), `Larik.Data.Postgres` (Npgsql, one physical backend per
+database because PostgreSQL cannot switch database on a live connection, `pg_database` for the
+picker, `pg_class`/`pg_attribute`/`pg_constraint` for tables, views, column types, keys and foreign
+keys, `information_schema.routines`/`parameters` for `CALL`, `pg_class.reltuples` for reference
+estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`ROLLBACK` state) and
 `Larik.Data.Demo` (in-memory, used by UI tests and offline demos).
 
 ## What works in this slice
@@ -324,18 +332,31 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   Ctrl+Enter, and Ctrl+\ runs the current statement into a new result tab. Run state is per tab:
   the toolbar disables Run and shows **Stop**, which cancels the command without closing the
   session. The active provider's editor language owns tokenizing and boundaries; T-SQL understands
-  strings, quoted identifiers, line/block comments and `GO` separators (including indented `GO`).
+  strings, quoted identifiers, line/block comments and `GO` separators (including indented `GO`),
+  and PostgreSQL understands dollar-quoted bodies, `E'...'` escape strings, `"quoted"` identifiers
+  and nested block comments.
+- **PostgreSQL**: choose it in the workspace dialog like any provider. Each tab opens one physical
+  backend per database (PostgreSQL cannot switch database on a live connection), so switching the
+  tab's database selects the matching backend while transactions and temp tables stay on it.
+  `Ctrl+K` lists tables, views, routines and columns from `pg_class`/`information_schema`, completion
+  inserts `"public"."orders" AS o`, `CALL` expands a procedure with positional `NULL`s, previews and
+  foreign-key lookups use `LIMIT`, `RAISE NOTICE`/`WARNING` open a Messages tab, and the `TXN` guard
+  follows the `BEGIN`/`COMMIT`/`ROLLBACK` the tab issued (a failed statement inside a transaction
+  marks it rollback-only).
 - **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
   warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
   open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
   batch keeps attribution honest (messages can arrive between result sets); errors keep their own
   result tab, and the status bar reports the message count.
 - **Transactions, visibly**: because each tab owns a session, `BEGIN TRAN` / `COMMIT` /
-  `ROLLBACK` behave per tab. After every run the app reads `@@TRANCOUNT` and `XACT_STATE()` and shows
-  a `TXN` badge on the tab plus a status-bar guard ("1 open transaction") with **Commit** and
-  **Roll back**. Switching tabs switches the guard; closing a tab rolls its transaction back;
+  `ROLLBACK` behave per tab. After every run the app asks the provider for the session's
+  transaction state (`@@TRANCOUNT`/`XACT_STATE()` on SQL Server; PostgreSQL has no nested
+  transactions, so the provider tracks `BEGIN`/`COMMIT`/`ROLLBACK` and marks a failed statement's
+  transaction rollback-only) and shows a `TXN` badge on the tab plus a status-bar guard
+  ("1 open transaction") with **Commit** and **Roll back**. Switching tabs switches the guard;
+  closing a tab rolls its transaction back;
   disconnecting, changing the connection or switching database is refused while a transaction is
-  open. Like SSMS, the app stays in SQL Server autocommit and does not wrap a run in a transaction
+  open. Like SSMS, the app stays in autocommit and does not wrap a run in a transaction
   or expose a DBeaver-style autocommit switch. Isolation remains the server default;
   `SET TRANSACTION ISOLATION LEVEL ...` works, and now only affects the tab that issued it.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
@@ -466,12 +487,13 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
 
 | Gap | Why / next step |
 |---|---|
-| Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB only need new provider assemblies (see above and `docs/PROVIDERS.md`), not app changes. |
-| Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but the SQL Server provider reads `sys.procedures` only. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
+| Only three providers ship | SQL Server, PostgreSQL and Demo. MongoDB only needs a new provider assembly (see above and `docs/PROVIDERS.md`), not app changes. |
+| Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but SQL Server reads `sys.procedures` only and completion offers procedures only after `EXEC`/`CALL`. PostgreSQL reads functions too, but they are not offered in expression positions yet. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
+| PostgreSQL overloads collapse to one routine | The contract identifies a routine by schema + name, so the provider keeps the first overload's signature instead of showing two `CALL` candidates with the same name. A contract-level routine identity is the fix. |
 | Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
-| Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
+| Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect`/`PostgresDialect` today). |
 | Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
-| Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |
+| Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; PostgreSQL adds dollar-quoted bodies, `E'...'` strings, quoted identifiers and nested comments. Semicolons inside parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and nested `BEGIN/END` awareness still need the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |

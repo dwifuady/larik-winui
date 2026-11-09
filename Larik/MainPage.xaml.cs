@@ -285,7 +285,7 @@ public sealed partial class MainPage : Page
     {
         if (ViewModel.ActiveLanguage is ISqlDialect dialect)
         {
-            return dialect.RoutineInvocation(routine.Schema, routine.Name, routine.Parameters);
+            return dialect.RoutineInvocation(routine.Schema, routine.Name, routine.Parameters, routine.Kind);
         }
 
         return string.IsNullOrWhiteSpace(routine.Schema)

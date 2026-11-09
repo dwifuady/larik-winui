@@ -966,13 +966,26 @@ try {
             Click-Element 'Provider'
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
+            Assert-True ((Find-Element 'PostgreSQL').matchCount -gt 0) 'the PostgreSQL provider was not listed'
+
+            # The built-in PostgreSQL assembly is loaded and its declared settings drive the form.
+            $postgres = @((Find-Element 'PostgreSQL').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+            Assert-True ($null -ne $postgres) 'the PostgreSQL provider item is missing'
+            Invoke-Ui @('click', $postgres.selector) | Out-Null
+            Start-Sleep -Milliseconds 700
+            Assert-True ((Find-Element 'Host').matchCount -gt 0) 'PostgreSQL settings did not render'
+            Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the PostgreSQL password field is missing'
+
             # The SQL Server form is the tall one: Test must keep its result on screen, not
-            # just in the automation tree below the visible part of the dialog. Providers sort
-            # by name (Demo first, SQL Server second), so Down + Enter is unambiguous.
-            Send-Keys 'down'
-            Send-Keys 'enter'
+            # just in the automation tree below the visible part of the dialog. Pick it by name so
+            # adding a provider never depends on the picker's order.
+            Click-Element 'Provider'
+            Start-Sleep -Milliseconds 600
+            $sqlServer = @((Find-Element 'SQL Server').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+            Assert-True ($null -ne $sqlServer) 'the SQL Server provider item is missing'
+            Invoke-Ui @('click', $sqlServer.selector) | Out-Null
             Start-Sleep -Milliseconds 800
-            Assert-True ((Find-Element 'Advanced').matchCount -gt 0) 'the SQL Server provider was not selected'
+            Assert-True ((Find-Element 'Initial database').matchCount -gt 0) 'the SQL Server provider was not selected'
             Assert-True ((Find-Element 'Connect timeout (s)').matchCount -eq 0) 'advanced fields are not collapsed'
             Click-Element 'Advanced'
             Start-Sleep -Milliseconds 600

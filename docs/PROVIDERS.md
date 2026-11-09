@@ -19,7 +19,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 
 | Type | Purpose |
 |---|---|
-| `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
+| `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`, `DescribeEndpoint`. |
 | `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `GetDatabaseDetailsAsync` (optional; marks databases the login cannot open), `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
@@ -86,7 +86,8 @@ Therefore:
 4. **New metadata is optional and nullable.** `QueryResult.GeneratedQuery`, `TableSchema.Schema` and
    `ForeignKeySchema.ReferencedSchema` are all null for existing providers; `QueryResult.Statement`,
    `TableSchema.Kind` defaults to `Table`, `ColumnDetails`/`Routines`/`Parameters` default to empty,
-   `GetRoutinesAsync` returns `[]`, `EstimateRowCountAsync` returns null, and the dialect's
+   `GetRoutinesAsync` returns `[]`, `EstimateRowCountAsync` returns null, `DescribeEndpoint` returns
+   null (the rail falls back to `DisplayName`), and the dialect's
    `RowsStatement`/`FormatLiteral` have defaults, so an older provider behaves exactly as before and
    nothing is persisted in a new format.
 5. **Prefer string tags over contract enums** for open sets. `StatementSpan.Language` is a string so
@@ -191,9 +192,11 @@ public sealed class PostgresDialect : SqlLanguage, ISqlDialect
 
 `TSqlDialect` in `Larik.Data.SqlServer` is the reference implementation.
 
-Not yet configurable, and deliberately deferred: dollar-quoted strings (`$$...$$`), `E'...'`
-strings, `::` casts and `$1` parameters. When PostgreSQL needs them, extend `SqlLanguageOptions`
-additively rather than forking the scanner.
+Not yet configurable, and deliberately deferred: `::` casts and `$1` parameters. Dollar-quoted
+strings (`$$...$$`, `$tag$...$tag$`), `E'...'` strings, double-quoted identifiers and nested block
+comments are now options (`DollarQuotedStrings`, `EscapeStringPrefix`, `QuotedIdentifierQuotes`,
+`NestedBlockComments`); extend `SqlLanguageOptions` additively rather than forking the scanner when
+another engine needs more.
 
 ### Statement splitting: editor vs execution
 
@@ -247,7 +250,11 @@ Task RollbackTransactionAsync(CancellationToken ct = default) =>
   doomed/aborted and rollback-only. SQL Server reads `@@TRANCOUNT` and `XACT_STATE()`.
 - PostgreSQL has no nested transactions: map `BEGIN` to count 1, an aborted transaction to
   `XactState = -1`, and (optionally) detect `idle in transaction` via `pg_stat_activity`. Savepoints
-  remain SQL text; the shell only offers a whole-transaction commit/rollback.
+  remain SQL text; the shell only offers a whole-transaction commit/rollback. The shipped provider
+  tracks `BEGIN`/`START TRANSACTION`, `COMMIT`/`END`, `ROLLBACK`/`ABORT`, `ROLLBACK TO SAVEPOINT`
+  and `PREPARE TRANSACTION`, because the session's own `pg_stat_activity.state` is `active` while
+  the probe runs; a failed statement inside the transaction marks it aborted, and a successful
+  `ROLLBACK TO SAVEPOINT` keeps the transaction open and clears its aborted state.
 - MongoDB can opt in later with the same members if multi-document transactions are supported; for
   a first plugin, leaving the defaults is fine.
 - The transaction guard is per tab, not global. Never share one physical connection between
@@ -306,8 +313,10 @@ Routine syntax belongs to the dialect. After a `RoutineContextKeywords` word (`E
 `CALL` for PostgreSQL), completion offers procedures and calls `ISqlDialect.RoutineCall`, which
 returns the insert text plus the span of the first argument value to select. The default renders
 only the quoted name; T-SQL overrides it with named arguments
-(`[dbo].[p] @a = NULL, @b = NULL`), and PostgreSQL should override it with positional `NULL`s.
-`RoutineInvocation` prefixes the first keyword for the schema browser's Enter action.
+(`[dbo].[p] @a = NULL, @b = NULL`), and PostgreSQL renders positional `NULL`s.
+`RoutineInvocation` prefixes the first keyword for the schema browser's Enter action; its
+kind-aware overload receives `RoutineKind`, so PostgreSQL inserts `CALL "p"(...)` for a procedure
+and `SELECT "f"(...)` for a function (CALL only accepts procedures).
 `PreviewStatement` is the third dialect hook: the shell asks for a table or view's first rows
 instead of hard-coding `SELECT TOP`, so PostgreSQL can answer with `LIMIT` and a provider without a
 row-limit clause falls back to plain `SELECT`.
@@ -376,54 +385,63 @@ Current limitations, by design for now:
 | No manifest or contract-version check | Compatibility relies on the add-only rule in §2. |
 | `%LOCALAPPDATA%` is user-writable | A dropped DLL is trusted code running in-process. Only install plugins you trust. |
 | The folder is not auto-created | Create `%LOCALAPPDATA%\Larik WinUI\Plugins` before dropping a DLL. |
-| Release builds are trimmed | `Larik.Data` has no explicit trimmer root yet. Reflection-only members could be trimmed in a published build; validate plugins against a published build, not just Debug. |
+| Release builds are self-contained | Trimming is off (`PublishTrimmed=false`) so XAML/x:Bind and reflection-based provider discovery survive. Revisit a trimmer root only if trimming is turned on later; validate plugins against a published build when that happens. |
 
-**Recommendation:** first-party engines (PostgreSQL next) ship as built-in project references in
+**Recommendation:** first-party engines ship as built-in project references in
 `Larik/App.xaml.cs` + `Larik.csproj`, using the same contracts a plugin would. That gives dependency
-safety, trimming coverage and a test target. Harden the loader (`AssemblyDependencyResolver`,
-manifest, unload) only when third-party plugins are actually expected.
+safety, trimming coverage and a test target. SQL Server and PostgreSQL already follow this rule.
+Harden the loader (`AssemblyDependencyResolver`, manifest, unload) only when third-party plugins are
+actually expected.
 
 ---
 
-## 8. Blueprint: PostgreSQL (built-in next)
+## 8. PostgreSQL (built in)
 
-1. New project `Larik.Data.Postgres` (`net10.0`), reference `Larik.Data` and `Npgsql`.
-2. `PostgresProvider : IDatabaseProvider` — `Id = "postgres"`, `Dialect = "postgres"`,
-   `EditorLanguage => PostgresDialect.Instance`, settings: host, port, database, user, password,
-   SSL mode. `ProviderSettingKind` has no `Choice` yet; use a text field with a documented default
-   for now. Adding `Choice` is a small contract + dialog change (and an enum addition), not something
-   a plugin can do on its own.
-3. `PostgresConnection : IDatabaseConnection`:
-   - one physical connection **per database** (Postgres cannot switch database on a live
-     connection), or a pool keyed by database; `ExecuteAsync(sql, database, ...)` selects it;
-   - `GetDatabasesAsync` from `pg_database`;
-   - `GetDatabaseDetailsAsync` from `pg_database` + `has_database_privilege(current_user, datname,
-     'CONNECT')`, so a least-privileged login's unreachable databases sort after the usable ones;
-   - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema`,
-     `TableSchema.Kind` (base table vs view), `ColumnDetails` from `format_type(a.atttypid,
-     a.atttypmod)`, and `ForeignKeySchema.ReferencedSchema`;
-   - `GetRoutinesAsync` from `information_schema.routines` (`routine_type` maps to
-     `Procedure`/`Function`) and `information_schema.parameters` (or `pg_proc.proargtypes` for
-     unnamed arguments), ordered by `ordinal_position`;
-   - row caps and cancellation;
-   - `ExecuteBatchAsync` may split on `;` only outside strings/comments/dollar quotes;
-   - transactions: `SupportsTransactions => true`, `GetTransactionStateAsync` mapping
-     `TransactionStatus`/`idle in transaction`, and commit/rollback executed on the current
-     per-database connection. Remember the shell refreshes state after every batch, including a
-     failed one.
-4. `PostgresDialect : SqlLanguage, ISqlDialect` — keywords, functions, `"` quoting, no `GO`, no
-   `@` variables. `RoutineContextKeywords` should be `CALL` (procedures), and `RoutineCall` should
-   render positional arguments (`"public"."refresh_stats"(NULL, NULL)`, or `CALL ...` for a
-   procedure); scalar functions used in expressions are a later completion scope. Override
-   `PreviewStatement` with `SELECT * FROM <name> LIMIT n`, `RowsStatement` with `LIMIT` and a typed
-   `FormatLiteral`, and answer `EstimateRowCountAsync` from `pg_class.reltuples` when available. Add
-   dollar-quote support to `SqlLanguageOptions` when you get there.
-5. Register in `Larik/App.xaml.cs` (`typeof(PostgresProvider).Assembly`) and reference the project
-   from `Larik.csproj`. No shell/editor changes.
-6. Add contract tests: split/token cases, schema mapping, execution/row-cap against a real server.
+Shipped as `Larik.Data.Postgres` on Npgsql, registered in `Larik/App.xaml.cs`, covered by
+`PostgresDialectTests` and the UI suite's provider-schema check. What it implements:
 
-Still open for PostgreSQL: a `Choice`/`FilePath` setting kind, and provider-driven
-`ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`).
+1. `PostgresProvider : IDatabaseProvider` — `Id = "postgres"`, `Dialect = "postgres"`,
+   `EditorLanguage => PostgresDialect.Instance`, `DescribeEndpoint` -> `PostgreSQL · host:port`;
+   settings: host, port, database, user, password, SSL mode, connect and query timeouts.
+   `ProviderSettingKind` still has no `Choice`; SSL mode is a text field with a documented default.
+2. `PostgresConnection : IDatabaseConnection`:
+   - one physical backend **per database** (PostgreSQL cannot switch database on a live
+     connection), selected by the `database` argument; `OpenAsync` opens the profile database (or
+     `postgres`), and each tab still owns its own instance;
+   - `pg_database` + `has_database_privilege(current_user, datname, 'CONNECT')`, so a
+     least-privileged login's unreachable databases sort after the usable ones;
+   - `pg_class`/`pg_attribute`/`format_type` for tables, views, materialized views and column
+     types; `pg_constraint` for primary keys and foreign keys (with `ReferencedSchema`);
+   - `information_schema.routines`/`parameters` for procedures and functions, with ordered
+     IN/INOUT parameters (pure OUT parameters are not call arguments);
+   - `pg_class.reltuples` for the reference-preview row estimate;
+   - row caps and cancellation; execution splits on `;` outside strings, quoted identifiers,
+     comments and dollar quotes so every statement gets its own result;
+   - transactions: `SupportsTransactions => true`. The backend's own `pg_stat_activity` row is
+     `active` while a probe runs, so the provider tracks the `BEGIN`/`START TRANSACTION`,
+     `COMMIT`/`END`, `ROLLBACK`/`ABORT` and `ROLLBACK TO SAVEPOINT` commands it sent; a failed
+     statement inside the transaction marks it aborted. Commit/rollback run on the active backend;
+   - `NpgsqlConnection.Notice` fills `QueryResult.Messages` for `RAISE NOTICE`/`WARNING`.
+3. `PostgresDialect : SqlLanguage, ISqlDialect` — keyword/function/table-context lists, `"` quoting,
+   no `GO`, no `@` variables, dollar quotes, `E'...'` strings, nested block comments,
+   `RoutineContextKeywords => ["CALL"]`, positional `NULL` arguments,
+   `SELECT` for a function vs `CALL` for a procedure when the schema browser inserts one,
+   `SELECT * FROM <name> LIMIT n` previews, `LIMIT` reference lookups and typed literals
+   (`TRUE`/`FALSE`, bare numerics, `\x` bytea).
+4. Register the project reference and `typeof(PostgresProvider).Assembly` in `App.xaml.cs`. The
+   shell and editor needed no provider branch; `DescribeEndpoint` replaced the old
+   `"mssql"` special case in `ConnectionViewModel`.
+
+Still open for PostgreSQL: a `Choice` setting kind for SSL mode, overload identity in the routine
+contract (two overloads with the same name collapse to the first signature), expression-position
+function completion, and parenthesised/`BEGIN ATOMIC` bodies in the lexical splitter.
+
+Two transaction limitations are inherent to text-based tracking and worth knowing: a
+`COMMIT`/`ROLLBACK` executed inside a `DO` or procedure body is not visible to the tracker (it keeps
+the state it saw before the call), and transaction state is per active backend, so a script that
+somehow executes against a second database does not surface the first database's transaction. The
+shell refuses a database switch while a transaction is open, which keeps the second case out of the
+normal UI path.
 
 ---
 
@@ -471,6 +489,7 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 
 - [ ] Assembly targets `net10.0`; references `Larik.Data` only at the contract boundary.
 - [ ] `Id` is stable (stored in `spaces.provider_id`); `Dialect` matches snippet scopes.
+- [ ] `DescribeEndpoint` reports the host/port shown in the rail (or leave the default null).
 - [ ] `Settings` covers every connection field; secrets use `ProviderSettingKind.Password`.
 - [ ] `CreateConnection` returns a fresh session; `OpenAsync` fails fast with a useful message.
 - [ ] Per-tab state (temp tables, `SET`, transactions) lives on that instance, not in a shared field.
@@ -502,18 +521,17 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 
 | Area | State |
 |---|---|
-| PostgreSQL / MongoDB | Not implemented. This seam exists so they are additive. |
-| Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. A PostgreSQL/MySQL provider should promote those into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
-| Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `public.users AS u`); SQL Server reads `sys.schemas`. Views/routines are not in the schema model, so only base tables complete. |
-| Statement splitting | Dollar quotes, `E'...'`, `::` and `$1` are not in `SqlLanguageOptions` yet. T-SQL `GO n` repeat counts are parsed but not expanded. |
+| MongoDB | Not implemented. This seam exists so it stays additive. |
+| Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. PostgreSQL reuses them; a MySQL provider should promote them into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
+| Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `"public"."users" AS u`). SQL Server reads `sys.schemas`; PostgreSQL reads `pg_namespace`. Views complete like tables. Overloaded PostgreSQL routines collapse to the first signature because the contract has no overload identity. |
+| Statement splitting | Dollar quotes, `E'...'`, quoted identifiers and nested block comments are in `SqlLanguageOptions`; `::` casts and `$1` parameters need no splitting. Parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and T-SQL `GO n` repeat expansion are still open. |
 | Formatter | `SqlFormatter` is app-owned and keyword-based; not dialect-aware. |
-| Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. |
-| Connection endpoint label | `ConnectionViewModel.Endpoint` still special-cases `"mssql"`. |
+| Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. PostgreSQL SSL mode is a documented text field until `Choice` exists. |
 | Snippet dialects | `SnippetDialects.Known` is a fixed list (`mssql`, `postgres`). |
 | Non-SQL completion | No contributor seam yet (see MongoDB blueprint). |
 | Plugin isolation | `Assembly.LoadFrom` in the default context; no unload, no dependency resolver, no manifest. |
-| Trimming | Release uses `PublishTrimmed`; no `TrimmerRootAssembly` for `Larik.Data` yet. |
-| Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it; other providers keep the defaults until they map their own state. |
+| Trimming | Off: `Larik.csproj` sets `PublishTrimmed=false` for Debug and Release, so WinUI/XAML and reflection-based plugin discovery survive. A `TrimmerRootAssembly` becomes relevant only if trimming is enabled. |
+| Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it from `@@TRANCOUNT`/`XACT_STATE()`; PostgreSQL tracks the transaction commands it sent because the backend cannot introspect its own in-transaction state while answering. Other providers keep the defaults. |
 | App exit | Closing a tab or disconnecting rolls back; closing the whole app relies on the server rolling back when its sessions end. There is no app-exit prompt. |
 | A failing statement stops the rest of its `GO` batch | SQL Server executes a `GO` batch natively, so the first server error ends the remaining statements in that batch. The shell already sends each `GO` batch separately; split-and-execute per statement as well if every statement must report independently. |
 | `GeneratedQuery` UI | Field exists; no result-tab bar yet. |
