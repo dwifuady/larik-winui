@@ -334,7 +334,8 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   highlighted object's detail in a pane. Tables and views show their columns with types and PK/FK
   badges; procedures show their parameters and are inserted as a full `EXEC` call (never previewed).
   Enter inserts the dialect-quoted name at the caret (`[dbo].[Orders]`), Shift+Enter previews the top
-  100 rows into a new result tab, Up/Down move, Esc returns to the editor. The **pin** button docks
+  100 rows into a new result tab and reveals the pane if it was hidden, Up/Down move, Esc returns
+  to the editor. The **pin** button docks
   the same surface as a 300 px inspector beside the editor (columns and parameters expand under the
   selected object); the pin unpins it. Recents are kept per workspace for the session and only track
   tables/views, and the popup never replaces the tab rail.
@@ -435,7 +436,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
 - **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
   reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
-  the pane, and running a query while it is hidden opens it again. A batch (or a
+  the pane, and running a query while it is hidden opens it again. Closing the only result hides the
+  pane again; a single result's header carries its own close button (multiple results close from
+  their tab strip). A batch (or a
   statement returning several result sets) opens one result tab per result, DBeaver-style.
   Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their

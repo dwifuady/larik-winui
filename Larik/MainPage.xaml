@@ -928,8 +928,19 @@
                 <Grid
                     Grid.Row="0"
                     Padding="4,0,4,0"
+                    ColumnSpacing="8"
                     Visibility="{x:Bind ViewModel.ResultHeaderVisibility, Mode=OneWay}">
-                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel
+                        Grid.Column="0"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        VerticalAlignment="Center">
                         <TextBlock
                             CharacterSpacing="120"
                             FontSize="10"
@@ -945,11 +956,25 @@
                     </StackPanel>
 
                     <TextBlock
+                        Grid.Column="1"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
                         FontSize="10"
                         Foreground="{ThemeResource StudioTextMutedBrush}"
                         Text="{x:Bind ViewModel.ResultSummary, Mode=OneWay}" />
+
+                    <!--  A single result has no result tab strip, so the header carries its close action.  -->
+                    <Button
+                        Grid.Column="2"
+                        Width="24"
+                        Height="22"
+                        Padding="0"
+                        AutomationProperties.Name="Close result"
+                        Click="ResultHeaderClose_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Close result">
+                        <FontIcon FontSize="9" Glyph="&#xE711;" />
+                    </Button>
                 </Grid>
 
                 <Border

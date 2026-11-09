@@ -264,6 +264,10 @@ public sealed partial class MainPage : Page
         var name = QualifiedTableName(table);
         RememberSchemaObject(table);
 
+        // Preview is a run too: like Ctrl+Enter, it must reveal the results pane if the user
+        // hid it, otherwise the query succeeds with nowhere to see the rows.
+        ShowResultsPane();
+
         if (closePeek)
         {
             CloseSchemaPeek();
@@ -2323,6 +2327,29 @@ public sealed partial class MainPage : Page
         if (sender is FrameworkElement { DataContext: ResultSetViewModel result })
         {
             ViewModel.CloseResult(result);
+            HideResultsPaneIfEmpty();
+        }
+    }
+
+    /// <summary>
+    /// The single-result header has no tab strip close button, so it carries one. Closing the
+    /// last result takes the whole pane with it; an empty pane is just chrome.
+    /// </summary>
+    private void ResultHeaderClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.ActiveTab?.ActiveResult is { } result)
+        {
+            ViewModel.CloseResult(result);
+        }
+
+        HideResultsPaneIfEmpty();
+    }
+
+    private void HideResultsPaneIfEmpty()
+    {
+        if (ViewModel.ActiveTab?.Results.Count is 0)
+        {
+            HideResultsPane();
         }
     }
 
