@@ -18,7 +18,29 @@ public sealed partial class ReferenceTableView : UserControl
 
     private ScrollViewer? _listScroller;
 
-    public ReferenceTableView() => InitializeComponent();
+    public ReferenceTableView()
+    {
+        InitializeComponent();
+        Loaded += (_, _) => EnsureListScroller();
+        SizeChanged += (_, _) => EnsureListScroller();
+    }
+
+    private void EnsureListScroller()
+    {
+        var scroller = FindDescendant<ScrollViewer>(RowsList);
+        if (scroller is null || ReferenceEquals(scroller, _listScroller))
+        {
+            return;
+        }
+
+        if (_listScroller is not null)
+        {
+            _listScroller.ViewChanged -= RowsList_ViewChanged;
+        }
+
+        _listScroller = scroller;
+        _listScroller.ViewChanged += RowsList_ViewChanged;
+    }
 
     public void Show(
         QueryResult result,
@@ -53,6 +75,7 @@ public sealed partial class ReferenceTableView : UserControl
 
         RowsList.ItemsSource = rows;
         RowsList.UpdateLayout();
+        EnsureListScroller();
 
         DispatcherQueue.TryEnqueue(() =>
         {
@@ -163,16 +186,7 @@ public sealed partial class ReferenceTableView : UserControl
 
     private void RowsList_Loaded(object sender, RoutedEventArgs e)
     {
-        if (_listScroller is not null)
-        {
-            return;
-        }
-
-        _listScroller = FindDescendant<ScrollViewer>(RowsList);
-        if (_listScroller is not null)
-        {
-            _listScroller.ViewChanged += RowsList_ViewChanged;
-        }
+        EnsureListScroller();
     }
 
     private void RowsList_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)

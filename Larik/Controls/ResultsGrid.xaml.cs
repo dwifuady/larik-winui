@@ -123,8 +123,38 @@ public sealed partial class ResultsGrid : UserControl
 
         // The results pane can start collapsed, when ActualWidth is still 0. Apply the stored
         // preview width once the control has real space, and re-clamp it when the window changes.
-        Loaded += (_, _) => ApplyPreviewWidth();
-        SizeChanged += (_, _) => ApplyPreviewWidth();
+        Loaded += (_, _) =>
+        {
+            EnsureListScroller();
+            ApplyPreviewWidth();
+        };
+        SizeChanged += (_, _) =>
+        {
+            EnsureListScroller();
+            ApplyPreviewWidth();
+        };
+    }
+
+    /// <summary>
+    /// Finds the ListView's inner scroller. A collapsed results pane may have fired Loaded before
+    /// its template existed, so this is retried when the control gets real size and when a result
+    /// is shown; otherwise the sticky header would never follow horizontal scrolling.
+    /// </summary>
+    private void EnsureListScroller()
+    {
+        var scroller = FindDescendant<ScrollViewer>(RowsList);
+        if (scroller is null || ReferenceEquals(scroller, _listScroller))
+        {
+            return;
+        }
+
+        if (_listScroller is not null)
+        {
+            _listScroller.ViewChanged -= RowsList_ViewChanged;
+        }
+
+        _listScroller = scroller;
+        _listScroller.ViewChanged += RowsList_ViewChanged;
     }
 
     private void ApplyPreviewWidth()
@@ -211,6 +241,8 @@ public sealed partial class ResultsGrid : UserControl
 
         EmptyText.Visibility = Visibility.Collapsed;
         RowsList.ItemsSource = _rows;
+        RowsList.UpdateLayout();
+        EnsureListScroller();
         AccentRule.Background = StudioColors.Brush(accentHex);
         AccentRule.Visibility = Visibility.Visible;
 
@@ -1390,16 +1422,7 @@ public sealed partial class ResultsGrid : UserControl
 
     private void RowsList_Loaded(object sender, RoutedEventArgs e)
     {
-        if (_listScroller is not null)
-        {
-            return;
-        }
-
-        _listScroller = FindDescendant<ScrollViewer>(RowsList);
-        if (_listScroller is not null)
-        {
-            _listScroller.ViewChanged += RowsList_ViewChanged;
-        }
+        EnsureListScroller();
     }
 
     private void RowsList_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
