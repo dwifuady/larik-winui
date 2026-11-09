@@ -71,11 +71,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         _ => StudioColors.Warning,
     };
 
-    public string Endpoint => ProviderId switch
-    {
-        "mssql" => $"SQL Server · {Profile.Get("server")}",
-        _ => ProviderName,
-    };
+    public string Endpoint => Provider?.DescribeEndpoint(Profile) ?? ProviderName;
 
     /// <summary>Status is colour AND text — never colour alone.</summary>
     public string StatusLine => $"{Endpoint} · {StatusText}";

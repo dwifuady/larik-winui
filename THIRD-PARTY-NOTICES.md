@@ -24,6 +24,7 @@ runtime files listed above. The installed build includes the same files.
 | SQLitePCLRaw (core, bundle_e_sqlite3, lib.e_sqlite3, provider.e_sqlite3) | 2.1.13 | Apache-2.0 |
 | SQLite core library | 3.x (bundled by SQLitePCLRaw) | Public domain |
 | Microsoft.Data.SqlClient (and SNI runtime) | 7.1.1 / 7.1.0 | MIT |
+| Npgsql | 10.0.3 | PostgreSQL License (BSD-style) |
 | Microsoft.IdentityModel.* and System.IdentityModel.Tokens.Jwt | 8.16.0 | MIT |
 | Microsoft.Extensions.* (caching, options, logging, DI abstractions) | 9.0.18 / 10.0.0 | MIT |
 | System.Security.Cryptography.Pkcs | 10.0.14 | MIT |

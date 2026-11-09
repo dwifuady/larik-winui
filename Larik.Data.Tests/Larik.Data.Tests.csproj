@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Larik.Data\Larik.Data.csproj" />
+    <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
   </ItemGroup>
 

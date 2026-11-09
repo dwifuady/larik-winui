@@ -22,6 +22,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     public IEditorLanguage? EditorLanguage => TSqlDialect.Instance;
 
+    public string? DescribeEndpoint(ConnectionProfile profile) =>
+        string.IsNullOrWhiteSpace(profile.Get("server"))
+            ? null
+            : $"SQL Server · {profile.Get("server")}";
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()

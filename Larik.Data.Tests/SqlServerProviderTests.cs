@@ -16,4 +16,15 @@ public sealed class SqlServerProviderTests
         Assert.True(setting.IsAdvanced);
         Assert.Equal("60", setting.DefaultValue);
     }
+
+    [Fact]
+    public void Describes_its_endpoint_from_the_server()
+    {
+        var profile = new ConnectionProfile { ProviderId = "mssql" };
+        profile.Values["server"] = @"(localdb)\MSSQLLocalDB";
+
+        Assert.Equal(
+            @"SQL Server · (localdb)\MSSQLLocalDB",
+            new SqlServerProvider().DescribeEndpoint(profile));
+    }
 }

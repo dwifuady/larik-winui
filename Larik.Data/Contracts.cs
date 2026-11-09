@@ -324,6 +324,13 @@ public interface IDatabaseProvider
     /// </summary>
     IEditorLanguage? EditorLanguage => null;
 
+    /// <summary>
+    /// A short description of where this connection points (for example <c>"PostgreSQL · db:5432"</c>),
+    /// shown in the rail's connection status line. Null means the host shows
+    /// <see cref="DisplayName"/> alone, so an older provider keeps its current label.
+    /// </summary>
+    string? DescribeEndpoint(ConnectionProfile profile) => null;
+
     IDatabaseConnection CreateConnection(ConnectionProfile profile);
 }
 

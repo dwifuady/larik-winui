@@ -1,5 +1,6 @@
 using Larik.Data;
 using Larik.Data.Demo;
+using Larik.Data.Postgres;
 using Larik.Data.SqlServer;
 using Larik.Services;
 using Microsoft.UI.Xaml;
@@ -54,7 +55,7 @@ public partial class App : Application
         // Providers are discovered, not hard-coded: built-in assemblies plus any plugin DLL
         // dropped in the app's or the user's Plugins folder.
         DatabaseProviderCatalog.Initialize(
-            [typeof(DemoProvider).Assembly, typeof(SqlServerProvider).Assembly],
+            [typeof(DemoProvider).Assembly, typeof(SqlServerProvider).Assembly, typeof(PostgresProvider).Assembly],
             Path.Combine(AppContext.BaseDirectory, "Plugins"),
             LarikPaths.PluginsDirectory);
     }

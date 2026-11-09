@@ -132,6 +132,18 @@ public interface ISqlDialect : IEditorLanguage
         $"{RoutineContextKeywords[0]} {RoutineCall(schema, name, parameters).Text}";
 
     /// <summary>
+    /// The routine statement for a known kind. Engines that invoke procedures and functions
+    /// differently (PostgreSQL <c>CALL</c> vs <c>SELECT f(...)</c>) override this; the default keeps
+    /// the pre-kind behaviour, so older dialects and plugins are unchanged.
+    /// </summary>
+    string RoutineInvocation(
+        string? schema,
+        string name,
+        IReadOnlyList<RoutineParameter> parameters,
+        RoutineKind kind) =>
+        RoutineInvocation(schema, name, parameters);
+
+    /// <summary>
     /// A statement returning the first <paramref name="limit"/> rows of a table or view, used by the
     /// schema browser's preview. The default has no row-limit clause (the provider's execution cap
     /// still applies); dialects with <c>TOP</c>/<c>LIMIT</c> override it.

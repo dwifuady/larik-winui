@@ -27,6 +27,27 @@ public sealed class SqlLanguageOptions
     /// <summary>Quote characters for string literals; doubled quotes escape.</summary>
     public char[] StringQuotes { get; init; } = ['\'', '"'];
 
+    /// <summary>
+    /// Quote characters that delimit identifiers (<c>"x"</c> in PostgreSQL). They are skipped so a
+    /// semicolon inside a quoted name never splits a statement, but they keep the default colour.
+    /// </summary>
+    public char[] QuotedIdentifierQuotes { get; init; } = [];
+
+    /// <summary>
+    /// Treat <c>$tag$ ... $tag$</c> as one string token (PostgreSQL dollar quoting). The tag is
+    /// optional, so <c>$$ ... $$</c> works too.
+    /// </summary>
+    public bool DollarQuotedStrings { get; init; }
+
+    /// <summary>
+    /// Treat <c>E'...'</c> as a string whose backslash escapes the next character (PostgreSQL).
+    /// Ordinary strings still escape only by doubling the quote.
+    /// </summary>
+    public bool EscapeStringPrefix { get; init; }
+
+    /// <summary>Block comments nest (<c>/* /* */ */</c>), as PostgreSQL allows.</summary>
+    public bool NestedBlockComments { get; init; }
+
     public string[] LineCommentPrefixes { get; init; } = ["--"];
 
     public string BlockCommentOpen { get; init; } = "/*";
@@ -54,6 +75,7 @@ public abstract class SqlLanguage : IEditorLanguage
     private readonly HashSet<char> _identifierParts;
     private readonly HashSet<char> _variablePrefixes;
     private readonly HashSet<char> _stringQuotes;
+    private readonly HashSet<char> _quotedIdentifierQuotes;
 
     // Span lookup keeps keyword classification allocation-free on the typing path.
     private readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> _keywordLookup;
@@ -65,6 +87,7 @@ public abstract class SqlLanguage : IEditorLanguage
         _identifierParts = new HashSet<char>(options.IdentifierPartCharacters);
         _variablePrefixes = new HashSet<char>(options.VariablePrefixes);
         _stringQuotes = new HashSet<char>(options.StringQuotes);
+        _quotedIdentifierQuotes = new HashSet<char>(options.QuotedIdentifierQuotes);
 
         var keywords = new HashSet<string>(options.TokenKeywords, StringComparer.OrdinalIgnoreCase);
         _keywordLookup = keywords.GetAlternateLookup<ReadOnlySpan<char>>();
@@ -121,11 +144,40 @@ public abstract class SqlLanguage : IEditorLanguage
                 continue;
             }
 
+            // E'...' is a PostgreSQL escape string: backslash escapes the next character.
+            if (_options.EscapeStringPrefix
+                && (current == 'E' || current == 'e')
+                && index + 1 < text.Length
+                && text[index + 1] == '\'')
+            {
+                var start = index;
+                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
+                tokens.Add(new QueryToken(start, index - start, QueryTokenKind.String));
+                continue;
+            }
+
             if (_stringQuotes.Contains(current))
             {
                 var start = index;
                 index = SkipQuoted(text, index, current);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.String));
+                continue;
+            }
+
+            // "x" is an identifier in PostgreSQL, but a string in the historical T-SQL scanner.
+            if (_quotedIdentifierQuotes.Contains(current))
+            {
+                index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            // $tag$ ... $tag$ dollar quoting. Must come before identifiers so the body is one token.
+            if (_options.DollarQuotedStrings
+                && current == '$'
+                && TrySkipDollarQuoted(text, index, out var dollarEnd))
+            {
+                tokens.Add(new QueryToken(index, dollarEnd - index, QueryTokenKind.String));
+                index = dollarEnd;
                 continue;
             }
 
@@ -203,9 +255,32 @@ public abstract class SqlLanguage : IEditorLanguage
         {
             var current = text[index];
 
+            if (_options.EscapeStringPrefix
+                && (current == 'E' || current == 'e')
+                && index + 1 < text.Length
+                && text[index + 1] == '\'')
+            {
+                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
+                continue;
+            }
+
             if (_stringQuotes.Contains(current))
             {
                 index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            if (_quotedIdentifierQuotes.Contains(current))
+            {
+                index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            if (_options.DollarQuotedStrings
+                && current == '$'
+                && TrySkipDollarQuoted(text, index, out var dollarEnd))
+            {
+                index = dollarEnd;
                 continue;
             }
 
@@ -269,7 +344,11 @@ public abstract class SqlLanguage : IEditorLanguage
 
         if (_options.BatchSeparator is not { Length: > 0 } separator)
         {
-            return EditorLanguageHelpers.SingleBatch(text);
+            // Comment-only text is not a batch: there is nothing to send to the server.
+            var (start, length) = EditorLanguageHelpers.Trim(text, 0, text.Length);
+            return length > 0 && HasCode(text, start, length)
+                ? [new StatementSpan(start, length)]
+                : [];
         }
 
         var batches = new List<StatementSpan>();
@@ -289,9 +368,32 @@ public abstract class SqlLanguage : IEditorLanguage
         {
             var current = text[index];
 
+            if (_options.EscapeStringPrefix
+                && (current == 'E' || current == 'e')
+                && index + 1 < text.Length
+                && text[index + 1] == '\'')
+            {
+                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
+                continue;
+            }
+
             if (_stringQuotes.Contains(current))
             {
                 index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            if (_quotedIdentifierQuotes.Contains(current))
+            {
+                index = SkipQuoted(text, index, current);
+                continue;
+            }
+
+            if (_options.DollarQuotedStrings
+                && current == '$'
+                && TrySkipDollarQuoted(text, index, out var dollarEnd))
+            {
+                index = dollarEnd;
                 continue;
             }
 
@@ -428,11 +530,18 @@ public abstract class SqlLanguage : IEditorLanguage
         return false;
     }
 
-    private static int SkipQuoted(string text, int index, char quote)
+    private static int SkipQuoted(string text, int index, char quote, bool backslashEscapes = false)
     {
         index++;
         while (index < text.Length)
         {
+            if (backslashEscapes && text[index] == '\\' && index + 1 < text.Length)
+            {
+                // PostgreSQL E'...' strings treat a backslash as an escape character.
+                index += 2;
+                continue;
+            }
+
             if (text[index] != quote)
             {
                 index++;
@@ -450,6 +559,85 @@ public abstract class SqlLanguage : IEditorLanguage
         }
 
         return text.Length;
+    }
+
+    /// <summary>
+    /// Skips a PostgreSQL dollar-quoted string (<c>$$...$$</c>, <c>$tag$...$tag$</c>). Returns
+    /// false when <paramref name="index"/> is not an opening delimiter, so <c>$1</c> parameters and
+    /// <c>a$b</c> identifiers keep their ordinary meaning. Unterminated input consumes the rest,
+    /// mirroring how every other unterminated literal behaves.
+    /// </summary>
+    private bool TrySkipDollarQuoted(string text, int index, out int end)
+    {
+        end = index;
+
+        if (index >= text.Length || text[index] != '$')
+        {
+            return false;
+        }
+
+        // A dollar sign inside an identifier is not a delimiter: PostgreSQL allows a$b.
+        if (index > 0 && IsIdentifierPart(text[index - 1]))
+        {
+            return false;
+        }
+
+        var cursor = index + 1;
+        if (cursor >= text.Length)
+        {
+            return false;
+        }
+
+        // $$ immediately closes the tag.
+        if (text[cursor] == '$')
+        {
+            var close = text.IndexOf("$$", cursor + 1, StringComparison.Ordinal);
+            end = close < 0 ? text.Length : close + 2;
+            return true;
+        }
+
+        if (!char.IsLetter(text[cursor]) && text[cursor] != '_')
+        {
+            return false;
+        }
+
+        var tagStart = cursor;
+        while (cursor < text.Length && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_'))
+        {
+            cursor++;
+        }
+
+        if (cursor >= text.Length || text[cursor] != '$')
+        {
+            return false;
+        }
+
+        // Delimiter is $tag$: find the next identical one without allocating a substring.
+        var tagLength = cursor - tagStart;
+        var tag = text.AsSpan(tagStart, tagLength);
+        var search = cursor + 1;
+
+        while (search < text.Length)
+        {
+            var next = text.IndexOf('$', search);
+            if (next < 0)
+            {
+                break;
+            }
+
+            if (next + tagLength + 1 < text.Length
+                && text[next + tagLength + 1] == '$'
+                && text.AsSpan(next + 1, tagLength).SequenceEqual(tag))
+            {
+                end = next + tagLength + 2;
+                return true;
+            }
+
+            search = next + 1;
+        }
+
+        end = text.Length;
+        return true;
     }
 
     private static int SkipBracket(string text, int index)
@@ -492,8 +680,40 @@ public abstract class SqlLanguage : IEditorLanguage
             return text.Length;
         }
 
-        var close = text.IndexOf(_options.BlockCommentClose, index + _options.BlockCommentOpen.Length, StringComparison.Ordinal);
-        return close < 0 ? text.Length : close + _options.BlockCommentClose.Length;
+        if (!_options.NestedBlockComments)
+        {
+            var close = text.IndexOf(_options.BlockCommentClose, index + _options.BlockCommentOpen.Length, StringComparison.Ordinal);
+            return close < 0 ? text.Length : close + _options.BlockCommentClose.Length;
+        }
+
+        // PostgreSQL allows block comments to nest, so count depth instead of stopping at the first */.
+        var depth = 1;
+        var cursor = index + _options.BlockCommentOpen.Length;
+        while (cursor < text.Length)
+        {
+            if (text.AsSpan(cursor).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
+            {
+                depth++;
+                cursor += _options.BlockCommentOpen.Length;
+                continue;
+            }
+
+            if (text.AsSpan(cursor).StartsWith(_options.BlockCommentClose, StringComparison.Ordinal))
+            {
+                depth--;
+                cursor += _options.BlockCommentClose.Length;
+                if (depth == 0)
+                {
+                    return cursor;
+                }
+
+                continue;
+            }
+
+            cursor++;
+        }
+
+        return text.Length;
     }
 
     private static int SkipNumber(string text, int index)

@@ -305,6 +305,14 @@ public sealed class EditorLanguageTests
         Assert.Null(table.Schema);
     }
 
+    [Fact]
+    public void A_provider_written_before_the_endpoint_member_defaults_to_no_description()
+    {
+        var profile = new ConnectionProfile { ProviderId = "none" };
+        IDatabaseProvider provider = new NoLanguageProvider();
+        Assert.Null(provider.DescribeEndpoint(profile));
+    }
+
     // ------------------------------------------------------------------ routines
 
     [Fact]
@@ -338,6 +346,16 @@ public sealed class EditorLanguageTests
         var invocation = Tsql.RoutineInvocation("dbo", "p", [new RoutineParameter { Name = "@a" }]);
 
         Assert.Equal("EXEC [dbo].[p] @a = NULL", invocation);
+    }
+
+    [Fact]
+    public void The_kind_aware_invocation_defaults_to_the_older_signature()
+    {
+        var parameters = new[] { new RoutineParameter { Name = "@a" } };
+
+        Assert.Equal(
+            Tsql.RoutineInvocation("dbo", "p", parameters),
+            Tsql.RoutineInvocation("dbo", "p", parameters, RoutineKind.Function));
     }
 
     [Fact]
