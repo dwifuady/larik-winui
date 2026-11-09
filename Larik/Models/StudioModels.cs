@@ -16,6 +16,7 @@ public enum CompletionKind
     Database,
     Variable,
     Cte,
+    Routine,
 }
 
 /// <summary>A SQL snippet: a short trigger that expands to a statement.</summary>
@@ -179,6 +180,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Database => "DB",
         CompletionKind.Variable => "VAR",
         CompletionKind.Cte => "CTE",
+        CompletionKind.Routine => "PROC",
         _ => "JN",
     };
 
@@ -191,6 +193,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Database => 1,
         CompletionKind.Variable => 1,
         CompletionKind.Cte => 1,
+        CompletionKind.Routine => 1,
         CompletionKind.Column => 2,
         CompletionKind.Function => 3,
         _ => 4,

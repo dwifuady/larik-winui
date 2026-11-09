@@ -211,7 +211,9 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                     {
                         Name = info.Name,
                         Schema = info.Schema,
-                        Columns = info.Columns,
+                        Kind = info.IsView ? TableKind.View : TableKind.Table,
+                        Columns = info.Columns.Select(column => column.Name).ToList(),
+                        ColumnDetails = info.Columns,
                         PrimaryKey = primaryKeys.TryGetValue(key, out var keys) ? keys : [],
                         ForeignKeys = foreignKeys.TryGetValue(key, out var references) ? references : [],
                     };
@@ -278,36 +280,159 @@ internal sealed class SqlServerConnection : IDatabaseConnection
     }
 
     /// <summary>One table's identity while the three introspection passes are stitched together.</summary>
-    private sealed record TableInfo(string Schema, string Name, List<string> Columns);
+    private sealed record TableInfo(string Schema, string Name, bool IsView, List<TableColumn> Columns);
 
     private static string QualifiedKey(string schema, string table) => $"{schema}\u001F{table}";
 
     private async Task<Dictionary<string, TableInfo>> ReadColumnsAsync(CancellationToken cancellationToken)
     {
+        // sys.objects covers base tables and views in one pass; type "V" is the only thing that
+        // separates them, and sys.columns carries the same column metadata for both.
         await using var command = _connection!.CreateCommand();
         command.CommandText = """
-            SELECT s.name, t.name, c.name
-            FROM sys.tables AS t
-            INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-            INNER JOIN sys.columns AS c ON c.object_id = t.object_id
-            ORDER BY s.name, t.name, c.column_id;
+            SELECT s.name, o.name, o.type, c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable
+            FROM sys.objects AS o
+            INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+            INNER JOIN sys.columns AS c ON c.object_id = o.object_id
+            INNER JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
+            WHERE o.type IN ('U', 'V')
+            ORDER BY s.name, o.name, c.column_id;
             """;
 
         var tables = new Dictionary<string, TableInfo>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var key = QualifiedKey(reader.GetString(0), reader.GetString(1));
+            var schema = reader.GetString(0);
+            var name = reader.GetString(1);
+            var key = QualifiedKey(schema, name);
             if (!tables.TryGetValue(key, out var info))
             {
-                info = new TableInfo(reader.GetString(0), reader.GetString(1), []);
+                var isView = reader.GetString(2).Trim().Equals("V", StringComparison.OrdinalIgnoreCase);
+                info = new TableInfo(schema, name, isView, []);
                 tables[key] = info;
             }
 
-            info.Columns.Add(reader.GetString(2));
+            info.Columns.Add(new TableColumn
+            {
+                Name = reader.GetString(3),
+                DataType = FormatDataType(
+                    reader.GetString(4),
+                    reader.GetInt16(5),
+                    reader.GetByte(6),
+                    reader.GetByte(7)),
+                IsNullable = reader.GetBoolean(8),
+            });
         }
 
         return tables;
+    }
+
+    /// <summary>
+    /// A type as it would be written in DDL. Lengths are in bytes in sys.columns, so the national
+    /// character types divide by two; -1 means <c>(max)</c>.
+    /// </summary>
+    private static string FormatDataType(string name, short maxLength, byte precision, byte scale) =>
+        name.ToLowerInvariant() switch
+        {
+            "char" or "varchar" or "binary" or "varbinary" =>
+                maxLength < 0 ? $"{name}(max)" : $"{name}({maxLength})",
+            "nchar" or "nvarchar" =>
+                maxLength < 0 ? $"{name}(max)" : $"{name}({maxLength / 2})",
+            "decimal" or "numeric" => $"{name}({precision},{scale})",
+            "datetime2" or "datetimeoffset" or "time" =>
+                scale == 0 ? name : $"{name}({scale})",
+            _ => name,
+        };
+
+    /// <summary>Procedures in the current database, with parameters in declaration order.</summary>
+    public async Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(
+        string? database,
+        CancellationToken cancellationToken = default)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            SwitchDatabase(database);
+            return await ReadRoutinesAsync(cancellationToken);
+        }
+        catch (SqlException)
+        {
+            // Routine metadata is a completion/browsing nicety; a permission failure must not
+            // break the session.
+            return [];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<IReadOnlyList<RoutineSchema>> ReadRoutinesAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection!.CreateCommand();
+        command.CommandText = """
+            SELECT s.name, p.name, pa.name, ty.name, pa.max_length, pa.precision, pa.scale,
+                   pa.is_output, pa.has_default_value
+            FROM sys.procedures AS p
+            INNER JOIN sys.schemas AS s ON s.schema_id = p.schema_id
+            LEFT JOIN sys.parameters AS pa ON pa.object_id = p.object_id
+            LEFT JOIN sys.types AS ty ON ty.user_type_id = pa.user_type_id
+            ORDER BY s.name, p.name, pa.parameter_id;
+            """;
+
+        var order = new List<string>();
+        var builders = new Dictionary<string, (string Schema, string Name, List<RoutineParameter> Parameters)>(
+            StringComparer.OrdinalIgnoreCase);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var schema = reader.GetString(0);
+            var name = reader.GetString(1);
+            var key = QualifiedKey(schema, name);
+
+            if (!builders.TryGetValue(key, out var builder))
+            {
+                builder = (schema, name, []);
+                builders[key] = builder;
+                order.Add(key);
+            }
+
+            // A procedure without parameters still produces one LEFT JOIN row with NULL metadata.
+            if (reader.IsDBNull(2))
+            {
+                continue;
+            }
+
+            builder.Parameters.Add(new RoutineParameter
+            {
+                Name = reader.GetString(2),
+                DataType = reader.IsDBNull(3)
+                    ? null
+                    : FormatDataType(
+                        reader.GetString(3),
+                        reader.GetInt16(4),
+                        reader.GetByte(5),
+                        reader.GetByte(6)),
+                IsOutput = reader.GetBoolean(7),
+                HasDefault = reader.GetBoolean(8),
+            });
+        }
+
+        return order
+            .Select(key =>
+            {
+                var builder = builders[key];
+                return new RoutineSchema
+                {
+                    Schema = builder.Schema,
+                    Name = builder.Name,
+                    Parameters = builder.Parameters,
+                };
+            })
+            .ToList();
     }
 
     private async Task<Dictionary<string, List<string>>> ReadPrimaryKeysAsync(CancellationToken cancellationToken)

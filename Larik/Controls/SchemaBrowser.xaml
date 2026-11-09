@@ -23,6 +23,8 @@
                         <Rectangle Height="1" Margin="0,7,0,0" VerticalAlignment="Top" Fill="{ThemeResource StudioTextMutedBrush}" Opacity=".55" />
                     </Grid>
                     <Rectangle Width="3" Height="10" HorizontalAlignment="Center" Fill="{ThemeResource StudioTextMutedBrush}" RadiusX="1" RadiusY="1" Visibility="{x:Bind ColumnGlyphVisibility}" />
+                    <FontIcon FontSize="11" Glyph="&#xE890;" Visibility="{x:Bind ViewGlyphVisibility}" />
+                    <FontIcon FontSize="11" Glyph="&#xE943;" Visibility="{x:Bind RoutineGlyphVisibility}" />
                 </Grid>
                 <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="{x:Bind LabelSize}" FontWeight="{x:Bind LabelWeight}" Foreground="{x:Bind LabelBrush}" Text="{x:Bind DisplayLabel}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="9" Foreground="{ThemeResource StudioTextMutedBrush}" Text="{x:Bind Meta}" Visibility="{x:Bind MetaVisibility}" />
@@ -33,9 +35,11 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock VerticalAlignment="Center" FontFamily="{StaticResource StudioMonoFont}" FontSize="11" Foreground="{ThemeResource StudioTextSecondaryBrush}" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
-                <Border Grid.Column="1" Padding="3,0" VerticalAlignment="Center" BorderBrush="{x:Bind KeyBrush}" BorderThickness="1" CornerRadius="4" ToolTipService.ToolTip="{x:Bind KeyTooltip}" Visibility="{x:Bind KeyVisibility}">
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="9.5" Foreground="{ThemeResource StudioTextMutedBrush}" Text="{x:Bind DataType}" Visibility="{x:Bind TypeVisibility}" />
+                <Border Grid.Column="2" Padding="3,0" VerticalAlignment="Center" BorderBrush="{x:Bind KeyBrush}" BorderThickness="1" CornerRadius="4" ToolTipService.ToolTip="{x:Bind KeyTooltip}" Visibility="{x:Bind KeyVisibility}">
                     <TextBlock FontSize="8" Foreground="{x:Bind KeyBrush}" Text="{x:Bind Key}" />
                 </Border>
             </Grid>
@@ -102,7 +106,7 @@
             FontSize="12"
             IsSpellCheckEnabled="False"
             KeyDown="SearchBox_KeyDown"
-            PlaceholderText="Search tables and columns"
+            PlaceholderText="Search tables, views, procedures and columns"
             TextChanged="SearchBox_TextChanged" />
 
         <TextBlock

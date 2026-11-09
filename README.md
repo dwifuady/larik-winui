@@ -73,9 +73,10 @@ syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches an
 replace all rewrites every match as one undo step, query and result tabs drag-reorder,
 `FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
 (`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `Ctrl+K`
-finds a table in the schema peek and inserts its quoted name, the peek pins beside the editor and
-unpins, a `PRINT` opens a Messages tab with the server text, `ON `
-suggests a join condition, columns
+finds a table in the schema peek and inserts its quoted name, views complete like tables, `EXEC`
+expands a procedure with its parameters and selects the first `NULL`, the peek also inserts a full
+procedure call, the peek pins beside the editor and unpins, a `PRINT` opens a Messages tab with the
+server text, `ON ` suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
 connection + tabs + editor, a
@@ -140,7 +141,13 @@ contract-compatibility rules.
 `TableSchema` also carries `PrimaryKey` and `ForeignKeys`. Providers that report them get
 foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes` and
 `sys.foreign_keys`; the Demo provider declares them). Without key metadata, completion falls back
-to the desktop app's name heuristics.
+to the desktop app's name heuristics. `TableSchema.Kind` distinguishes a view from a base table and
+`ColumnDetails` adds the engine's data types; `RoutineSchema` (with ordered `RoutineParameter`s)
+describes procedures and functions. All are additive, so an older provider that reports only names
+and columns keeps working. The SQL Server provider reads views through `sys.objects`/`sys.columns`
+and procedures with their parameters from `sys.procedures`/`sys.parameters`; completion after
+`EXEC` is rendered by the dialect's `RoutineCall`, which is why PostgreSQL can use `CALL` without a
+shell change.
 
 `ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
 connection dialog's **Advanced** section instead of competing with the server and credentials. The
@@ -175,8 +182,9 @@ schema-qualified name using the dialect's `QuoteIdentifier` (`[dbo].[Promotion] 
 back to the bare name for providers that report no schema.
 
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
-`sys.databases` for the picker, `sys.tables`/`sys.schemas`/`sys.columns` for schema-qualified
-completion, `DB_NAME()` so a `USE` reaches the shell) and
+`sys.databases` for the picker, `sys.objects`/`sys.schemas`/`sys.columns` for schema-qualified
+completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
+`DB_NAME()` so a `USE` reaches the shell) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
 
 ## What works in this slice
@@ -237,13 +245,14 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
   the ends.
 - **Schema browser**: `Ctrl+K` (or the browse button beside the database row) opens a **peek**: one
-  search field over tables and columns, recents first, grouped by schema, with the highlighted
-  table's columns and PK/FK badges in a detail pane. Enter inserts the dialect-quoted name at the
-  caret (`[dbo].[Orders]`), Shift+Enter previews the top 100 rows into a new result tab, Up/Down move,
-  Esc returns to the editor. The **pin** button docks the same surface as a 300 px inspector beside
-  the editor (columns expand under the selected table); the pin unpins it. Recents are kept per
-  workspace for the session, and the popup never replaces the tab rail. Only base tables appear:
-  the provider contract has no views, routines or column types yet.
+  search field over tables, views, procedures and columns, recents first, grouped by schema, with the
+  highlighted object's detail in a pane. Tables and views show their columns with types and PK/FK
+  badges; procedures show their parameters and are inserted as a full `EXEC` call (never previewed).
+  Enter inserts the dialect-quoted name at the caret (`[dbo].[Orders]`), Shift+Enter previews the top
+  100 rows into a new result tab, Up/Down move, Esc returns to the editor. The **pin** button docks
+  the same surface as a 300 px inspector beside the editor (columns and parameters expand under the
+  selected object); the pin unpins it. Recents are kept per workspace for the session and only track
+  tables/views, and the popup never replaces the tab rail.
 - **Real execution**: connect opens the provider connection and the grid renders returned
   columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from the provider with
   timing. **Ctrl+Enter runs only the statement under the caret** and leaves it selected, so the
@@ -289,7 +298,11 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
   built-in functions (`COUNT()`, caret inside); after `UPDATE x SET` and `INSERT INTO x (` only that
   table's columns are offered (with ` = ` for SET); `DECLARE`d `@variables`, `USE` databases and
   CTEs complete too — a CTE takes its columns from an explicit list, its SELECT aliases, or the
-  source table when it selects `*`, and shadows a real table of the same name. Elsewhere it mixes
+  source table when it selects `*`, and shadows a real table of the same name. Views complete exactly
+  like tables (their detail says `view`), and after `EXEC`/`EXECUTE` (`CALL` for engines that use it)
+  procedures are offered with their parameters: accepting one inserts the whole call
+  (`EXEC [dbo].[find_user] @id = NULL, @name = NULL`) and leaves the first `NULL` selected, so the
+  signature is visible instead of memorised. Elsewhere it mixes
   snippets, keywords and schema. Ranking follows what was typed: a keyword or table that *starts*
   with the word beats a snippet that merely contains it (`wher` leads with `WHERE`, not the `selw`
   snippet), and keyword matches keep the dialect's declared order instead of sorting alphabetically.
@@ -382,7 +395,7 @@ completion, `DB_NAME()` so a `USE` reaches the shell) and
 | Gap | Why / next step |
 |---|---|
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB only need new provider assemblies (see above and `docs/PROVIDERS.md`), not app changes. |
-| Schema browser is tables-only | `TableSchema` carries a name, columns, PK and FK but no object kind (view/routine) or column types, so views, procedures and column types cannot be listed. Add `TableSchema.Kind`/column types and routines to the contract and provider first. |
+| Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but the SQL Server provider reads `sys.procedures` only. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
 | Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |

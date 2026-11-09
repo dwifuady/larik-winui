@@ -304,6 +304,61 @@ public sealed class EditorLanguageTests
         Assert.Null(table.Schema);
     }
 
+    // ------------------------------------------------------------------ routines
+
+    [Fact]
+    public void T_sql_expands_a_procedure_call_with_named_null_arguments()
+    {
+        var parameters = new[]
+        {
+            new RoutineParameter { Name = "@id", DataType = "int" },
+            new RoutineParameter { Name = "@name", DataType = "nvarchar(50)" },
+        };
+
+        var call = Tsql.RoutineCall("dbo", "find_user", parameters);
+
+        Assert.Equal("[dbo].[find_user] @id = NULL, @name = NULL", call.Text);
+        Assert.True(call.HasSelection);
+        Assert.Equal("NULL", call.Text.Substring(call.SelectionStart, call.SelectionLength));
+    }
+
+    [Fact]
+    public void T_sql_routine_without_parameters_is_just_the_quoted_name()
+    {
+        var call = Tsql.RoutineCall("dbo", "refresh_stats", []);
+
+        Assert.Equal("[dbo].[refresh_stats]", call.Text);
+        Assert.False(call.HasSelection);
+    }
+
+    [Fact]
+    public void T_sql_invocation_adds_exec()
+    {
+        var invocation = Tsql.RoutineInvocation("dbo", "p", [new RoutineParameter { Name = "@a" }]);
+
+        Assert.Equal("EXEC [dbo].[p] @a = NULL", invocation);
+    }
+
+    [Fact]
+    public void T_sql_preview_quotes_the_object_and_caps_the_rows()
+    {
+        Assert.Equal(
+            "SELECT TOP 100 * FROM [dbo].[Orders]",
+            Tsql.PreviewStatement("dbo", "Orders", 100));
+    }
+
+    [Fact]
+    public void Routine_and_column_details_default_to_the_pre_feature_contract()
+    {
+        var table = new TableSchema { Name = "users", Columns = ["id"] };
+        Assert.Equal(TableKind.Table, table.Kind);
+        Assert.Empty(table.ColumnDetails);
+
+        var routine = new RoutineSchema { Name = "p" };
+        Assert.Equal(RoutineKind.Procedure, routine.Kind);
+        Assert.Empty(routine.Parameters);
+    }
+
     private sealed class NoLanguageProvider : IDatabaseProvider
     {
         public string Id => "none";

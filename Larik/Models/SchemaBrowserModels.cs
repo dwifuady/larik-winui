@@ -8,12 +8,13 @@ using Windows.UI.Text;
 
 namespace Larik.Models;
 
-/// <summary>The kind of line in the schema browser: a group heading, a table or a column.</summary>
+/// <summary>The kind of line in the schema browser: a group heading, a table/view, a column or a routine.</summary>
 public enum SchemaRowKind
 {
     Group,
     Table,
     Column,
+    Routine,
 }
 
 /// <summary>Stable identity for a table, shared by the browser and its recent-object list.</summary>
@@ -24,10 +25,19 @@ public static class SchemaKeys
 
     public static string For(TableSchema table, string column) =>
         $"{For(table)}\u001F{column}";
+
+    public static string For(RoutineSchema routine) =>
+        $"{routine.Schema ?? string.Empty}\u001F{routine.Name}\u001Froutine";
 }
 
-/// <summary>What the user picked in the browser: a table, or one of its columns.</summary>
-public readonly record struct SchemaSelection(TableSchema Table, string? Column);
+/// <summary>
+/// What the user picked in the browser: a table/view, one of its columns, or a routine.
+/// Recents only track tables and views, so <see cref="Routine"/> is never stored.
+/// </summary>
+public readonly record struct SchemaSelection(TableSchema? Table, string? Column, RoutineSchema? Routine = null)
+{
+    public static SchemaSelection ForRoutine(RoutineSchema routine) => new(null, null, routine);
+}
 
 /// <summary>One line in the schema browser's flat list (group, table or column).</summary>
 public sealed partial class SchemaRow : ObservableObject
@@ -47,6 +57,8 @@ public sealed partial class SchemaRow : ObservableObject
 
     public string? Column { get; init; }
 
+    public RoutineSchema? Routine { get; init; }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HighlightBrush))]
     public partial bool IsSelected { get; set; }
@@ -65,7 +77,18 @@ public sealed partial class SchemaRow : ObservableObject
         ? (Brush)Application.Current.Resources["StudioTextMutedBrush"]
         : (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
 
-    public Visibility TableGlyphVisibility => Kind == SchemaRowKind.Table ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility TableGlyphVisibility =>
+        Kind == SchemaRowKind.Table && Table?.Kind != TableKind.View
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility ViewGlyphVisibility =>
+        Kind == SchemaRowKind.Table && Table?.Kind == TableKind.View
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility RoutineGlyphVisibility =>
+        Kind == SchemaRowKind.Routine ? Visibility.Visible : Visibility.Collapsed;
 
     public Visibility ColumnGlyphVisibility => Kind == SchemaRowKind.Column ? Visibility.Visible : Visibility.Collapsed;
 
@@ -75,14 +98,18 @@ public sealed partial class SchemaRow : ObservableObject
     public Brush? HighlightBrush => IsSelected ? SelectedBrush : null;
 }
 
-/// <summary>One column line in the table detail: name plus its key role.</summary>
+/// <summary>One column (or routine parameter) line in the detail: name, type and key role.</summary>
 public sealed class SchemaColumnRow
 {
     public required string Name { get; init; }
 
+    public string? DataType { get; init; }
+
     public string? Key { get; init; }
 
     public string? KeyTooltip { get; init; }
+
+    public Visibility TypeVisibility => string.IsNullOrWhiteSpace(DataType) ? Visibility.Collapsed : Visibility.Visible;
 
     public Visibility KeyVisibility => Key is null ? Visibility.Collapsed : Visibility.Visible;
 

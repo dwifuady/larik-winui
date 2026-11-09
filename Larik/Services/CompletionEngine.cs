@@ -20,6 +20,9 @@ public enum CompletionScope
 
     /// <summary>After USE: database names.</summary>
     Database,
+
+    /// <summary>After EXEC/EXECUTE/CALL: stored procedure names, expanded with their parameters.</summary>
+    Routine,
 }
 
 /// <summary>The table an UPDATE/INSERT writes, when the caret is in its column list.</summary>
@@ -48,6 +51,9 @@ public sealed record CompletionRequest(
     /// engine behaves exactly as before for providers without an editor language.
     /// </summary>
     public ISqlDialect? Dialect { get; init; }
+
+    /// <summary>Procedures the active database exposes; empty when the provider has none.</summary>
+    public IReadOnlyList<RoutineSchema> Routines { get; init; } = [];
 }
 
 /// <summary>
@@ -112,12 +118,27 @@ public static partial class CompletionEngine
     /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
     private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectTableContext = new();
 
+    /// <summary>The historical routine words, reproduced when a provider exposes no dialect.</summary>
+    private static readonly HashSet<string> RoutineContext = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "EXEC", "EXECUTE", "CALL",
+    };
+
+    private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectRoutineContext = new();
+
     private static HashSet<string> TableContextFor(ISqlDialect? dialect) =>
         dialect is null
             ? TableContext
             : DialectTableContext.GetValue(
                 dialect,
                 value => new HashSet<string>(value.TableContextKeywords, StringComparer.OrdinalIgnoreCase));
+
+    private static HashSet<string> RoutineContextFor(ISqlDialect? dialect) =>
+        dialect is null
+            ? RoutineContext
+            : DialectRoutineContext.GetValue(
+                dialect,
+                value => new HashSet<string>(value.RoutineContextKeywords, StringComparer.OrdinalIgnoreCase));
 
     private const int KeywordLimit = 8;
     private const int SchemaLimit = 500;
@@ -192,6 +213,7 @@ public static partial class CompletionEngine
     {
         caret = Math.Clamp(caret, 0, text.Length);
         var tableContext = TableContextFor(dialect);
+        var routineContext = RoutineContextFor(dialect);
 
         var (wordStart, _, _) = ExtractContext(text, caret);
         var start = StatementStart(text, caret);
@@ -233,6 +255,11 @@ public static partial class CompletionEngine
         if (words.Length > 1 && words[^1].Contains('.'))
         {
             var previous = words[^2].ToUpperInvariant();
+            if (routineContext.Contains(previous))
+            {
+                return (CompletionScope.Routine, previous);
+            }
+
             if (tableContext.Contains(previous))
             {
                 return (CompletionScope.Table, previous);
@@ -242,6 +269,16 @@ public static partial class CompletionEngine
             {
                 return (CompletionScope.Column, previous);
             }
+        }
+
+        if (routineContext.Contains(combined))
+        {
+            return (CompletionScope.Routine, combined);
+        }
+
+        if (routineContext.Contains(last))
+        {
+            return (CompletionScope.Routine, last);
         }
 
         if (tableContext.Contains(combined))
@@ -528,6 +565,13 @@ public static partial class CompletionEngine
 
         if (request.Qualifier is not null)
         {
+            // EXEC dbo. lists that schema's procedures; the qualifier is already typed.
+            if (request.Scope == CompletionScope.Routine)
+            {
+                AddRoutines(results, request, needle);
+                return Finish(results, int.MaxValue);
+            }
+
             // dbo. in a table position lists that schema's tables; the qualifier is already typed,
             // so the insert carries only the table name.
             if (request.Scope == CompletionScope.Table && MatchedSchema(request) is not null)
@@ -562,6 +606,10 @@ public static partial class CompletionEngine
         {
             case CompletionScope.Database:
                 AddDatabases(results, request.Databases, needle);
+                break;
+
+            case CompletionScope.Routine:
+                AddRoutines(results, request, needle);
                 break;
 
             case CompletionScope.Table:
@@ -612,7 +660,7 @@ public static partial class CompletionEngine
         // A table or database list is what these clauses are for: show them all, the popup scrolls.
         var max = request.Scope switch
         {
-            CompletionScope.Table or CompletionScope.Database => int.MaxValue,
+            CompletionScope.Table or CompletionScope.Database or CompletionScope.Routine => int.MaxValue,
             CompletionScope.Keyword => KeywordLimit,
             _ => SchemaLimit,
         };
@@ -819,7 +867,7 @@ public static partial class CompletionEngine
                 results.Add(new CompletionItem
                 {
                     Label = table.Name,
-                    Detail = $"{SchemaPrefix(table)}table · {table.Columns.Count} columns",
+                    Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
                     Kind = CompletionKind.Table,
                     InsertText = TableNameFor(table, quote, typedSchema),
                 });
@@ -839,7 +887,7 @@ public static partial class CompletionEngine
             results.Add(new CompletionItem
             {
                 Label = table.Name,
-                Detail = $"{SchemaPrefix(table)}table · AS {aliasText}",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · AS {aliasText}",
                 Kind = CompletionKind.Table,
                 InsertText = $"{TableNameFor(table, quote, typedSchema)} AS {aliasText}",
                 RankSort = 0,
@@ -848,7 +896,7 @@ public static partial class CompletionEngine
             results.Add(new CompletionItem
             {
                 Label = $"{table.Name} (no alias)",
-                Detail = $"{SchemaPrefix(table)}table · no alias",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · no alias",
                 Kind = CompletionKind.Table,
                 InsertText = TableNameFor(table, quote, typedSchema),
                 RankSort = 1,
@@ -864,12 +912,51 @@ public static partial class CompletionEngine
             results.Add(new CompletionItem
             {
                 Label = table.Name,
-                Detail = $"{SchemaPrefix(table)}table · {table.Columns.Count} columns",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
                 Kind = CompletionKind.Table,
                 InsertText = TableNameFor(table, quote, typedSchema: null),
             });
         }
     }
+
+    /// <summary>
+    /// Procedures in an EXEC/EXECUTE/CALL position. Accepting one expands the call with every
+    /// parameter set to NULL and selects the first value, so the user types over it instead of
+    /// remembering the signature. The call text itself belongs to the dialect.
+    /// </summary>
+    private static void AddRoutines(List<CompletionItem> results, CompletionRequest request, string needle)
+    {
+        var typedSchema = MatchedRoutineSchema(request);
+        var dialect = request.Dialect;
+
+        foreach (var routine in request.Routines
+                     .Where(routine => routine.Kind == RoutineKind.Procedure)
+                     .Where(routine => typedSchema is null
+                         || string.Equals(routine.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
+                     .Where(routine => Matches(routine.Name, needle)))
+        {
+            var call = dialect is null
+                ? new RoutineCallText(routine.Name)
+                : dialect.RoutineCall(typedSchema is null ? routine.Schema : null, routine.Name, routine.Parameters);
+
+            results.Add(new CompletionItem
+            {
+                Label = routine.Name,
+                Detail = $"{SchemaPrefix(routine.Schema)}proc · {ParameterSummary(routine.Parameters)}",
+                Kind = CompletionKind.Routine,
+                InsertText = call.Text,
+                Selection = call.HasSelection ? (call.SelectionStart, call.SelectionLength) : null,
+                RankSort = 0,
+            });
+        }
+    }
+
+    private static string ParameterSummary(IReadOnlyList<RoutineParameter> parameters) => parameters.Count switch
+    {
+        0 => "no params",
+        1 => "1 param",
+        _ => $"{parameters.Count} params",
+    };
 
     /// <summary>The schema typed before the dot in a table position, when it names a real schema.</summary>
     private static string? MatchedSchema(CompletionRequest request) =>
@@ -878,8 +965,20 @@ public static partial class CompletionEngine
             ? qualifier
             : null;
 
-    private static string SchemaPrefix(TableSchema table) =>
-        string.IsNullOrWhiteSpace(table.Schema) ? string.Empty : $"{table.Schema} · ";
+    /// <summary>The schema typed before the dot in a routine position.</summary>
+    private static string? MatchedRoutineSchema(CompletionRequest request) =>
+        request.Qualifier is { } qualifier && request.Routines.Any(routine =>
+            string.Equals(routine.Schema, qualifier, StringComparison.OrdinalIgnoreCase))
+            ? qualifier
+            : null;
+
+    private static string SchemaPrefix(TableSchema table) => SchemaPrefix(table.Schema);
+
+    private static string ObjectKindLabel(TableSchema table) =>
+        table.Kind == TableKind.View ? "view" : "table";
+
+    private static string SchemaPrefix(string? schema) =>
+        string.IsNullOrWhiteSpace(schema) ? string.Empty : $"{schema} · ";
 
     /// <summary><c>[dbo].[Orders]</c>, or just <c>[Orders]</c> when the schema was already typed.</summary>
     private static string TableNameFor(TableSchema table, Func<string, string>? quote, string? typedSchema)

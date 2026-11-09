@@ -20,15 +20,16 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
 | `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`. |
-| `TableSchema` / `ForeignKeySchema` | Table name, optional `Schema`, columns, primary key, foreign keys (with `ReferencedSchema`). |
+| `TableSchema` / `ForeignKeySchema` | Table or view name, optional `Schema`, `Kind` (`Table`/`View`), columns, `ColumnDetails` (types), primary key, foreign keys (with `ReferencedSchema`). |
+| `RoutineSchema` / `RoutineParameter` | Stored procedure or function: optional `Schema`, `Kind`, ordered parameters with type/output/default. |
 | `QueryExecutionOptions` | `MaxRows` with a 5,000 default / 100,000 ceiling. |
 | `SessionTransactionState` | `TransactionCount`, `XactState`, `HasTransaction`, `IsDoomed`, `CanCommit`, `CanRollback`. |
 | `IEditorLanguage` | `Id`, `Tokenize`, `Split`, `SplitBatches`, `StatementAt`. Non-SQL engines implement this. |
-| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `QuoteIdentifier`. |
+| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `RoutineContextKeywords`, `RoutineCall`, `RoutineInvocation`, `PreviewStatement`, `QuoteIdentifier`. |
 | `SqlLanguage` / `SqlLanguageOptions` | Reusable SQL lexer/splitter; provider assemblies subclass it. |
 
 `IDatabaseConnection` already uses default interface members for the row-cap overload,
@@ -83,8 +84,10 @@ Therefore:
    the record body instead (`ForeignKeySchema.ReferencedSchema` follows this rule; the four-argument
    constructor is unchanged).
 4. **New metadata is optional and nullable.** `QueryResult.GeneratedQuery`, `TableSchema.Schema` and
-   `ForeignKeySchema.ReferencedSchema` are all null for existing providers, and nothing is persisted
-   in a new format.
+   `ForeignKeySchema.ReferencedSchema` are all null for existing providers; `TableSchema.Kind`
+   defaults to `Table`, `ColumnDetails`/`Routines`/`Parameters` default to empty, and
+   `GetRoutinesAsync` returns `[]`, so an older provider behaves exactly as before and nothing is
+   persisted in a new format.
 5. **Prefer string tags over contract enums** for open sets. `StatementSpan.Language` is a string so
    a future MongoDB language can tag spans `"shell"`, `"line"`, `"sql"` without a contract change.
 
@@ -258,7 +261,12 @@ new TableSchema
 {
     Name = "users",
     Schema = "public",                 // optional; null for engines without schemas
+    Kind = TableKind.View,             // optional; defaults to Table
     Columns = [...],
+    ColumnDetails =                    // optional; names alone still work
+    [
+        new TableColumn { Name = "id", DataType = "bigint", IsNullable = false },
+    ],
     PrimaryKey = [...],
     ForeignKeys =
     [
@@ -268,17 +276,40 @@ new TableSchema
         },
     ],
 };
+
+new RoutineSchema
+{
+    Name = "refresh_stats",
+    Schema = "public",
+    Kind = RoutineKind.Procedure,
+    Parameters =
+    [
+        new RoutineParameter { Name = "p_schema", DataType = "text" },
+    ],
+};
 ```
 
 Completion matches a reference either bare or schema-qualified (`[dbo].[users]`, `public.users`)
 against `Schema` + `Name`, and inserts a schema-qualified name in the dialect's quoting
 (`[dbo].[users] AS [u]` for T-SQL). A schema typed before the dot (`FROM public.`) narrows the list
 and is not repeated in the insert. A provider that reports no `Schema` keeps the bare name, so this
-is additive for engines without schemas.
+is additive for engines without schemas. Views use the same `TableSchema` shape with `Kind = View`;
+completion and the browser treat them like read-only tables.
 
-The shell's schema browser reads the same list: base tables with their columns and key metadata.
-Object kind (view/routine) and column data types are not part of `TableSchema` yet, so they cannot
-be browsed — add optional members and introspection when a provider needs them.
+The shell's schema browser lists tables, views and routines from these two calls. It draws no
+engine-specific icons or columns: `Kind` chooses the view icon, `ColumnDetails` fills the type
+column, and `RoutineSchema.Parameters` fills a procedure's detail. Return `[]` from
+`GetRoutinesAsync` (the default) when the engine has no routines or the login cannot read them.
+
+Routine syntax belongs to the dialect. After a `RoutineContextKeywords` word (`EXEC` for T-SQL,
+`CALL` for PostgreSQL), completion offers procedures and calls `ISqlDialect.RoutineCall`, which
+returns the insert text plus the span of the first argument value to select. The default renders
+only the quoted name; T-SQL overrides it with named arguments
+(`[dbo].[p] @a = NULL, @b = NULL`), and PostgreSQL should override it with positional `NULL`s.
+`RoutineInvocation` prefixes the first keyword for the schema browser's Enter action.
+`PreviewStatement` is the third dialect hook: the shell asks for a table or view's first rows
+instead of hard-coding `SELECT TOP`, so PostgreSQL can answer with `LIMIT` and a provider without a
+row-limit clause falls back to plain `SELECT`.
 
 ---
 
@@ -344,8 +375,12 @@ manifest, unload) only when third-party plugins are actually expected.
    - one physical connection **per database** (Postgres cannot switch database on a live
      connection), or a pool keyed by database; `ExecuteAsync(sql, database, ...)` selects it;
    - `GetDatabasesAsync` from `pg_database`;
-   - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema` and
-     `ForeignKeySchema.ReferencedSchema`;
+   - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema`,
+     `TableSchema.Kind` (base table vs view), `ColumnDetails` from `format_type(a.atttypid,
+     a.atttypmod)`, and `ForeignKeySchema.ReferencedSchema`;
+   - `GetRoutinesAsync` from `information_schema.routines` (`routine_type` maps to
+     `Procedure`/`Function`) and `information_schema.parameters` (or `pg_proc.proargtypes` for
+     unnamed arguments), ordered by `ordinal_position`;
    - row caps and cancellation;
    - `ExecuteBatchAsync` may split on `;` only outside strings/comments/dollar quotes;
    - transactions: `SupportsTransactions => true`, `GetTransactionStateAsync` mapping
@@ -353,7 +388,11 @@ manifest, unload) only when third-party plugins are actually expected.
      per-database connection. Remember the shell refreshes state after every batch, including a
      failed one.
 4. `PostgresDialect : SqlLanguage, ISqlDialect` — keywords, functions, `"` quoting, no `GO`, no
-   `@` variables. Add dollar-quote support to `SqlLanguageOptions` when you get there.
+   `@` variables. `RoutineContextKeywords` should be `CALL` (procedures), and `RoutineCall` should
+   render positional arguments (`"public"."refresh_stats"(NULL, NULL)`, or `CALL ...` for a
+   procedure); scalar functions used in expressions are a later completion scope. Override
+   `PreviewStatement` with `SELECT * FROM <name> LIMIT n`. Add dollar-quote
+   support to `SqlLanguageOptions` when you get there.
 5. Register in `Larik/App.xaml.cs` (`typeof(PostgresProvider).Assembly`) and reference the project
    from `Larik.csproj`. No shell/editor changes.
 6. Add contract tests: split/token cases, schema mapping, execution/row-cap against a real server.
@@ -419,6 +458,9 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] `ExecuteBatchAsync` returns one result per result set.
 - [ ] `GetSchemaAsync` returns columns, primary keys and foreign keys; populate `Schema` when the
       engine has schemas.
+- [ ] Views report `Kind = View`; populate `ColumnDetails` when the engine exposes types.
+- [ ] Procedures/functions (if any) come from `GetRoutinesAsync` with ordered parameters; returning
+      `[]` is a valid choice that simply hides routine completion.
 - [ ] `EditorLanguage` reuses `SqlLanguage` for SQL engines; no SQL assumptions for non-SQL engines.
 - [ ] Splitting handles strings, quoted identifiers, comments and the engine's terminator.
 - [ ] Tests: token/split golden cases, caret semantics, schema mapping, row cap.

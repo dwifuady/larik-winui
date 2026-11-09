@@ -18,9 +18,10 @@ public partial class StudioViewModel : ObservableObject
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _archiveTimer;
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
+    private IReadOnlyList<RoutineSchema> _routines = [];
 
     // Schemas are per database; keeping them makes switching tabs back to a database instant.
-    private readonly Dictionary<string, IReadOnlyList<TableSchema>> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SchemaSnapshot> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
 
     public StudioViewModel()
     {
@@ -197,6 +198,9 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
     public IReadOnlyList<TableSchema> Tables => _schema;
+
+    /// <summary>Procedures of the active database, used after EXEC and by the schema browser.</summary>
+    public IReadOnlyList<RoutineSchema> Routines => _routines;
 
     public QueryResult? LastResult { get; private set; }
 
@@ -1731,8 +1735,7 @@ public partial class StudioViewModel : ObservableObject
         var key = SchemaKey(space, database);
         if (_schemaCache.TryGetValue(key, out var cached))
         {
-            _schema = cached;
-            OnPropertyChanged(nameof(Tables));
+            ApplySchema(cached);
             return;
         }
 
@@ -1741,14 +1744,27 @@ public partial class StudioViewModel : ObservableObject
         try
         {
             var schema = await tab.Session.GetSchemaAsync(database, _lifetime.Token);
-            _schemaCache[key] = schema;
+
+            // Routine metadata is an enhancement: a provider that cannot read it must not cost
+            // the user table/browser completion for the database.
+            IReadOnlyList<RoutineSchema> routines;
+            try
+            {
+                routines = await tab.Session.GetRoutinesAsync(database, _lifetime.Token);
+            }
+            catch
+            {
+                routines = [];
+            }
+
+            var snapshot = new SchemaSnapshot(schema, routines);
+            _schemaCache[key] = snapshot;
 
             if (ReferenceEquals(space, ActiveSpace)
                 && ReferenceEquals(tab, ActiveTab)
                 && string.Equals(DatabaseNameFor(space, tab), database, StringComparison.OrdinalIgnoreCase))
             {
-                _schema = schema;
-                OnPropertyChanged(nameof(Tables));
+                ApplySchema(snapshot);
             }
         }
         catch
@@ -1769,8 +1785,23 @@ public partial class StudioViewModel : ObservableObject
     private void ClearSchema()
     {
         _schema = [];
+        _routines = [];
         OnPropertyChanged(nameof(Tables));
+        OnPropertyChanged(nameof(Routines));
     }
+
+    private void ApplySchema(SchemaSnapshot snapshot)
+    {
+        _schema = snapshot.Tables;
+        _routines = snapshot.Routines;
+        OnPropertyChanged(nameof(Tables));
+        OnPropertyChanged(nameof(Routines));
+    }
+
+    /// <summary>What one database contributes to completion and browsing, cached together.</summary>
+    private sealed record SchemaSnapshot(
+        IReadOnlyList<TableSchema> Tables,
+        IReadOnlyList<RoutineSchema> Routines);
 
     /// <summary>Sets the space's active database without touching the active tab.</summary>
     private void ApplyDatabase(DatabaseViewModel? database)

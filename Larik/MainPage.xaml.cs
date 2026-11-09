@@ -72,6 +72,7 @@ public sealed partial class MainPage : Page
         _completionSource = new StudioCompletionSource(
             () => ViewModel.Snippets,
             () => ViewModel.Tables,
+            () => ViewModel.Routines,
             () =>
             {
                 var space = ViewModel.ActiveSpace;
@@ -183,11 +184,11 @@ public sealed partial class MainPage : Page
     {
         var database = ViewModel.ActiveSpace?.ActiveDatabase?.Name ?? ViewModel.ActiveTab?.Database;
         var recents = RecentsForActiveSpace();
-        SchemaPeek.Show(ViewModel.Tables, database, recents);
+        SchemaPeek.Show(ViewModel.Tables, ViewModel.Routines, database, recents);
 
         if (_schemaPinned)
         {
-            SchemaPinned.Show(ViewModel.Tables, database, recents);
+            SchemaPinned.Show(ViewModel.Tables, ViewModel.Routines, database, recents);
         }
     }
 
@@ -212,9 +213,22 @@ public sealed partial class MainPage : Page
 
     private void InsertSchemaObject(SchemaSelection selection, bool closePeek)
     {
-        var text = selection.Column ?? QualifiedTableName(selection.Table);
+        string text;
+        if (selection.Routine is { } routine)
+        {
+            text = RoutineInvocation(routine);
+        }
+        else if (selection.Table is { } table)
+        {
+            text = selection.Column ?? QualifiedTableName(table);
+            RememberSchemaObject(table);
+        }
+        else
+        {
+            return;
+        }
+
         SqlEditor.InsertText(text);
-        RememberSchemaObject(selection.Table);
         ViewModel.StatusText = $"Inserted {text}";
 
         if (closePeek)
@@ -229,8 +243,13 @@ public sealed partial class MainPage : Page
 
     private async Task PreviewSchemaObjectAsync(SchemaSelection selection, bool closePeek)
     {
-        var name = QualifiedTableName(selection.Table);
-        RememberSchemaObject(selection.Table);
+        if (selection.Table is not { } table)
+        {
+            return;
+        }
+
+        var name = QualifiedTableName(table);
+        RememberSchemaObject(table);
 
         if (closePeek)
         {
@@ -242,7 +261,23 @@ public sealed partial class MainPage : Page
         }
 
         ViewModel.StatusText = $"Previewing {name} · top 100";
-        await ViewModel.RunSqlAsync($"SELECT TOP 100 * FROM {name};", append: true);
+        var statement = ViewModel.ActiveLanguage is ISqlDialect dialect
+            ? dialect.PreviewStatement(table.Schema, table.Name, 100)
+            : $"SELECT * FROM {name}";
+        await ViewModel.RunSqlAsync($"{statement};", append: true);
+    }
+
+    /// <summary>A complete procedure call in the active dialect, parameters filled with NULL.</summary>
+    private string RoutineInvocation(RoutineSchema routine)
+    {
+        if (ViewModel.ActiveLanguage is ISqlDialect dialect)
+        {
+            return dialect.RoutineInvocation(routine.Schema, routine.Name, routine.Parameters);
+        }
+
+        return string.IsNullOrWhiteSpace(routine.Schema)
+            ? routine.Name
+            : $"{routine.Schema}.{routine.Name}";
     }
 
     /// <summary>The name inserted into the editor, quoted the way the active dialect requires.</summary>
@@ -297,7 +332,7 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(StudioViewModel.Tables))
+        if (e.PropertyName is nameof(StudioViewModel.Tables) or nameof(StudioViewModel.Routines))
         {
             if (SchemaPeekHost.Visibility == Visibility.Visible || _schemaPinned)
             {

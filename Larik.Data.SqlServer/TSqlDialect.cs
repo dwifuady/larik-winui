@@ -1,3 +1,4 @@
+using System.Text;
 using Larik.Data;
 
 namespace Larik.Data.SqlServer;
@@ -69,5 +70,56 @@ public sealed class TSqlDialect : SqlLanguage, ISqlDialect
 
     public IReadOnlyList<string> TableContextKeywords => CompletionTableContext;
 
+    /// <summary>T-SQL calls a procedure with EXEC; CALL is not valid here.</summary>
+    public IReadOnlyList<string> RoutineContextKeywords => ["EXEC", "EXECUTE"];
+
+    /// <summary>
+    /// <c>[dbo].[p] @a = NULL, @b = NULL</c>. Positional syntax is rarer and breaks when a
+    /// procedure gains a parameter; named arguments stay valid and read like SSMS scripts.
+    /// The first value is returned as the selection so the user types over it immediately.
+    /// </summary>
+    public RoutineCallText RoutineCall(string? schema, string name, IReadOnlyList<RoutineParameter> parameters)
+    {
+        var qualified = QualifiedName(schema, name);
+
+        if (parameters.Count == 0)
+        {
+            return new RoutineCallText(qualified);
+        }
+
+        var builder = new StringBuilder(qualified);
+        var firstNull = -1;
+        var first = true;
+
+        foreach (var parameter in parameters)
+        {
+            builder.Append(first ? " " : ", ").Append(parameter.Name).Append(" = ");
+            first = false;
+
+            var nullAt = builder.Length;
+            builder.Append("NULL");
+
+            if (firstNull < 0 && !parameter.IsOutput)
+            {
+                firstNull = nullAt;
+            }
+        }
+
+        var text = builder.ToString();
+
+        return firstNull < 0
+            ? new RoutineCallText(text)
+            : new RoutineCallText(text, firstNull, "NULL".Length);
+    }
+
+    /// <summary><c>SELECT TOP 100 * FROM [dbo].[Orders]</c>; the schema browser's preview.</summary>
+    public string PreviewStatement(string? schema, string name, int limit) =>
+        $"SELECT TOP {Math.Max(1, limit)} * FROM {QualifiedName(schema, name)}";
+
     public string QuoteIdentifier(string name) => $"[{name.Replace("]", "]]")}]";
+
+    private string QualifiedName(string? schema, string name) =>
+        string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(name)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}";
 }

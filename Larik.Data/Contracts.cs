@@ -173,7 +173,29 @@ public sealed record ForeignKeySchema(
     public string? ReferencedSchema { get; init; }
 }
 
-/// <summary>Tables and columns, used to feed completion after a connection opens.</summary>
+/// <summary>What a <see cref="TableSchema"/> describes. Views browse and complete like tables.</summary>
+public enum TableKind
+{
+    Table,
+    View,
+}
+
+/// <summary>
+/// A column with the engine-reported data type. Types are optional: a provider that cannot report
+/// them leaves them null and the browser falls back to the name-only list.
+/// </summary>
+public sealed class TableColumn
+{
+    public required string Name { get; init; }
+
+    /// <summary>Type as written in DDL, e.g. <c>nvarchar(120)</c>, <c>numeric(18,2)</c>, <c>int</c>.</summary>
+    public string? DataType { get; init; }
+
+    /// <summary>Null when the provider cannot tell.</summary>
+    public bool? IsNullable { get; init; }
+}
+
+/// <summary>Tables, views and columns, used to feed completion and the schema browser.</summary>
 public sealed class TableSchema
 {
     public required string Name { get; init; }
@@ -188,6 +210,53 @@ public sealed class TableSchema
 
     /// <summary>Foreign keys declared on this table, used to suggest join conditions.</summary>
     public IReadOnlyList<ForeignKeySchema> ForeignKeys { get; init; } = [];
+
+    /// <summary>
+    /// Base table or view. Defaults to a table, so a provider written before this member existed
+    /// keeps browsing and completing exactly as before.
+    /// </summary>
+    public TableKind Kind { get; init; } = TableKind.Table;
+
+    /// <summary>
+    /// Columns with their types, when the provider can report them. <see cref="Columns"/> stays the
+    /// name-only projection completion and older code use.
+    /// </summary>
+    public IReadOnlyList<TableColumn> ColumnDetails { get; init; } = [];
+}
+
+/// <summary>The kind of stored routine a <see cref="RoutineSchema"/> describes.</summary>
+public enum RoutineKind
+{
+    Procedure,
+    Function,
+}
+
+/// <summary>One routine parameter as the engine stores it.</summary>
+public sealed class RoutineParameter
+{
+    /// <summary>Name including the engine's prefix, e.g. <c>@id</c> for T-SQL or <c>p_id</c> for PostgreSQL.</summary>
+    public required string Name { get; init; }
+
+    public string? DataType { get; init; }
+
+    public bool IsOutput { get; init; }
+
+    public bool HasDefault { get; init; }
+}
+
+/// <summary>
+/// A stored procedure or function: what completion offers after EXEC/CALL and what the schema
+/// browser lists. Parameters are ordered as the engine defines them.
+/// </summary>
+public sealed class RoutineSchema
+{
+    public required string Name { get; init; }
+
+    public string? Schema { get; init; }
+
+    public RoutineKind Kind { get; init; } = RoutineKind.Procedure;
+
+    public IReadOnlyList<RoutineParameter> Parameters { get; init; } = [];
 }
 
 /// <summary>
@@ -273,6 +342,14 @@ public interface IDatabaseConnection : IAsyncDisposable
         [await ExecuteAsync(sql, database, options, cancellationToken)];
 
     Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stored procedures and functions for completion and the schema browser. Optional: the default
+    /// returns nothing, so a provider that cannot enumerate routines keeps working. Kept separate
+    /// from <see cref="GetSchemaAsync"/> so browsing tables never waits on routine metadata.
+    /// </summary>
+    Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(string? database, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RoutineSchema>>([]);
 
     /// <summary>
     /// True when the provider can report and finish transactions the user started in SQL.

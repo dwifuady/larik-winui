@@ -13,6 +13,7 @@ namespace Larik.Services;
 public sealed class StudioCompletionSource(
     Func<IReadOnlyList<SnippetDef>> snippets,
     Func<IReadOnlyList<Data.TableSchema>> tables,
+    Func<IReadOnlyList<Data.RoutineSchema>> routines,
     Func<IReadOnlyList<string>> databases) : IEditorCompletionSource
 {
     public IReadOnlyList<CompletionItem> GetCompletions(CompletionQuery query)
@@ -40,6 +41,7 @@ public sealed class StudioCompletionSource(
             Clipboard: string.Empty)
         {
             Dialect = dialect,
+            Routines = routines(),
         });
     }
 }

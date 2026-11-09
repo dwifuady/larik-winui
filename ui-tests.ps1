@@ -881,6 +881,54 @@ try {
         Assert-True ((Find-Element 'Search schema').matchCount -eq 0) 'the schema peek stayed open after inserting'
     }
 
+    Test-UI 'completion suggests views and executes a procedure with its parameters' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from autoadmin_backup_configurations' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'autoadmin_backup_configurations').matchCount -gt 0) 'views are not suggested in FROM'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[autoadmin_backup_configurations] AS [abc]') "view insert was '$((Get-EditorText))'"
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'exec autoadmin_metadata_query_dbs' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'autoadmin_metadata_query_dbs').matchCount -gt 0) 'procedures are not suggested after EXEC'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'exec [dbo].[autoadmin_metadata_query_dbs] @task_agent_guid = NULL, @schema_version = NULL, @db_name = NULL') "procedure insert was '$((Get-EditorText))'"
+
+        # Accepting the signature selects the first NULL; typing over it proves the placeholder.
+        Send-Keys '1'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -like '*@task_agent_guid = 1,*') "the first parameter was not selected: '$((Get-EditorText))'"
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 200
+    }
+
+    Test-UI 'the schema browser lists a view and inserts a procedure call' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'autoadmin_backup_configurations' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'autoadmin_backup_configurations').matchCount -gt 0) 'schema search did not find the view'
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq '[dbo].[autoadmin_backup_configurations]') "view insert was '$((Get-EditorText))'"
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'autoadmin_metadata_query_dbs' -Literal
+        Start-Sleep -Milliseconds 900
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'EXEC [dbo].[autoadmin_metadata_query_dbs] @task_agent_guid = NULL, @schema_version = NULL, @db_name = NULL') "procedure insert was '$((Get-EditorText))'"
+    }
+
     Test-UI 'the schema peek can be pinned beside the editor' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+k'

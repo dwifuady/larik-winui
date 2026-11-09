@@ -101,6 +101,23 @@ public sealed class QuerySession
         }
     }
 
+    /// <summary>Routines for the tab's database, on the same session as its schema and queries.</summary>
+    public async Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(
+        string? database,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var session = await EnsureOpenCoreAsync(cancellationToken);
+            return await session.GetRoutinesAsync(database, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>
     /// The database the session actually uses, when the provider can tell. A <c>USE</c> inside a
     /// script changes it; the shell adopts the answer so the next run does not switch back.
