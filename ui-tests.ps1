@@ -254,6 +254,16 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
+# Result-tab titles repeat ("Messages"), so click the rightmost visible ListItem with that title.
+function Click-NewestResultTab {
+    param([string]$Title)
+    Focus-App
+    $tabs = @((Find-Element $Title).matches) |
+        Where-Object { $_.type -eq 'ListItem' -and $_.width -gt 0 -and $_.height -gt 0 } |
+        Sort-Object x
+    if ($tabs.Count -eq 0) { throw "No result tab '$Title' found." }
+    Invoke-Ui @('click', $tabs[-1].selector) -Attempts 4 | Out-Null
+}
 function Right-Click-Element {
     param([string]$Selector)
     Focus-App
@@ -889,8 +899,32 @@ try {
         Send-Keys 'ctrl+a'
         Send-Keys "print 'larik message test';" -Literal
         Send-Keys 'f5'
-        Wait-ForText 'Messages' 30
-        Assert-True ((Find-Element 'larik message test').matchCount -gt 0) 'PRINT output is missing from the Messages tab'
+        Start-Sleep -Milliseconds 1500
+        Click-NewestResultTab 'Messages'
+        Wait-ForText 'larik message test' 20
+        Assert-True ((Find-Element 'Messages').matchCount -gt 0) 'PRINT did not open a Messages tab'
+    }
+
+    Test-UI 'switching back from Messages hides the message text over the rows' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "print 'larik behind rows';" -Literal
+        Send-Keys 'f5'
+        Start-Sleep -Milliseconds 1500
+        Click-NewestResultTab 'Messages'
+        Wait-ForText 'larik behind rows' 20
+
+        # Running a row query replaces the active Messages result. The message panel must clear
+        # instead of staying painted over the grid.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 1 as alpha;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'alpha' 30
+        Start-Sleep -Milliseconds 500
+
+        Assert-True ((Find-Element 'larik behind rows').matchCount -eq 0) 'the message text is still visible over the result rows'
+        Assert-True ((Find-Element 'alpha').matchCount -gt 0) 'the result rows did not render after Messages'
     }
 
     Test-UI 'Ctrl+B collapses and restores the sidebar' {

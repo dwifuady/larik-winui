@@ -117,6 +117,10 @@ public sealed partial class ResultsGrid : UserControl
         SaveViewState();
         HideCellPreview();
 
+        // The messages panel shares the row area with the grid. A previous Messages tab can leave
+        // it visible, and its selectable text would then sit over the next tab's rows.
+        MessagesScroll.Visibility = Visibility.Collapsed;
+
         _accentHex = accentHex;
         UpdateAccentBrushes();
 
