@@ -18,6 +18,9 @@ public enum EditorCommandKind
     NewTab,
     ToggleSidebar,
 
+    /// <summary>Toggle the results pane (Ctrl+R).</summary>
+    ToggleResults,
+
     /// <summary>Open the schema peek (Ctrl+K).</summary>
     BrowseSchema,
 }

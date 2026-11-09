@@ -326,8 +326,8 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
   tabs, their SQL, pins, archive history and snippet edits survive a restart, as does the **window
-  rectangle** (stored under `app_state` as DIPs, never the maximized size), so the next launch opens
-  where you left it. WAL mode, foreign keys
+  rectangle** (stored under `app_state` as DIPs, never the maximized size) and the **results-pane
+  height / cell-preview width**, so the next launch opens where you left it. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
   columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
@@ -340,8 +340,11 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   packaged (MSIX) build's writes into
   `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\Larik WinUI` — standard MSIX
   AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
-- **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
-  tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
+- **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
+  reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
+  the pane, and running a query while it is hidden opens it again. A batch (or a
+  statement returning several result sets) opens one result tab per result, DBeaver-style.
+  Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
   query tab. **Drag a result tab to reorder it** within the query tab; the active result stays
   active and the remaining tabs renumber. Each grid is virtualized — a `ListView` realizes only

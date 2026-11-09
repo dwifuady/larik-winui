@@ -134,6 +134,7 @@
         <KeyboardAccelerator Key="T" Modifiers="Control" Invoked="NewTabAccelerator_Invoked" />
         <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="ToggleSidebarAccelerator_Invoked" />
         <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="SchemaAccelerator_Invoked" />
+        <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="ToggleResultsAccelerator_Invoked" />
     </Page.KeyboardAccelerators>
 
     <Grid x:Name="Root">
@@ -584,9 +585,9 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition x:Name="EditorRow" Height="2*" />
+                <RowDefinition x:Name="EditorRow" Height="*" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition x:Name="ResultsRow" Height="*" />
+                <RowDefinition x:Name="ResultsRow" Height="0" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
@@ -709,7 +710,8 @@
                 Background="Transparent"
                 PointerMoved="Splitter_PointerMoved"
                 PointerPressed="Splitter_PointerPressed"
-                PointerReleased="Splitter_PointerReleased">
+                PointerReleased="Splitter_PointerReleased"
+                Visibility="Collapsed">
                 <Border
                     Height="1"
                     VerticalAlignment="Center"
@@ -722,7 +724,8 @@
                 x:Name="ResultsPane"
                 Grid.Row="4"
                 Margin="12,0,12,0"
-                RowSpacing="6">
+                RowSpacing="6"
+                Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />

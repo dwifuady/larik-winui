@@ -73,6 +73,7 @@ public sealed partial class ResultsGrid : UserControl
     private bool _resizingPreview;
     private double _previewResizeStartX;
     private double _previewResizeStartWidth;
+    private double _desiredPreviewWidth = 340;
     private PreviewMode _previewMode = PreviewMode.Value;
     private CancellationTokenSource? _referenceCancellation;
     private Brush _referenceMatchBrush = null!;
@@ -100,6 +101,9 @@ public sealed partial class ResultsGrid : UserControl
         public int FocusRow { get; set; }
 
         public int FocusColumn { get; set; }
+
+        /// <summary>Whether the cell preview was open for this result; state is per result/tab.</summary>
+        public bool PreviewRequested { get; set; }
     }
 
     public ResultsGrid()
@@ -116,10 +120,39 @@ public sealed partial class ResultsGrid : UserControl
             UIElement.PointerPressedEvent,
             new PointerEventHandler(RowsList_PointerPressed),
             handledEventsToo: true);
+
+        // The results pane can start collapsed, when ActualWidth is still 0. Apply the stored
+        // preview width once the control has real space, and re-clamp it when the window changes.
+        Loaded += (_, _) => ApplyPreviewWidth();
+        SizeChanged += (_, _) => ApplyPreviewWidth();
+    }
+
+    private void ApplyPreviewWidth()
+    {
+        if (ActualWidth <= 0)
+        {
+            return;
+        }
+
+        CellPreview.Width = Math.Clamp(_desiredPreviewWidth, MinPreviewWidth, MaxPreviewWidthForControl());
     }
 
     /// <summary>Raised after a copy so the shell can report it in the status bar.</summary>
     public event EventHandler<string>? StatusChanged;
+
+    /// <summary>Raised when the user finishes dragging the preview's width.</summary>
+    public event EventHandler<double>? PreviewWidthChanged;
+
+    /// <summary>The preview pane's width; persisted by the shell across launches.</summary>
+    public double PreviewWidth
+    {
+        get => _desiredPreviewWidth;
+        set
+        {
+            _desiredPreviewWidth = value;
+            ApplyPreviewWidth();
+        }
+    }
 
     /// <summary>
     /// Resolves foreign-key references for the current result. Null disables Shift+Space reference
@@ -184,8 +217,9 @@ public sealed partial class ResultsGrid : UserControl
         UpdateSelectionVisuals();
         RestoreViewState(state, result);
 
-        // The preview is an inspector, not a per-result dialog: once opened it stays open across
-        // result and query tab switches, showing whatever cell is active in the new context.
+        // The preview remembers its open state per result, not globally: switching to a tab or
+        // result that never opened it must not inherit another tab's inspector.
+        _previewRequested = state.PreviewRequested;
         if (_previewRequested && _hasSelection)
         {
             ShowCellPreview(_focusRow, _focusColumn, _previewMode);
@@ -195,6 +229,7 @@ public sealed partial class ResultsGrid : UserControl
     private void Clear()
     {
         HideCellPreview();
+        _previewRequested = false;
         _result = null;
         _layout = null;
         _rows = [];
@@ -1241,6 +1276,7 @@ public sealed partial class ResultsGrid : UserControl
             _previewResizeStartWidth - (x - _previewResizeStartX),
             MinPreviewWidth,
             MaxPreviewWidthForControl());
+        _desiredPreviewWidth = CellPreview.Width;
         e.Handled = true;
     }
 
@@ -1253,6 +1289,7 @@ public sealed partial class ResultsGrid : UserControl
 
         _resizingPreview = false;
         PreviewResizeHandle.ReleasePointerCapture(e.Pointer);
+        PreviewWidthChanged?.Invoke(this, CellPreview.Width);
         e.Handled = true;
     }
 
@@ -1408,6 +1445,7 @@ public sealed partial class ResultsGrid : UserControl
         state.AnchorColumn = _anchorColumn;
         state.FocusRow = _focusRow;
         state.FocusColumn = _focusColumn;
+        state.PreviewRequested = _previewRequested;
     }
 
     private void RestoreViewState(ResultViewState state, QueryResult result)

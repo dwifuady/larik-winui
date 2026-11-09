@@ -41,6 +41,10 @@ public sealed partial class MainPage : Page
     private double _splitStartY;
     private double _splitStartHeight;
     private double _splitTotalHeight;
+    private double _splitResultsHeight;
+    private bool _resultsVisible;
+    private Storyboard? _resultsSlide;
+    private const double DefaultResultsPaneHeight = 320;
 
     private bool _newTabPaletteOpen;
     private List<string> _paletteDatabases = [];
@@ -100,6 +104,8 @@ public sealed partial class MainPage : Page
         SchemaPinned.Activated += (_, selection) => InsertSchemaObject(selection, closePeek: false);
         SchemaPinned.PreviewRequested += (_, selection) => _ = PreviewSchemaObjectAsync(selection, closePeek: false);
         SchemaPinned.StatusRequested += (_, message) => ViewModel.StatusText = message;
+
+        ResultsGrid.PreviewWidthChanged += (_, width) => ViewModel.SetCellPreviewWidth(width);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -125,6 +131,7 @@ public sealed partial class MainPage : Page
         // The caption lives inside the content column (the rail runs full height), so the page owns the drag region.
         App.Window.SetTitleBar(AppTitleBar);
 
+        ResultsGrid.PreviewWidth = ViewModel.CellPreviewWidth ?? 340;
         SyncEditorFromActiveTab();
         RenderResults();
         SqlEditor.FocusEditor();
@@ -142,6 +149,12 @@ public sealed partial class MainPage : Page
     {
         args.Handled = true;
         OpenSchemaPeek();
+    }
+
+    private void ToggleResultsAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ToggleResultsPane();
     }
 
     private void BrowseSchema_Click(object sender, RoutedEventArgs e) => OpenSchemaPeek();
@@ -507,6 +520,9 @@ public sealed partial class MainPage : Page
             case EditorCommandKind.ToggleSidebar:
                 ViewModel.ToggleSidebarCommand.Execute(null);
                 break;
+            case EditorCommandKind.ToggleResults:
+                ToggleResultsPane();
+                break;
             case EditorCommandKind.BrowseSchema:
                 OpenSchemaPeek();
                 break;
@@ -524,6 +540,8 @@ public sealed partial class MainPage : Page
     {
         var text = SqlEditor.Text;
         var selection = SqlEditor.Selection;
+
+        ShowResultsPane();
 
         IReadOnlyList<string> batches;
         if (!selection.IsEmpty)
@@ -1637,12 +1655,115 @@ public sealed partial class MainPage : Page
 
     // ---------------------------------------------------------------- splitter
 
+    /// <summary>
+    /// Reveals the results pane on the first run of a session. The saved height is reused; the
+    /// pane slides up from below so the editor's loss of space is visible rather than a jump.
+    /// </summary>
+    private void ShowResultsPane()
+    {
+        if (_resultsVisible)
+        {
+            return;
+        }
+
+        _resultsVisible = true;
+        ResultsPane.Visibility = Visibility.Visible;
+        Splitter.Visibility = Visibility.Visible;
+
+        var total = EditorRow.ActualHeight + ResultsRow.ActualHeight;
+        var height = ViewModel.ResultsPaneHeight ?? DefaultResultsPaneHeight;
+        if (total > 0)
+        {
+            height = Math.Clamp(height, 140, Math.Max(160, total - 160));
+        }
+
+        ResultsRow.Height = new GridLength(height);
+        EditorRow.Height = new GridLength(1, GridUnitType.Star);
+
+        var transform = ResultsPane.RenderTransform as TranslateTransform;
+        if (transform is null)
+        {
+            transform = new TranslateTransform();
+            ResultsPane.RenderTransform = transform;
+        }
+
+        transform.Y = 0;
+        ResultsPane.Opacity = 1;
+
+        if (!new UISettings().AnimationsEnabled)
+        {
+            return;
+        }
+
+        _resultsSlide?.Stop();
+        transform.Y = 28;
+        ResultsPane.Opacity = 0;
+
+        var duration = new Duration(TimeSpan.FromMilliseconds(180));
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var board = new Storyboard();
+
+        var slide = new DoubleAnimation { To = 0, Duration = duration, EasingFunction = easing };
+        Storyboard.SetTarget(slide, transform);
+        Storyboard.SetTargetProperty(slide, "Y");
+
+        var fade = new DoubleAnimation { To = 1, Duration = duration, EasingFunction = easing };
+        Storyboard.SetTarget(fade, ResultsPane);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        board.Children.Add(slide);
+        board.Children.Add(fade);
+        _resultsSlide = board;
+        board.Begin();
+    }
+
+    private void ToggleResultsPane()
+    {
+        if (_resultsVisible)
+        {
+            HideResultsPane();
+        }
+        else
+        {
+            ShowResultsPane();
+        }
+    }
+
+    private void HideResultsPane()
+    {
+        if (!_resultsVisible)
+        {
+            return;
+        }
+
+        _resultsVisible = false;
+        _resultsSlide?.Stop();
+
+        var height = ResultsRow.ActualHeight;
+        if (height > 0)
+        {
+            ViewModel.SetResultsPaneHeight(height);
+        }
+
+        ResultsPane.Visibility = Visibility.Collapsed;
+        Splitter.Visibility = Visibility.Collapsed;
+        ResultsRow.Height = new GridLength(0);
+        EditorRow.Height = new GridLength(1, GridUnitType.Star);
+        ResultsPane.Opacity = 1;
+
+        if (ResultsPane.RenderTransform is TranslateTransform transform)
+        {
+            transform.Y = 0;
+        }
+    }
+
     private void Splitter_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         _draggingSplitter = true;
         _splitStartY = e.GetCurrentPoint(Root).Position.Y;
         _splitStartHeight = EditorRow.ActualHeight;
         _splitTotalHeight = EditorRow.ActualHeight + ResultsRow.ActualHeight;
+        _splitResultsHeight = Math.Max(0, _splitTotalHeight - _splitStartHeight);
         Splitter.CapturePointer(e.Pointer);
         e.Handled = true;
     }
@@ -1658,12 +1779,14 @@ public sealed partial class MainPage : Page
         var height = Math.Clamp(_splitStartHeight + delta, 120, Math.Max(140, _splitTotalHeight - 120));
         EditorRow.Height = new GridLength(height);
         ResultsRow.Height = new GridLength(1, GridUnitType.Star);
+        _splitResultsHeight = Math.Max(0, _splitTotalHeight - height);
     }
 
     private void Splitter_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         _draggingSplitter = false;
         Splitter.ReleasePointerCapture(e.Pointer);
+        ViewModel.SetResultsPaneHeight(_splitResultsHeight);
         e.Handled = true;
     }
 

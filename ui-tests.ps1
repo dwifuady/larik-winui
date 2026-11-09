@@ -313,6 +313,10 @@ try {
         Assert-True ((Invoke-Ui @('list-windows', '--json')) -join '' -match 'Larik SQL Studio') 'main window not found'
     }
 
+    Test-UI 'the results pane starts collapsed' {
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'the results pane was visible before a query'
+    }
+
     Test-UI 'sidebar lists the active workspace tabs' {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'workspace tab is not exposed'
     }
@@ -541,6 +545,27 @@ try {
         Send-Keys 'ctrl+enter'
         Wait-ForText 'FULL NAME'
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
+    }
+
+    Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'Ctrl+R did not hide the results pane'
+
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -gt 0) 'Ctrl+R did not show the results pane'
+
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'the second hide did not work'
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'FULL NAME' 20
+        Assert-True ((Find-Element 'Results grid').matchCount -gt 0) 'running a query did not reopen the results pane'
     }
 
     Test-UI 'Ctrl+Enter runs only the statement under the caret' {
@@ -1078,6 +1103,26 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'database_name').matchCount -gt 0) 'the tab result was not restored'
         Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab'
+    }
+
+    Test-UI 'the cell preview is remembered per tab, not shared' {
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the preview did not open on Query 2'
+
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Cell preview').matchCount -eq 0) 'Query 1 inherited Query 2 preview'
+
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'Query 2 did not restore its own preview'
+
+        Focus-Element 'Results grid'
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
     }
 
     Test-UI 'a large result switches tabs quickly' {

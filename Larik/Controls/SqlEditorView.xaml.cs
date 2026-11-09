@@ -1173,6 +1173,10 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                     CommandRequested?.Invoke(this, EditorCommandKind.BrowseSchema);
                     e.Handled = true;
                     return;
+                case VirtualKey.R:
+                    CommandRequested?.Invoke(this, EditorCommandKind.ToggleResults);
+                    e.Handled = true;
+                    return;
                 case VirtualKey.F:
                     OpenFind(showReplace: false);
                     e.Handled = true;

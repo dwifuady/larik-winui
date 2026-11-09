@@ -69,9 +69,37 @@ public partial class StudioViewModel : ObservableObject
     /// </summary>
     public WindowBoundsState? WindowBounds { get; private set; }
 
+    /// <summary>Last results-pane height, or null until the user resizes it.</summary>
+    public double? ResultsPaneHeight { get; private set; }
+
+    /// <summary>Last cell-preview width, or null for the default.</summary>
+    public double? CellPreviewWidth { get; private set; }
+
     public void SetWindowBounds(WindowBoundsState? bounds)
     {
         WindowBounds = bounds;
+        ScheduleSave();
+    }
+
+    public void SetResultsPaneHeight(double height)
+    {
+        if (height <= 0 || Math.Abs((ResultsPaneHeight ?? 0) - height) < 0.5)
+        {
+            return;
+        }
+
+        ResultsPaneHeight = height;
+        ScheduleSave();
+    }
+
+    public void SetCellPreviewWidth(double width)
+    {
+        if (width <= 0 || Math.Abs((CellPreviewWidth ?? 0) - width) < 0.5)
+        {
+            return;
+        }
+
+        CellPreviewWidth = width;
         ScheduleSave();
     }
 
@@ -1483,6 +1511,8 @@ public partial class StudioViewModel : ObservableObject
         AutoArchiveEnabled = AutoArchiveEnabled,
         AutoArchiveDays = EffectiveAutoArchiveDays,
         WindowBounds = WindowBounds,
+        ResultsPaneHeight = ResultsPaneHeight,
+        CellPreviewWidth = CellPreviewWidth,
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -1570,6 +1600,8 @@ public partial class StudioViewModel : ObservableObject
     private void Restore(StudioState state)
     {
         WindowBounds = state.WindowBounds;
+        ResultsPaneHeight = state.ResultsPaneHeight;
+        CellPreviewWidth = state.CellPreviewWidth;
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);

@@ -23,6 +23,12 @@ public sealed class StudioState
 
     /// <summary>Last window geometry, restored on launch; null on the first run or after a reset.</summary>
     public WindowBoundsState? WindowBounds { get; set; }
+
+    /// <summary>Height of the results pane in DIPs, restored the next time a query opens it.</summary>
+    public double? ResultsPaneHeight { get; set; }
+
+    /// <summary>Width of the cell-preview pane in DIPs.</summary>
+    public double? CellPreviewWidth { get; set; }
 }
 
 /// <summary>
@@ -329,6 +335,8 @@ public sealed class StudioStore
                 ? days
                 : 30,
             WindowBounds = ReadWindowBounds(connection),
+            ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
+            CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
         };
 
         var spaces = new List<SpaceState>();
@@ -505,6 +513,23 @@ public sealed class StudioStore
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        if (state.ResultsPaneHeight is { } resultsHeight)
+        {
+            SetState(
+                connection,
+                transaction,
+                "results_pane_height",
+                resultsHeight.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        if (state.CellPreviewWidth is { } previewWidth)
+        {
+            SetState(
+                connection,
+                transaction,
+                "cell_preview_width",
+                previewWidth.ToString("R", CultureInfo.InvariantCulture));
+        }
         if (state.WindowBounds is { } bounds)
         {
             SetState(
@@ -635,6 +660,15 @@ public sealed class StudioStore
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
     }
+
+    private static double? ReadDouble(SqliteConnection connection, string key) =>
+        double.TryParse(
+            ReadState(connection, key),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : null;
 
     private static WindowBoundsState? ReadWindowBounds(SqliteConnection connection)
     {
