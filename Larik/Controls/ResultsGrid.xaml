@@ -39,6 +39,10 @@
     </UserControl.Resources>
 
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -85,6 +89,16 @@
             <ListView.ContextFlyout>
                 <MenuFlyout>
                     <MenuFlyoutItem
+                        Click="PreviewCell_Click"
+                        AutomationProperties.Name="Preview cell"
+                        KeyboardAcceleratorTextOverride="Space"
+                        Text="Preview cell" />
+                    <MenuFlyoutItem
+                        Click="Export_Click"
+                        AutomationProperties.Name="Export results"
+                        Text="Export results…" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem
                         Click="Copy_Click"
                         KeyboardAcceleratorTextOverride="Ctrl+C"
                         Text="Copy" />
@@ -109,5 +123,222 @@
             Foreground="{ThemeResource StudioTextMutedBrush}"
             TextWrapping="Wrap"
             Visibility="Collapsed" />
+
+        <!--  Server messages (PRINT, statistics, warnings) as selectable monospace text.  -->
+        <ScrollViewer
+            x:Name="MessagesScroll"
+            Grid.Row="1"
+            Padding="14,12"
+            HorizontalScrollBarVisibility="Auto"
+            HorizontalScrollMode="Auto"
+            VerticalScrollBarVisibility="Auto"
+            VerticalScrollMode="Auto"
+            Visibility="Collapsed">
+            <TextBlock
+                x:Name="MessagesText"
+                FontFamily="{StaticResource StudioMonoFont}"
+                FontSize="12"
+                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                IsTextSelectionEnabled="True"
+                TextWrapping="Wrap" />
+        </ScrollViewer>
+
+        <!--  Cell preview: Space on a cell, or the context menu, shows the full value.  -->
+        <Grid
+            x:Name="PreviewHost"
+            Grid.RowSpan="2"
+            Grid.Column="1"
+            Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <local:SideDragHandle
+                x:Name="PreviewResizeHandle"
+                Margin="0"
+                Background="Transparent"
+                PointerCaptureLost="PreviewResizeHandle_PointerCaptureLost"
+                PointerMoved="PreviewResizeHandle_PointerMoved"
+                PointerPressed="PreviewResizeHandle_PointerPressed"
+                PointerReleased="PreviewResizeHandle_PointerReleased">
+                <Border
+                    Width="1"
+                    HorizontalAlignment="Center"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+            </local:SideDragHandle>
+
+            <Border
+                x:Name="CellPreview"
+                Grid.Column="1"
+                Width="340"
+                AutomationProperties.Name="Cell preview"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Padding="12,8,8,6" ColumnSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel VerticalAlignment="Center" Spacing="1">
+                            <TextBlock
+                                x:Name="CellPreviewTitle"
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                x:Name="CellPreviewSubtitle"
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <Button
+                            x:Name="ReferenceToggleButton"
+                            Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            AutomationProperties.Name="Preview referenced row"
+                            Click="ReferenceToggle_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Preview referenced rows (Shift+Space)"
+                            Visibility="Collapsed">
+                            <FontIcon FontSize="11" Glyph="&#xE71B;" />
+                        </Button>
+
+                        <Button
+                            x:Name="PreviewFormatButton"
+                            Grid.Column="2"
+                            Height="28"
+                            Padding="6,0"
+                            AutomationProperties.Name="Cell preview format"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Auto-format JSON and XML">
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Click="FormatAuto_Click" Text="Auto" />
+                                    <MenuFlyoutItem Click="FormatJson_Click" Text="JSON" />
+                                    <MenuFlyoutItem Click="FormatXml_Click" Text="XML" />
+                                    <MenuFlyoutItem Click="FormatPlain_Click" Text="Plain" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                            <StackPanel
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="3">
+                                <TextBlock
+                                    x:Name="PreviewFormatLabel"
+                                    FontSize="10"
+                                    Text="Auto" />
+                                <FontIcon FontSize="8" Glyph="&#xE70D;" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button
+                            Grid.Column="3"
+                            Width="28"
+                            Height="28"
+                            AutomationProperties.Name="Copy cell value"
+                            Click="CopyPreview_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Copy the value">
+                            <FontIcon FontSize="11" Glyph="&#xE8C8;" />
+                        </Button>
+
+                        <Button
+                            Grid.Column="4"
+                            Width="28"
+                            Height="28"
+                            AutomationProperties.Name="Close cell preview"
+                            Click="ClosePreview_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Close (Esc)">
+                            <FontIcon FontSize="11" Glyph="&#xE711;" />
+                        </Button>
+                    </Grid>
+
+                    <ScrollViewer
+                        x:Name="ValueView"
+                        Grid.Row="1"
+                        Padding="12,4,12,10"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+                        <TextBlock
+                            x:Name="CellPreviewValue"
+                            FontFamily="{StaticResource StudioMonoFont}"
+                            FontSize="12"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            IsTextSelectionEnabled="True"
+                            TextWrapping="Wrap" />
+                    </ScrollViewer>
+
+                    <Grid
+                        x:Name="ReferenceView"
+                        Grid.Row="1"
+                        AutomationProperties.Name="Reference preview"
+                        Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock
+                            x:Name="ReferenceSummary"
+                            Margin="12,4,12,6"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextWrapping="Wrap" />
+
+                        <Grid Grid.Row="1">
+                            <local:ReferenceTableView
+                                x:Name="ReferenceTable"
+                                Visibility="Collapsed" />
+                            <local:ReferenceRecordsView
+                                x:Name="ReferenceRecords"
+                                Visibility="Collapsed" />
+
+                            <TextBlock
+                                x:Name="ReferenceStatus"
+                                Margin="14,10,14,10"
+                                FontSize="11.5"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                TextWrapping="Wrap"
+                                Visibility="Collapsed" />
+                        </Grid>
+
+                        <TextBlock
+                            x:Name="ReferenceFooter"
+                            Grid.Row="2"
+                            Margin="12,6,12,10"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextWrapping="Wrap" />
+                    </Grid>
+
+                    <TextBlock
+                        x:Name="CellPreviewFooter"
+                        Grid.Row="2"
+                        Margin="12,0,12,10"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        TextWrapping="Wrap" />
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

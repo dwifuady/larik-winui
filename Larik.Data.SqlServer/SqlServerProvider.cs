@@ -68,6 +68,15 @@ public sealed class SqlServerProvider : IDatabaseProvider
             DefaultValue = "8",
             IsAdvanced = true,
         },
+        new()
+        {
+            Key = "queryTimeout",
+            Label = "Query timeout (s)",
+            Kind = ProviderSettingKind.Number,
+            DefaultValue = "60",
+            Hint = "How long a statement may run before the client cancels it. 0 waits indefinitely.",
+            IsAdvanced = true,
+        },
     ];
 
     public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new SqlServerConnection(profile);
@@ -77,6 +86,8 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 {
     private readonly ConnectionProfile _profile;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly List<string> _messages = [];
+    private readonly object _messageGate = new();
     private SqlConnection? _connection;
 
     public SqlServerConnection(ConnectionProfile profile) => _profile = profile;
@@ -91,9 +102,18 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
         try
         {
-            _connection ??= new SqlConnection(BuildConnectionString());
+            _connection ??= new SqlConnection(BuildConnectionString())
+            {
+                // PRINT always arrives as InfoMessage; this also reports RAISERROR up to severity 10
+                // as a message instead of throwing it as a client exception, the way SSMS shows it.
+                FireInfoMessageEventOnUserErrors = true,
+            };
+
             if (_connection.State != System.Data.ConnectionState.Open)
             {
+                // Attach once per connection instance: re-subscribing would multiply the handler.
+                _connection.InfoMessage -= OnInfoMessage;
+                _connection.InfoMessage += OnInfoMessage;
                 await _connection.OpenAsync(cancellationToken);
             }
 
@@ -150,6 +170,27 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         }
     }
 
+    public async Task<string?> GetCurrentDatabaseAsync(CancellationToken cancellationToken = default)
+    {
+        if (_connection is not { State: System.Data.ConnectionState.Open })
+        {
+            return null;
+        }
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT DB_NAME();";
+            command.CommandTimeout = 5;
+            return await command.ExecuteScalarAsync(cancellationToken) as string;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default)
     {
         await OpenAsync(cancellationToken);
@@ -162,13 +203,20 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             var primaryKeys = await ReadPrimaryKeysAsync(cancellationToken);
             var foreignKeys = await ReadForeignKeysAsync(cancellationToken);
 
-            return columns
-                .Select(pair => new TableSchema
+            return columns.Values
+                .Select(info =>
                 {
-                    Name = pair.Key,
-                    Columns = pair.Value,
-                    PrimaryKey = primaryKeys.TryGetValue(pair.Key, out var keys) ? keys : [],
-                    ForeignKeys = foreignKeys.TryGetValue(pair.Key, out var references) ? references : [],
+                    var key = QualifiedKey(info.Schema, info.Name);
+                    return new TableSchema
+                    {
+                        Name = info.Name,
+                        Schema = info.Schema,
+                        Kind = info.IsView ? TableKind.View : TableKind.Table,
+                        Columns = info.Columns.Select(column => column.Name).ToList(),
+                        ColumnDetails = info.Columns,
+                        PrimaryKey = primaryKeys.TryGetValue(key, out var keys) ? keys : [],
+                        ForeignKeys = foreignKeys.TryGetValue(key, out var references) ? references : [],
+                    };
                 })
                 .ToList();
         }
@@ -231,57 +279,230 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         }
     }
 
-    private async Task<Dictionary<string, List<string>>> ReadColumnsAsync(CancellationToken cancellationToken)
+    /// <summary>One table's identity while the three introspection passes are stitched together.</summary>
+    private sealed record TableInfo(string Schema, string Name, bool IsView, List<TableColumn> Columns);
+
+    private static string QualifiedKey(string schema, string table) => $"{schema}\u001F{table}";
+
+    private async Task<Dictionary<string, TableInfo>> ReadColumnsAsync(CancellationToken cancellationToken)
     {
+        // sys.objects covers base tables and views in one pass; type "V" is the only thing that
+        // separates them, and sys.columns carries the same column metadata for both.
         await using var command = _connection!.CreateCommand();
         command.CommandText = """
-            SELECT t.name, c.name
-            FROM sys.tables AS t
-            INNER JOIN sys.columns AS c ON c.object_id = t.object_id
-            ORDER BY t.name, c.column_id;
+            SELECT s.name, o.name, o.type, c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable
+            FROM sys.objects AS o
+            INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+            INNER JOIN sys.columns AS c ON c.object_id = o.object_id
+            INNER JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
+            WHERE o.type IN ('U', 'V')
+            ORDER BY s.name, o.name, c.column_id;
             """;
 
-        var tables = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var tables = new Dictionary<string, TableInfo>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var table = reader.GetString(0);
-            if (!tables.TryGetValue(table, out var columns))
+            var schema = reader.GetString(0);
+            var name = reader.GetString(1);
+            var key = QualifiedKey(schema, name);
+            if (!tables.TryGetValue(key, out var info))
             {
-                columns = [];
-                tables[table] = columns;
+                var isView = reader.GetString(2).Trim().Equals("V", StringComparison.OrdinalIgnoreCase);
+                info = new TableInfo(schema, name, isView, []);
+                tables[key] = info;
             }
 
-            columns.Add(reader.GetString(1));
+            info.Columns.Add(new TableColumn
+            {
+                Name = reader.GetString(3),
+                DataType = FormatDataType(
+                    reader.GetString(4),
+                    reader.GetInt16(5),
+                    reader.GetByte(6),
+                    reader.GetByte(7)),
+                IsNullable = reader.GetBoolean(8),
+            });
         }
 
         return tables;
+    }
+
+    /// <summary>
+    /// A type as it would be written in DDL. Lengths are in bytes in sys.columns, so the national
+    /// character types divide by two; -1 means <c>(max)</c>.
+    /// </summary>
+    private static string FormatDataType(string name, short maxLength, byte precision, byte scale) =>
+        name.ToLowerInvariant() switch
+        {
+            "char" or "varchar" or "binary" or "varbinary" =>
+                maxLength < 0 ? $"{name}(max)" : $"{name}({maxLength})",
+            "nchar" or "nvarchar" =>
+                maxLength < 0 ? $"{name}(max)" : $"{name}({maxLength / 2})",
+            "decimal" or "numeric" => $"{name}({precision},{scale})",
+            "datetime2" or "datetimeoffset" or "time" =>
+                scale == 0 ? name : $"{name}({scale})",
+            _ => name,
+        };
+
+    /// <summary>Procedures in the current database, with parameters in declaration order.</summary>
+    public async Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(
+        string? database,
+        CancellationToken cancellationToken = default)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            SwitchDatabase(database);
+            return await ReadRoutinesAsync(cancellationToken);
+        }
+        catch (SqlException)
+        {
+            // Routine metadata is a completion/browsing nicety; a permission failure must not
+            // break the session.
+            return [];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<IReadOnlyList<RoutineSchema>> ReadRoutinesAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection!.CreateCommand();
+        command.CommandText = """
+            SELECT s.name, p.name, pa.name, ty.name, pa.max_length, pa.precision, pa.scale,
+                   pa.is_output, pa.has_default_value
+            FROM sys.procedures AS p
+            INNER JOIN sys.schemas AS s ON s.schema_id = p.schema_id
+            LEFT JOIN sys.parameters AS pa ON pa.object_id = p.object_id
+            LEFT JOIN sys.types AS ty ON ty.user_type_id = pa.user_type_id
+            ORDER BY s.name, p.name, pa.parameter_id;
+            """;
+        var order = new List<string>();
+        var builders = new Dictionary<string, (string Schema, string Name, List<RoutineParameter> Parameters)>(
+            StringComparer.OrdinalIgnoreCase);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var schema = reader.GetString(0);
+            var name = reader.GetString(1);
+            var key = QualifiedKey(schema, name);
+
+            if (!builders.TryGetValue(key, out var builder))
+            {
+                builder = (schema, name, []);
+                builders[key] = builder;
+                order.Add(key);
+            }
+
+            // A procedure without parameters still produces one LEFT JOIN row with NULL metadata.
+            if (reader.IsDBNull(2))
+            {
+                continue;
+            }
+
+            builder.Parameters.Add(new RoutineParameter
+            {
+                Name = reader.GetString(2),
+                DataType = reader.IsDBNull(3)
+                    ? null
+                    : FormatDataType(
+                        reader.GetString(3),
+                        reader.GetInt16(4),
+                        reader.GetByte(5),
+                        reader.GetByte(6)),
+                IsOutput = reader.GetBoolean(7),
+                HasDefault = reader.GetBoolean(8),
+            });
+        }
+
+        return order
+            .Select(key =>
+            {
+                var builder = builders[key];
+                return new RoutineSchema
+                {
+                    Schema = builder.Schema,
+                    Name = builder.Name,
+                    Parameters = builder.Parameters,
+                };
+            })
+            .ToList();
+    }
+
+    /// <summary>sys.partitions row estimate: metadata only, no table scan.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        await OpenAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            SwitchDatabase(database);
+
+            var qualified = string.IsNullOrWhiteSpace(schema)
+                ? TSqlDialect.Instance.QuoteIdentifier(table)
+                : $"{TSqlDialect.Instance.QuoteIdentifier(schema)}.{TSqlDialect.Instance.QuoteIdentifier(table)}";
+            var objectName = qualified.Replace("'", "''");
+
+            await using var command = _connection!.CreateCommand();
+            command.CommandText = $"""
+                SELECT SUM(p.[rows])
+                FROM sys.partitions AS p
+                WHERE p.[object_id] = OBJECT_ID(N'{objectName}')
+                  AND p.[index_id] IN (0, 1);
+                """;
+            command.CommandTimeout = 5;
+
+            var value = await command.ExecuteScalarAsync(cancellationToken);
+            return value is null or DBNull
+                ? null
+                : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch (Exception)
+        {
+            // The estimate only picks a preview mode; a permission or metadata failure means
+            // "unknown", which falls back to the filtered lookup.
+            return null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<Dictionary<string, List<string>>> ReadPrimaryKeysAsync(CancellationToken cancellationToken)
     {
         await using var command = _connection!.CreateCommand();
         command.CommandText = """
-            SELECT t.name, c.name
+            SELECT s.name, t.name, c.name
             FROM sys.tables AS t
+            INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
             INNER JOIN sys.indexes AS i ON i.object_id = t.object_id AND i.is_primary_key = 1
             INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
             INNER JOIN sys.columns AS c ON c.object_id = t.object_id AND c.column_id = ic.column_id
-            ORDER BY t.name, ic.key_ordinal;
+            ORDER BY s.name, t.name, ic.key_ordinal;
             """;
 
         var keys = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var table = reader.GetString(0);
-            if (!keys.TryGetValue(table, out var columns))
+            var key = QualifiedKey(reader.GetString(0), reader.GetString(1));
+            if (!keys.TryGetValue(key, out var columns))
             {
                 columns = [];
-                keys[table] = columns;
+                keys[key] = columns;
             }
 
-            columns.Add(reader.GetString(1));
+            columns.Add(reader.GetString(2));
         }
 
         return keys;
@@ -291,32 +512,37 @@ internal sealed class SqlServerConnection : IDatabaseConnection
     {
         await using var command = _connection!.CreateCommand();
         command.CommandText = """
-            SELECT tp.name, cp.name, tr.name, cr.name, fk.name
+            SELECT sp.name, tp.name, cp.name, sr.name, tr.name, cr.name, fk.name
             FROM sys.foreign_keys AS fk
             INNER JOIN sys.foreign_key_columns AS fkc ON fkc.constraint_object_id = fk.object_id
             INNER JOIN sys.tables AS tp ON tp.object_id = fkc.parent_object_id
+            INNER JOIN sys.schemas AS sp ON sp.schema_id = tp.schema_id
             INNER JOIN sys.columns AS cp ON cp.object_id = fkc.parent_object_id AND cp.column_id = fkc.parent_column_id
             INNER JOIN sys.tables AS tr ON tr.object_id = fkc.referenced_object_id
+            INNER JOIN sys.schemas AS sr ON sr.schema_id = tr.schema_id
             INNER JOIN sys.columns AS cr ON cr.object_id = fkc.referenced_object_id AND cr.column_id = fkc.referenced_column_id
-            ORDER BY tp.name, fk.name, fkc.constraint_column_id;
+            ORDER BY sp.name, tp.name, fk.name, fkc.constraint_column_id;
             """;
 
         var references = new Dictionary<string, List<ForeignKeySchema>>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var table = reader.GetString(0);
-            if (!references.TryGetValue(table, out var foreignKeys))
+            var key = QualifiedKey(reader.GetString(0), reader.GetString(1));
+            if (!references.TryGetValue(key, out var foreignKeys))
             {
                 foreignKeys = [];
-                references[table] = foreignKeys;
+                references[key] = foreignKeys;
             }
 
             foreignKeys.Add(new ForeignKeySchema(
-                reader.GetString(4),
-                reader.GetString(1),
+                reader.GetString(6),
                 reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetString(4),
+                reader.GetString(5))
+            {
+                ReferencedSchema = reader.GetString(3),
+            });
         }
 
         return references;
@@ -354,11 +580,17 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            // Anything that arrived between commands (a schema load, a transaction probe) is not
+            // this run's output.
+            ClearMessages();
+
             SwitchDatabase(database);
 
             await using var command = _connection!.CreateCommand();
             command.CommandText = sql;
-            command.CommandTimeout = 60;
+            // The provider's timeout setting is the user's one control here: a report that needs
+            // minutes must not die at a value the app chose. 0 means wait indefinitely.
+            command.CommandTimeout = Math.Max(0, _profile.GetInt("queryTimeout", 60));
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
@@ -371,6 +603,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                     results.Add(await ReadResultSetAsync(
                         reader,
                         database,
+                        sql,
                         rowLimit,
                         stopwatch,
                         cancellationToken));
@@ -406,6 +639,22 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             _gate.Release();
         }
 
+        // One Messages tab per batch: a message can arrive between result sets, so attributing it
+        // to an individual set would be guesswork. Errors keep their own result and messages follow.
+        var messages = TakeMessages();
+        if (messages.Count > 0)
+        {
+            results.Add(new QueryResult
+            {
+                Columns = [],
+                Rows = [],
+                Message = $"{messages.Count} message{(messages.Count == 1 ? string.Empty : "s")}",
+                Messages = messages,
+                Elapsed = stopwatch.Elapsed,
+                Database = database,
+            });
+        }
+
         if (results.Count == 0)
         {
             results.Add(new QueryResult
@@ -421,9 +670,62 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         return results;
     }
 
+    // ---------------------------------------------------------------- server messages
+
+    /// <summary>
+    /// PRINT, RAISERROR up to severity 10, SET STATISTICS and engine warnings. SqlClient raises this
+    /// while the command runs; the gate keeps one command in flight per connection, and the lock
+    /// covers an event that arrives on a worker thread.
+    /// </summary>
+    private void OnInfoMessage(object sender, SqlInfoMessageEventArgs e)
+    {
+        lock (_messageGate)
+        {
+            foreach (SqlError error in e.Errors)
+            {
+                _messages.Add(FormatMessage(error));
+            }
+        }
+    }
+
+    private static string FormatMessage(SqlError error)
+    {
+        var text = error.Message.TrimEnd();
+
+        // PRINT arrives as number 0 / severity 0, so the text is the whole message. RAISERROR and
+        // warnings carry a number and level (SqlError.Class); SSMS shows those as a header line.
+        return error.Number == 0 && error.Class <= 0
+            ? text
+            : $"Msg {error.Number}, Level {error.Class}, State {error.State}, Line {error.LineNumber}: {text}";
+    }
+
+    private List<string> TakeMessages()
+    {
+        lock (_messageGate)
+        {
+            if (_messages.Count == 0)
+            {
+                return [];
+            }
+
+            var copy = new List<string>(_messages);
+            _messages.Clear();
+            return copy;
+        }
+    }
+
+    private void ClearMessages()
+    {
+        lock (_messageGate)
+        {
+            _messages.Clear();
+        }
+    }
+
     private static async Task<QueryResult> ReadResultSetAsync(
         SqlDataReader reader,
         string? database,
+        string sql,
         int rowLimit,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
@@ -467,6 +769,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             Message = $"{rows.Count} rows",
             Elapsed = stopwatch.Elapsed,
             Database = database,
+            Statement = sql,
             IsTruncated = truncated,
             RowLimit = rowLimit,
         };

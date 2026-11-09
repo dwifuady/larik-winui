@@ -20,6 +20,33 @@ public sealed class StudioState
     public bool AutoArchiveEnabled { get; set; } = true;
 
     public int AutoArchiveDays { get; set; } = 30;
+
+    /// <summary>Last window geometry, restored on launch; null on the first run or after a reset.</summary>
+    public WindowBoundsState? WindowBounds { get; set; }
+
+    /// <summary>Height of the results pane in DIPs, restored the next time a query opens it.</summary>
+    public double? ResultsPaneHeight { get; set; }
+
+    /// <summary>Width of the cell-preview pane in DIPs.</summary>
+    public double? CellPreviewWidth { get; set; }
+}
+
+/// <summary>
+/// The window rectangle in device-independent pixels, so a DPI change between launches does not
+/// stretch or shrink the restored window. <see cref="Maximized"/> is remembered separately from
+/// the rectangle: restoring a maximized window must not make its restore-down size the monitor.
+/// </summary>
+public sealed class WindowBoundsState
+{
+    public int X { get; set; }
+
+    public int Y { get; set; }
+
+    public int Width { get; set; }
+
+    public int Height { get; set; }
+
+    public bool Maximized { get; set; }
 }
 
 /// <summary>One space, including the connection profile it owns (passwords are never stored).</summary>
@@ -84,6 +111,7 @@ public sealed class ArchivedTabState
 /// <summary>Reads the pre-SQLite <c>studio.json</c> state once, so upgrades keep their spaces.</summary>
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(StudioState))]
+[JsonSerializable(typeof(WindowBoundsState))]
 internal sealed partial class StudioJsonContext : JsonSerializerContext
 {
 }
@@ -306,6 +334,9 @@ public sealed class StudioStore
                 out var days)
                 ? days
                 : 30,
+            WindowBounds = ReadWindowBounds(connection),
+            ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
+            CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
         };
 
         var spaces = new List<SpaceState>();
@@ -482,6 +513,32 @@ public sealed class StudioStore
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        if (state.ResultsPaneHeight is { } resultsHeight)
+        {
+            SetState(
+                connection,
+                transaction,
+                "results_pane_height",
+                resultsHeight.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        if (state.CellPreviewWidth is { } previewWidth)
+        {
+            SetState(
+                connection,
+                transaction,
+                "cell_preview_width",
+                previewWidth.ToString("R", CultureInfo.InvariantCulture));
+        }
+        if (state.WindowBounds is { } bounds)
+        {
+            SetState(
+                connection,
+                transaction,
+                "window_bounds",
+                JsonSerializer.Serialize(bounds, StudioJsonContext.Default.WindowBoundsState));
+        }
+
         WriteArchivedTabs(connection, transaction, state.ArchivedTabs);
     }
 
@@ -602,6 +659,34 @@ public sealed class StudioStore
         command.CommandText = "SELECT value FROM app_state WHERE key = $key;";
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private static double? ReadDouble(SqliteConnection connection, string key) =>
+        double.TryParse(
+            ReadState(connection, key),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : null;
+
+    private static WindowBoundsState? ReadWindowBounds(SqliteConnection connection)
+    {
+        var raw = ReadState(connection, "window_bounds");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize(raw, StudioJsonContext.Default.WindowBoundsState);
+        }
+        catch (JsonException)
+        {
+            // A truncated or hand-edited value must not block the launch; the window just centers.
+            return null;
+        }
     }
 
     // ---------------------------------------------------------------- legacy import

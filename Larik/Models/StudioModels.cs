@@ -16,6 +16,7 @@ public enum CompletionKind
     Database,
     Variable,
     Cte,
+    Routine,
 }
 
 /// <summary>A SQL snippet: a short trigger that expands to a statement.</summary>
@@ -140,6 +141,29 @@ public sealed partial class CompletionItem : ObservableObject
     /// <summary>Secondary sort inside a kind (0 = exact trigger prefix).</summary>
     public int RankSort { get; init; }
 
+    /// <summary>
+    /// Sort key before <see cref="Rank"/>: 0 means the item matches what is being typed directly
+    /// (a keyword/table prefix, a snippet trigger), higher values are weaker matches such as a
+    /// snippet whose *name* merely contains the word. Keeps "wher" showing WHERE above a SNIP.
+    /// </summary>
+    public int MatchRank { get; init; }
+
+    /// <summary>
+    /// Tick state for multi-select in the completion popup: Space toggles a column, Tab/Enter
+    /// inserts every ticked column. Only columns can be ticked; tables, keywords and joins keep
+    /// the single-accept behaviour.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CheckGlyph))]
+    [NotifyPropertyChangedFor(nameof(CheckOpacity))]
+    public partial bool IsChecked { get; set; }
+
+    public bool CanCheck => Kind == CompletionKind.Column;
+
+    public string CheckGlyph => IsChecked ? "\uE73E" : "\uE739";
+
+    public double CheckOpacity => CanCheck ? (IsChecked ? 1 : 0.35) : 0;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HighlightBrush))]
     public partial bool IsSelected { get; set; }
@@ -156,6 +180,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Database => "DB",
         CompletionKind.Variable => "VAR",
         CompletionKind.Cte => "CTE",
+        CompletionKind.Routine => "PROC",
         _ => "JN",
     };
 
@@ -168,6 +193,7 @@ public sealed partial class CompletionItem : ObservableObject
         CompletionKind.Database => 1,
         CompletionKind.Variable => 1,
         CompletionKind.Cte => 1,
+        CompletionKind.Routine => 1,
         CompletionKind.Column => 2,
         CompletionKind.Function => 3,
         _ => 4,

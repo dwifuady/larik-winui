@@ -20,6 +20,9 @@ public enum CompletionScope
 
     /// <summary>After USE: database names.</summary>
     Database,
+
+    /// <summary>After EXEC/EXECUTE/CALL: stored procedure names, expanded with their parameters.</summary>
+    Routine,
 }
 
 /// <summary>The table an UPDATE/INSERT writes, when the caret is in its column list.</summary>
@@ -48,6 +51,9 @@ public sealed record CompletionRequest(
     /// engine behaves exactly as before for providers without an editor language.
     /// </summary>
     public ISqlDialect? Dialect { get; init; }
+
+    /// <summary>Procedures the active database exposes; empty when the provider has none.</summary>
+    public IReadOnlyList<RoutineSchema> Routines { get; init; } = [];
 }
 
 /// <summary>
@@ -112,12 +118,27 @@ public static partial class CompletionEngine
     /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
     private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectTableContext = new();
 
+    /// <summary>The historical routine words, reproduced when a provider exposes no dialect.</summary>
+    private static readonly HashSet<string> RoutineContext = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "EXEC", "EXECUTE", "CALL",
+    };
+
+    private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectRoutineContext = new();
+
     private static HashSet<string> TableContextFor(ISqlDialect? dialect) =>
         dialect is null
             ? TableContext
             : DialectTableContext.GetValue(
                 dialect,
                 value => new HashSet<string>(value.TableContextKeywords, StringComparer.OrdinalIgnoreCase));
+
+    private static HashSet<string> RoutineContextFor(ISqlDialect? dialect) =>
+        dialect is null
+            ? RoutineContext
+            : DialectRoutineContext.GetValue(
+                dialect,
+                value => new HashSet<string>(value.RoutineContextKeywords, StringComparer.OrdinalIgnoreCase));
 
     private const int KeywordLimit = 8;
     private const int SchemaLimit = 500;
@@ -144,16 +165,36 @@ public static partial class CompletionEngine
 
         if (start > 0 && text[start - 1] == '.')
         {
+            // The qualifier may be bare (t) or quoted the way the dialect writes it ([dbo], "dbo").
             var dot = start - 1;
             var qStart = dot;
-            while (qStart > 0 && IsWordChar(text[qStart - 1]))
+            var closer = qStart > 0 ? text[qStart - 1] : '\0';
+
+            if (closer is ']' or '"')
             {
+                var opener = closer == ']' ? '[' : '"';
                 qStart--;
+                while (qStart > 0 && text[qStart - 1] != opener)
+                {
+                    qStart--;
+                }
+
+                if (qStart > 0)
+                {
+                    qStart--;
+                }
+            }
+            else
+            {
+                while (qStart > 0 && IsWordChar(text[qStart - 1]))
+                {
+                    qStart--;
+                }
             }
 
             if (qStart < dot)
             {
-                qualifier = text[qStart..dot];
+                qualifier = NormalizeIdentifier(text[qStart..dot]);
             }
         }
 
@@ -172,6 +213,7 @@ public static partial class CompletionEngine
     {
         caret = Math.Clamp(caret, 0, text.Length);
         var tableContext = TableContextFor(dialect);
+        var routineContext = RoutineContextFor(dialect);
 
         var (wordStart, _, _) = ExtractContext(text, caret);
         var start = StatementStart(text, caret);
@@ -205,8 +247,39 @@ public static partial class CompletionEngine
             return (CompletionScope.Database, "USE");
         }
 
-        var last = words[^1].ToUpperInvariant();
+        var last = words[^1].ToUpperInvariant().TrimEnd('.');
         var combined = words.Length > 1 ? $"{words[^2]} {last}".ToUpperInvariant() : last;
+
+        // "FROM dbo.orders", "FROM dbo." and "WHERE a.b" all carry a qualifier in the last token,
+        // so the clause is decided by the word before it.
+        if (words.Length > 1 && words[^1].Contains('.'))
+        {
+            var previous = words[^2].ToUpperInvariant();
+            if (routineContext.Contains(previous))
+            {
+                return (CompletionScope.Routine, previous);
+            }
+
+            if (tableContext.Contains(previous))
+            {
+                return (CompletionScope.Table, previous);
+            }
+
+            if (ColumnContext.Contains(previous))
+            {
+                return (CompletionScope.Column, previous);
+            }
+        }
+
+        if (routineContext.Contains(combined))
+        {
+            return (CompletionScope.Routine, combined);
+        }
+
+        if (routineContext.Contains(last))
+        {
+            return (CompletionScope.Routine, last);
+        }
 
         if (tableContext.Contains(combined))
         {
@@ -255,7 +328,7 @@ public static partial class CompletionEngine
             return [];
         }
 
-        var statement = text[start..caret];
+        var statement = text[start..StatementEnd(text, caret)];
         var references = new List<TableReference>();
         foreach (Match match in TableReferencePattern().Matches(statement))
         {
@@ -264,8 +337,8 @@ public static partial class CompletionEngine
                 continue;
             }
 
-            var name = NormalizeIdentifier(match.Groups["table"].Value);
-            var table = FindTable(name, ctes) ?? FindTable(name, tables);
+            var (schema, name) = SplitQualified(match.Groups["table"].Value);
+            var table = FindTable(name, schema, ctes) ?? FindTable(name, schema, tables);
 
             string? alias = null;
             if (match.Groups["alias"].Success)
@@ -420,7 +493,8 @@ public static partial class CompletionEngine
         var insert = InsertStatementPattern().Match(statement);
         if (insert.Success)
         {
-            var table = FindTable(NormalizeIdentifier(insert.Groups["table"].Value), tables);
+            var (insertSchema, insertName) = SplitQualified(insert.Groups["table"].Value);
+            var table = FindTable(insertName, insertSchema, tables);
             if (table is null)
             {
                 return null;
@@ -445,7 +519,8 @@ public static partial class CompletionEngine
             return null;
         }
 
-        var updated = FindTable(NormalizeIdentifier(update.Groups["table"].Value), tables);
+        var (updateSchema, updateName) = SplitQualified(update.Groups["table"].Value);
+        var updated = FindTable(updateName, updateSchema, tables);
         if (updated is null)
         {
             return null;
@@ -490,6 +565,21 @@ public static partial class CompletionEngine
 
         if (request.Qualifier is not null)
         {
+            // EXEC dbo. lists that schema's procedures; the qualifier is already typed.
+            if (request.Scope == CompletionScope.Routine)
+            {
+                AddRoutines(results, request, needle);
+                return Finish(results, int.MaxValue);
+            }
+
+            // dbo. in a table position lists that schema's tables; the qualifier is already typed,
+            // so the insert carries only the table name.
+            if (request.Scope == CompletionScope.Table && MatchedSchema(request) is not null)
+            {
+                AddTables(results, request, needle);
+                return Finish(results, int.MaxValue);
+            }
+
             // alias. or table. -> that table's columns, whatever the clause.
             var table = ResolveQualifier(request.References, request.Qualifier, request.Tables, request.Ctes);
             IReadOnlyList<TableSchema> sources;
@@ -518,8 +608,16 @@ public static partial class CompletionEngine
                 AddDatabases(results, request.Databases, needle);
                 break;
 
+            case CompletionScope.Routine:
+                AddRoutines(results, request, needle);
+                break;
+
             case CompletionScope.Table:
-                AddCtes(results, request.Ctes, needle);
+                if (MatchedSchema(request) is null)
+                {
+                    AddCtes(results, request.Ctes, needle);
+                }
+
                 AddTables(results, request, needle);
                 break;
 
@@ -531,9 +629,17 @@ public static partial class CompletionEngine
                 }
 
                 AddVariables(results, request.Variables, needle);
-                AddJoinConditions(results, request, needle);
+
+                // Join conditions belong to the ON clause. After WHERE they would paper over the
+                // predicate the user is actually writing.
+                if (string.Equals(request.Keyword, "ON", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddJoinConditions(results, request, needle);
+                }
+
                 AddScopedColumns(results, request, needle);
                 AddCteColumns(results, request, needle);
+                AddContinuationClauses(results, request, needle);
                 AddFunctions(results, needle, request.Dialect?.Functions);
                 break;
 
@@ -546,7 +652,7 @@ public static partial class CompletionEngine
                 AddSnippets(results, request.Snippets, request.Word, request.Clipboard);
                 AddVariables(results, request.Variables, needle);
                 AddKeywords(results, needle, request.Dialect?.Keywords);
-                AddPlainTables(results, request.Tables, needle);
+                AddPlainTables(results, request, needle);
                 AddColumns(results, request.Tables, needle);
                 break;
         }
@@ -554,7 +660,7 @@ public static partial class CompletionEngine
         // A table or database list is what these clauses are for: show them all, the popup scrolls.
         var max = request.Scope switch
         {
-            CompletionScope.Table or CompletionScope.Database => int.MaxValue,
+            CompletionScope.Table or CompletionScope.Database or CompletionScope.Routine => int.MaxValue,
             CompletionScope.Keyword => KeywordLimit,
             _ => SchemaLimit,
         };
@@ -654,6 +760,10 @@ public static partial class CompletionEngine
                 CaretOffset = expanded.Caret,
                 Selection = expanded.Selection,
                 RankSort = triggerMatch ? 0 : 1,
+
+                // A trigger prefix is what the user is typing; a name substring is a search
+                // fallback and must not outrank a keyword/table that actually starts with it.
+                MatchRank = triggerMatch ? 0 : 1,
             });
         }
     }
@@ -663,14 +773,56 @@ public static partial class CompletionEngine
         string needle,
         IReadOnlyList<string>? keywords)
     {
-        foreach (var keyword in (keywords ?? Keywords).Where(keyword => Matches(keyword, needle)))
+        var source = keywords ?? Keywords;
+        for (var index = 0; index < source.Count; index++)
         {
+            var keyword = source[index];
+            if (!Matches(keyword, needle))
+            {
+                continue;
+            }
+
             results.Add(new CompletionItem
             {
                 Label = keyword,
                 Detail = "keyword",
                 Kind = CompletionKind.Keyword,
                 InsertText = keyword,
+
+                // The dialect declares its keywords in reading order (SELECT, FROM, WHERE, ...);
+                // keeping that order beats sorting matches alphabetically.
+                RankSort = index,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Clauses that can follow a predicate. Offered while writing one (after WHERE/ON/HAVING) and
+    /// ranked below columns, so ORDER BY / GROUP BY are reachable without pushing columns down.
+    /// </summary>
+    private static readonly HashSet<string> ContinuationClauses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GROUP BY", "HAVING", "ORDER BY", "UNION", "UNION ALL", "OPTION",
+    };
+
+    private static void AddContinuationClauses(List<CompletionItem> results, CompletionRequest request, string needle)
+    {
+        var source = request.Dialect?.Keywords ?? Keywords;
+        for (var index = 0; index < source.Count; index++)
+        {
+            var keyword = source[index];
+            if (!ContinuationClauses.Contains(keyword) || !Matches(keyword, needle))
+            {
+                continue;
+            }
+
+            results.Add(new CompletionItem
+            {
+                Label = keyword,
+                Detail = "clause",
+                Kind = CompletionKind.Keyword,
+                InsertText = keyword,
+                RankSort = index,
             });
         }
     }
@@ -694,13 +846,33 @@ public static partial class CompletionEngine
         }
     }
 
-    /// <summary>Tables in a table position; after FROM/JOIN each one carries a generated alias.</summary>
+    /// <summary>
+    /// Tables in a table position. In FROM/JOIN they carry a generated alias, and the name is
+    /// schema-qualified and quoted the way the active dialect requires, so the insert runs as
+    /// written (<c>SELECT * FROM [dbo].[Orders] AS [o]</c>). A schema typed before the dot
+    /// (<c>FROM dbo.</c>) filters the list and is not repeated in the insert.
+    /// </summary>
     private static void AddTables(List<CompletionItem> results, CompletionRequest request, string needle)
     {
+        var typedSchema = MatchedSchema(request);
+        Func<string, string>? quote = request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
+        var tables = typedSchema is null
+            ? request.Tables
+            : request.Tables.Where(table => string.Equals(table.Schema, typedSchema, StringComparison.OrdinalIgnoreCase));
+
         if (request.Keyword is null || !AliasContext.Contains(request.Keyword))
         {
-            // UPDATE / INSERT INTO / TABLE positions take the bare name.
-            AddPlainTables(results, request.Tables, needle);
+            foreach (var table in tables.Where(table => Matches(table.Name, needle)))
+            {
+                results.Add(new CompletionItem
+                {
+                    Label = table.Name,
+                    Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
+                    Kind = CompletionKind.Table,
+                    InsertText = TableNameFor(table, quote, typedSchema),
+                });
+            }
+
             return;
         }
 
@@ -708,41 +880,117 @@ public static partial class CompletionEngine
             request.References.Where(reference => reference.Alias is not null).Select(reference => reference.Alias!),
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var table in request.Tables.Where(table => Matches(table.Name, needle)))
+        foreach (var table in tables.Where(table => Matches(table.Name, needle)))
         {
             var alias = GenerateUniqueAlias(table.Name, used);
+            var aliasText = quote is null ? alias : quote(alias);
             results.Add(new CompletionItem
             {
                 Label = table.Name,
-                Detail = $"table · AS {alias}",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · AS {aliasText}",
                 Kind = CompletionKind.Table,
-                InsertText = $"{table.Name} AS {alias}",
+                InsertText = $"{TableNameFor(table, quote, typedSchema)} AS {aliasText}",
                 RankSort = 0,
             });
 
             results.Add(new CompletionItem
             {
                 Label = $"{table.Name} (no alias)",
-                Detail = "table · no alias",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · no alias",
                 Kind = CompletionKind.Table,
-                InsertText = table.Name,
+                InsertText = TableNameFor(table, quote, typedSchema),
                 RankSort = 1,
             });
         }
     }
 
-    private static void AddPlainTables(List<CompletionItem> results, IReadOnlyList<TableSchema> tables, string needle)
+    private static void AddPlainTables(List<CompletionItem> results, CompletionRequest request, string needle)
     {
-        foreach (var table in tables.Where(table => Matches(table.Name, needle)))
+        Func<string, string>? quote = request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
+        foreach (var table in request.Tables.Where(table => Matches(table.Name, needle)))
         {
             results.Add(new CompletionItem
             {
                 Label = table.Name,
-                Detail = $"table · {table.Columns.Count} columns",
+                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
                 Kind = CompletionKind.Table,
-                InsertText = table.Name,
+                InsertText = TableNameFor(table, quote, typedSchema: null),
             });
         }
+    }
+
+    /// <summary>
+    /// Procedures in an EXEC/EXECUTE/CALL position. Accepting one expands the call with every
+    /// parameter set to NULL and selects the first value, so the user types over it instead of
+    /// remembering the signature. The call text itself belongs to the dialect.
+    /// </summary>
+    private static void AddRoutines(List<CompletionItem> results, CompletionRequest request, string needle)
+    {
+        var typedSchema = MatchedRoutineSchema(request);
+        var dialect = request.Dialect;
+
+        foreach (var routine in request.Routines
+                     .Where(routine => routine.Kind == RoutineKind.Procedure)
+                     .Where(routine => typedSchema is null
+                         || string.Equals(routine.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
+                     .Where(routine => Matches(routine.Name, needle)))
+        {
+            var call = dialect is null
+                ? new RoutineCallText(routine.Name)
+                : dialect.RoutineCall(typedSchema is null ? routine.Schema : null, routine.Name, routine.Parameters);
+
+            results.Add(new CompletionItem
+            {
+                Label = routine.Name,
+                Detail = $"{SchemaPrefix(routine.Schema)}proc · {ParameterSummary(routine.Parameters)}",
+                Kind = CompletionKind.Routine,
+                InsertText = call.Text,
+                Selection = call.HasSelection ? (call.SelectionStart, call.SelectionLength) : null,
+                RankSort = 0,
+            });
+        }
+    }
+
+    private static string ParameterSummary(IReadOnlyList<RoutineParameter> parameters) => parameters.Count switch
+    {
+        0 => "no params",
+        1 => "1 param",
+        _ => $"{parameters.Count} params",
+    };
+
+    /// <summary>The schema typed before the dot in a table position, when it names a real schema.</summary>
+    private static string? MatchedSchema(CompletionRequest request) =>
+        request.Qualifier is { } qualifier && request.Tables.Any(table =>
+            string.Equals(table.Schema, qualifier, StringComparison.OrdinalIgnoreCase))
+            ? qualifier
+            : null;
+
+    /// <summary>The schema typed before the dot in a routine position.</summary>
+    private static string? MatchedRoutineSchema(CompletionRequest request) =>
+        request.Qualifier is { } qualifier && request.Routines.Any(routine =>
+            string.Equals(routine.Schema, qualifier, StringComparison.OrdinalIgnoreCase))
+            ? qualifier
+            : null;
+
+    private static string SchemaPrefix(TableSchema table) => SchemaPrefix(table.Schema);
+
+    private static string ObjectKindLabel(TableSchema table) =>
+        table.Kind == TableKind.View ? "view" : "table";
+
+    private static string SchemaPrefix(string? schema) =>
+        string.IsNullOrWhiteSpace(schema) ? string.Empty : $"{schema} · ";
+
+    /// <summary><c>[dbo].[Orders]</c>, or just <c>[Orders]</c> when the schema was already typed.</summary>
+    private static string TableNameFor(TableSchema table, Func<string, string>? quote, string? typedSchema)
+    {
+        var name = quote is null ? table.Name : quote(table.Name);
+        if (typedSchema is not null || string.IsNullOrWhiteSpace(table.Schema))
+        {
+            return name;
+        }
+
+        var schema = table.Schema!;
+        return quote is null ? $"{schema}.{name}" : $"{quote(schema)}.{name}";
     }
 
     private static void AddCtes(List<CompletionItem> results, IReadOnlyList<TableSchema> ctes, string needle)
@@ -926,7 +1174,7 @@ public static partial class CompletionEngine
 
             // Declared foreign keys: joined.customer_id -> other.id (and the reverse direction).
             foreach (var group in joinedTable.ForeignKeys
-                         .Where(key => key.ReferencedTable.Equals(otherTable.Name, StringComparison.OrdinalIgnoreCase))
+                         .Where(key => ForeignKeyTargets(key, otherTable))
                          .GroupBy(key => key.Constraint, StringComparer.OrdinalIgnoreCase))
             {
                 var first = group.First();
@@ -938,7 +1186,7 @@ public static partial class CompletionEngine
             }
 
             foreach (var group in otherTable.ForeignKeys
-                         .Where(key => key.ReferencedTable.Equals(joinedTable.Name, StringComparison.OrdinalIgnoreCase))
+                         .Where(key => ForeignKeyTargets(key, joinedTable))
                          .GroupBy(key => key.Constraint, StringComparer.OrdinalIgnoreCase))
             {
                 var first = group.First();
@@ -1037,7 +1285,8 @@ public static partial class CompletionEngine
 
     private static IReadOnlyList<CompletionItem> Finish(List<CompletionItem> results, int max) =>
         results
-            .OrderBy(item => item.Rank)
+            .OrderBy(item => item.MatchRank)
+            .ThenBy(item => item.Rank)
             .ThenBy(item => item.RankSort)
             .ThenBy(item => item.Label.Length)
             .ThenBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
@@ -1051,14 +1300,18 @@ public static partial class CompletionEngine
     // ---------------------------------------------------------------- statement parsing
 
     [GeneratedRegex(
-        @"\b(?:FROM|JOIN)\s+(?<table>(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*))?)(?:\s+(?:AS\s+)?(?<alias>[A-Za-z_][\w$#@]*))?",
+        @"\b(?:FROM|JOIN)\s+(?<table>(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*))?)(?:\s+(?:AS\s+)?(?<alias>\[[^\]]+\]|""[^""]+""|[A-Za-z_][\w$#@]*))?",
         RegexOptions.IgnoreCase)]
     private static partial Regex TableReferencePattern();
 
-    [GeneratedRegex(@"^\s*UPDATE\s+(?<table>\[[^\]]+\]|[A-Za-z_][\w$#@]*)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(
+        @"^\s*UPDATE\s+(?<table>(?:\[[^\]]+\]|""[^""]+""|[A-Za-z_][\w$#@]*)(?:\s*\.\s*(?:\[[^\]]+\]|""[^""]+""|[A-Za-z_][\w$#@]*))?)",
+        RegexOptions.IgnoreCase)]
     private static partial Regex UpdateStatementPattern();
 
-    [GeneratedRegex(@"^\s*INSERT\s+(?:INTO\s+)?(?<table>\[[^\]]+\]|[A-Za-z_][\w$#@]*)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(
+        @"^\s*INSERT\s+(?:INTO\s+)?(?<table>(?:\[[^\]]+\]|""[^""]+""|[A-Za-z_][\w$#@]*)(?:\s*\.\s*(?:\[[^\]]+\]|""[^""]+""|[A-Za-z_][\w$#@]*))?)",
+        RegexOptions.IgnoreCase)]
     private static partial Regex InsertStatementPattern();
 
     [GeneratedRegex(@"\bSET\b", RegexOptions.IgnoreCase)]
@@ -1085,8 +1338,18 @@ public static partial class CompletionEngine
     [GeneratedRegex(@"^\[?[\w$#@]+\]?(?:\s*\.\s*\[?[\w$#@]+\]?)*$")]
     private static partial Regex SimpleColumnPattern();
 
-    private static int StatementStart(string text, int caret) =>
-        caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
+    /// <summary>Start of the statement under the caret (after the previous semicolon).</summary>
+    public static int StatementStart(string text, int caret) =>        caret > 0 ? text.LastIndexOf(';', caret - 1) + 1 : 0;
+
+    /// <summary>
+    /// The end of the statement under the caret: its next semicolon, or the document end. Aliases
+    /// and FROM/JOIN below the caret must still count — the SELECT list is written above the FROM.
+    /// </summary>
+    private static int StatementEnd(string text, int caret)
+    {
+        var index = text.IndexOf(';', Math.Clamp(caret, 0, text.Length));
+        return index < 0 ? text.Length : index;
+    }
 
     /// <summary>Columns a CTE exposes, best effort from its body when no column list is given.</summary>
     private static TableSchema BuildCte(
@@ -1254,7 +1517,25 @@ public static partial class CompletionEngine
     }
 
     private static TableSchema? FindTable(string name, IReadOnlyList<TableSchema> tables) =>
-        tables.FirstOrDefault(table => table.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        FindTable(name, null, tables);
+
+    private static TableSchema? FindTable(string name, string? schema, IReadOnlyList<TableSchema> tables)
+    {
+        // A schema-qualified reference must reach the table in that schema. Without a schema (a
+        // bare name, a CTE, or an alias lookup) the first name match is the historical behaviour.
+        var matches = tables.Where(table => table.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (schema is not null)
+        {
+            var scoped = matches.FirstOrDefault(table =>
+                string.Equals(table.Schema, schema, StringComparison.OrdinalIgnoreCase));
+            if (scoped is not null)
+            {
+                return scoped;
+            }
+        }
+
+        return matches.FirstOrDefault();
+    }
 
     /// <summary>Strips schema qualification and quoting: <c>[dbo].[Orders]</c> -> <c>Orders</c>.</summary>
     private static string NormalizeIdentifier(string token)
@@ -1267,6 +1548,16 @@ public static partial class CompletionEngine
         }
 
         return trimmed.Trim('[', ']', '"', '\'', ' ');
+    }
+
+    /// <summary>Splits a possibly-qualified name: <c>[dbo].[Orders]</c> -> (<c>dbo</c>, <c>Orders</c>).</summary>
+    private static (string? Schema, string Name) SplitQualified(string token)
+    {
+        var trimmed = token.Trim();
+        var dot = trimmed.LastIndexOf('.');
+        return dot < 0
+            ? (null, NormalizeIdentifier(trimmed))
+            : (NormalizeIdentifier(trimmed[..dot]), NormalizeIdentifier(trimmed[(dot + 1)..]));
     }
 
     // ---------------------------------------------------------------- alias + join heuristics
@@ -1306,6 +1597,12 @@ public static partial class CompletionEngine
 
         return alias;
     }
+
+    /// <summary>A foreign key points at this table, honouring the schema when the provider reports one.</summary>
+    private static bool ForeignKeyTargets(ForeignKeySchema key, TableSchema table) =>
+        key.ReferencedTable.Equals(table.Name, StringComparison.OrdinalIgnoreCase)
+        && (string.IsNullOrWhiteSpace(key.ReferencedSchema)
+            || string.Equals(key.ReferencedSchema, table.Schema, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Key columns usable as the "one" side of a join: the primary key, else <c>id</c>.</summary>
     private static IReadOnlyList<string> PreferredKeyColumns(TableSchema table) =>

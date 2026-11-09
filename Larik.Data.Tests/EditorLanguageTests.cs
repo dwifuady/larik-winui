@@ -299,9 +299,104 @@ public sealed class EditorLanguageTests
             Message = "ok",
         };
         Assert.Null(result.GeneratedQuery);
+        Assert.Null(result.Statement);
 
         var table = new TableSchema { Name = "users", Columns = ["id"] };
         Assert.Null(table.Schema);
+    }
+
+    // ------------------------------------------------------------------ routines
+
+    [Fact]
+    public void T_sql_expands_a_procedure_call_with_named_null_arguments()
+    {
+        var parameters = new[]
+        {
+            new RoutineParameter { Name = "@id", DataType = "int" },
+            new RoutineParameter { Name = "@name", DataType = "nvarchar(50)" },
+        };
+
+        var call = Tsql.RoutineCall("dbo", "find_user", parameters);
+
+        Assert.Equal("[dbo].[find_user] @id = NULL, @name = NULL", call.Text);
+        Assert.True(call.HasSelection);
+        Assert.Equal("NULL", call.Text.Substring(call.SelectionStart, call.SelectionLength));
+    }
+
+    [Fact]
+    public void T_sql_routine_without_parameters_is_just_the_quoted_name()
+    {
+        var call = Tsql.RoutineCall("dbo", "refresh_stats", []);
+
+        Assert.Equal("[dbo].[refresh_stats]", call.Text);
+        Assert.False(call.HasSelection);
+    }
+
+    [Fact]
+    public void T_sql_invocation_adds_exec()
+    {
+        var invocation = Tsql.RoutineInvocation("dbo", "p", [new RoutineParameter { Name = "@a" }]);
+
+        Assert.Equal("EXEC [dbo].[p] @a = NULL", invocation);
+    }
+
+    [Fact]
+    public void T_sql_preview_quotes_the_object_and_caps_the_rows()
+    {
+        Assert.Equal(
+            "SELECT TOP (100) * FROM [dbo].[Orders]",
+            Tsql.PreviewStatement("dbo", "Orders", 100));
+    }
+
+    [Fact]
+    public void T_sql_reference_lookup_builds_a_typed_filter()
+    {
+        var sql = Tsql.RowsStatement(
+            "dbo",
+            "MSdbms_datatype",
+            [new RowFilter("dbms_id", "1", "int")],
+            orderByColumn: null,
+            limit: 25);
+
+        Assert.Equal(
+            "SELECT TOP (25) * FROM [dbo].[MSdbms_datatype] WHERE [dbms_id] = 1",
+            sql);
+    }
+
+    [Fact]
+    public void T_sql_reference_list_orders_by_the_key_column()
+    {
+        var sql = Tsql.RowsStatement(
+            "dbo",
+            "MSdbms",
+            [],
+            orderByColumn: "dbms_id",
+            limit: 200);
+
+        Assert.Equal(
+            "SELECT TOP (200) * FROM [dbo].[MSdbms] ORDER BY [dbms_id]",
+            sql);
+    }
+
+    [Fact]
+    public void T_sql_formats_literals_for_the_reference_filter()
+    {
+        Assert.Equal("N'it''s'", Tsql.FormatLiteral("it's", "nvarchar"));
+        Assert.Equal("1", Tsql.FormatLiteral("1", "bit"));
+        Assert.Equal("0x0A", Tsql.FormatLiteral("0x0A", "varbinary"));
+        Assert.Equal("NULL", Tsql.FormatLiteral(null, "int"));
+    }
+
+    [Fact]
+    public void Routine_and_column_details_default_to_the_pre_feature_contract()
+    {
+        var table = new TableSchema { Name = "users", Columns = ["id"] };
+        Assert.Equal(TableKind.Table, table.Kind);
+        Assert.Empty(table.ColumnDetails);
+
+        var routine = new RoutineSchema { Name = "p" };
+        Assert.Equal(RoutineKind.Procedure, routine.Kind);
+        Assert.Empty(routine.Parameters);
     }
 
     private sealed class NoLanguageProvider : IDatabaseProvider

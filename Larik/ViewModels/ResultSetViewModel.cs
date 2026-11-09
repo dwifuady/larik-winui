@@ -32,18 +32,20 @@ public partial class ResultSetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ActiveStripOpacity))]
     public partial bool IsActive { get; set; }
 
-    public string Title => $"Result {Index + 1}";
+    public string Title => Result.Messages.Count > 0 ? "Messages" : $"Result {Index + 1}";
 
     public string CloseName => $"Close {Title}";
 
     public string Detail => Result.IsError
         ? "Error"
-        : Result.Rows.Count switch
-        {
-            0 => Result.Message,
-            1 => "1 row",
-            var count => $"{count:N0} rows",
-        };
+        : Result.Messages.Count > 0
+            ? $"{Result.Messages.Count:N0} message{(Result.Messages.Count == 1 ? string.Empty : "s")}"
+            : Result.Rows.Count switch
+            {
+                0 => Result.Message,
+                1 => "1 row",
+                var count => $"{count:N0} rows",
+            };
 
     public Brush DetailBrush => Result.IsError
         ? StudioColors.Danger
@@ -58,7 +60,9 @@ public partial class ResultSetViewModel : ObservableObject
         ? $"{Result.Rows.Count} rows · {Result.Elapsed.TotalMilliseconds:0} ms"
         : string.Empty;
 
-    public string Tooltip => Result.Message;
+    public string Tooltip => Result.Messages.Count > 0
+        ? string.Join(Environment.NewLine, Result.Messages)
+        : Result.Message;
 
     public Brush? TabBackground => IsActive ? Tab.Space.ActiveTintBrush : null;
 

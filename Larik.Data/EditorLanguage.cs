@@ -78,6 +78,19 @@ public interface IEditorLanguage
 }
 
 /// <summary>
+/// The text accepting a routine inserts, plus the first argument value to leave selected so the
+/// user can type over <c>NULL</c>. Offsets are relative to <see cref="Text"/>; a negative start
+/// means "place the caret at the end".
+/// </summary>
+public readonly record struct RoutineCallText(
+    string Text,
+    int SelectionStart = -1,
+    int SelectionLength = 0)
+{
+    public bool HasSelection => SelectionStart >= 0 && SelectionLength > 0;
+}
+
+/// <summary>
 /// A SQL dialect: an editor language plus the metadata the completion engine needs. MongoDB (and
 /// any other non-SQL engine) must not implement this; it implements <see cref="IEditorLanguage"/>.
 /// </summary>
@@ -91,6 +104,82 @@ public interface ISqlDialect : IEditorLanguage
 
     /// <summary>Words after which a table name is expected (FROM, JOIN, INTO, ...).</summary>
     IReadOnlyList<string> TableContextKeywords { get; }
+
+    /// <summary>
+    /// Words after which a routine name is expected. The default covers the SQL engines the app
+    /// ships for; an engine with a different call keyword overrides this list.
+    /// </summary>
+    IReadOnlyList<string> RoutineContextKeywords => ["EXEC", "EXECUTE", "CALL"];
+
+    /// <summary>
+    /// One routine call: a quoted, schema-qualified name plus an argument list. The default writes
+    /// only the name, which is valid for any engine; dialects with argument syntax override it so
+    /// accepting a procedure expands its parameters.
+    /// </summary>
+    RoutineCallText RoutineCall(string? schema, string name, IReadOnlyList<RoutineParameter> parameters)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(name)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}";
+        return new RoutineCallText(qualified);
+    }
+
+    /// <summary>
+    /// A complete routine statement, used when the schema browser inserts a procedure
+    /// (<c>EXEC [dbo].[p] @a = NULL</c>). The first routine-context word is the call keyword.
+    /// </summary>
+    string RoutineInvocation(string? schema, string name, IReadOnlyList<RoutineParameter> parameters) =>
+        $"{RoutineContextKeywords[0]} {RoutineCall(schema, name, parameters).Text}";
+
+    /// <summary>
+    /// A statement returning the first <paramref name="limit"/> rows of a table or view, used by the
+    /// schema browser's preview. The default has no row-limit clause (the provider's execution cap
+    /// still applies); dialects with <c>TOP</c>/<c>LIMIT</c> override it.
+    /// </summary>
+    string PreviewStatement(string? schema, string name, int limit)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(name)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}";
+        return $"SELECT * FROM {qualified}";
+    }
+
+    /// <summary>
+    /// Selects rows from one table, optionally filtered and ordered. The reference preview uses it
+    /// to list a small lookup table or fetch the matching rows of a large one.
+    /// </summary>
+    string RowsStatement(
+        string? schema,
+        string table,
+        IReadOnlyList<RowFilter> filters,
+        string? orderByColumn,
+        int limit)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(table)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
+
+        var where = filters.Count == 0
+            ? string.Empty
+            : " WHERE " + string.Join(
+                " AND ",
+                filters.Select(filter => filter.Value is null
+                    ? $"{QuoteIdentifier(filter.Column)} IS NULL"
+                    : $"{QuoteIdentifier(filter.Column)} = {FormatLiteral(filter.Value, filter.DataType)}"));
+
+        var order = string.IsNullOrWhiteSpace(orderByColumn)
+            ? string.Empty
+            : $" ORDER BY {QuoteIdentifier(orderByColumn)}";
+
+        return $"SELECT * FROM {qualified}{where}{order}";
+    }
+
+    /// <summary>
+    /// Formats a cell value as a SQL literal for <see cref="RowsStatement"/>. The default quotes
+    /// everything; dialects with native numeric/date/binary literals should override it.
+    /// </summary>
+    string FormatLiteral(string? value, string? dataType) =>
+        value is null ? "NULL" : $"'{value.Replace("'", "''")}'";
 
     /// <summary>Quotes an identifier the way this engine requires ("[x]" or "\"x\"").</summary>
     string QuoteIdentifier(string name);

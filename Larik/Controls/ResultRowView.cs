@@ -12,8 +12,11 @@ namespace Larik.Controls;
 /// </summary>
 public sealed class ResultRowView : Grid
 {
+    private static readonly SolidColorBrush Transparent = new(Microsoft.UI.Colors.Transparent);
+
     private readonly StackPanel _cellsPanel;
     private readonly Border _bottomLine;
+    private readonly Border _matchBar;
     private readonly List<Border> _cellBorders = [];
     private readonly List<TextBlock> _cells = [];
     private readonly FontFamily _monoFont;
@@ -61,10 +64,19 @@ public sealed class ResultRowView : Grid
         };
         Children.Add(_bottomLine);
 
+        _matchBar = new Border
+        {
+            Width = 3,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Visibility = Visibility.Collapsed,
+        };
+        Children.Add(_matchBar);
+
         DataContextChanged += (_, _) => UpdateCells();
         Loaded += (_, _) => FindAncestor(this)?.AttachRow(this);
         PointerEntered += (_, _) => Background = _hoverBrush;
-        PointerExited += (_, _) => Background = null;
+        PointerExited += (_, _) => RestoreBackground();
     }
 
     /// <summary>Re-applies the visible cell backgrounds for the grid's current selection.</summary>
@@ -110,6 +122,11 @@ public sealed class ResultRowView : Grid
         }
 
         Width = row.Layout.TotalWidth;
+        Background = row.HighlightBrush ?? Transparent;
+        _matchBar.Background = row.HighlightBorderBrush;
+        _matchBar.Visibility = row.HighlightBorderBrush is null
+            ? Visibility.Collapsed
+            : Visibility.Visible;
 
         while (_cellBorders.Count < row.Layout.Columns.Count)
         {
@@ -149,7 +166,8 @@ public sealed class ResultRowView : Grid
 
             cell.Visibility = Visibility.Visible;
             cell.Width = column.Width;
-            cell.Background = null;
+            // A transparent background makes the whole cell (not just its text glyphs) hit-testable.
+            cell.Background = Transparent;
 
             var text = _cells[index];
             text.Text = value ?? "NULL";
@@ -157,10 +175,14 @@ public sealed class ResultRowView : Grid
             text.Foreground = value is null
                 ? _mutedBrush
                 : index == 0 ? _secondaryBrush : _primaryBrush;
+            ToolTipService.SetToolTip(text, value);
         }
 
         UpdateSelection();
     }
+
+    private void RestoreBackground() =>
+        Background = DataContext is ResultRow row ? row.HighlightBrush ?? Transparent : Transparent;
 
     private void UpdateSelection()
     {
@@ -179,7 +201,7 @@ public sealed class ResultRowView : Grid
         {
             var selected = rowSelected && index >= minColumn && index <= maxColumn;
             _cellBorders[index].Background = !selected
-                ? null
+                ? Transparent
                 : row.Index == _selectionFocusRow && index == _selectionFocusColumn
                     ? _activeCellBrush
                     : _selectionBrush;

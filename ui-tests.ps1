@@ -149,6 +149,27 @@ function Get-UiJson {
     return $data
 }
 
+# list-windows without the app filter: the save picker is a separate process (PickerHost).
+function Get-AllWindows {
+    $data = (Invoke-WinAppChecked (@('ui', 'list-windows', '--json') + $ScopeArgs)) -join "`n" | ConvertFrom-Json
+    if ($data -is [System.Array]) { return $data }
+    return $data
+}
+
+# The save picker is hosted by PickerHost, a different process, so an -a <app> filter cannot act on
+# its controls. Target the dialog HWND explicitly and leave the app filter off.
+function Invoke-PickerUi {
+    param([string[]]$Arguments, [string]$Hwnd, [int]$Attempts = 1)
+    Invoke-WinAppChecked (@('ui') + $Arguments + $ScopeArgs + @('-w', $Hwnd)) -Attempts $Attempts
+}
+
+function Get-PickerJson {
+    param([string[]]$Arguments, [string]$Hwnd)
+    $data = (Invoke-PickerUi $Arguments $Hwnd) -join "`n" | ConvertFrom-Json
+    if ($data -is [System.Array]) { return $data }
+    return $data
+}
+
 function Test-UI {
     param([string]$Name, [scriptblock]$Script)
 
@@ -183,6 +204,8 @@ public class LarikWin32 {
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
 }
 "@
 
@@ -231,6 +254,16 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
+# Result-tab titles repeat ("Messages"), so click the rightmost visible ListItem with that title.
+function Click-NewestResultTab {
+    param([string]$Title)
+    Focus-App
+    $tabs = @((Find-Element $Title).matches) |
+        Where-Object { $_.type -eq 'ListItem' -and $_.width -gt 0 -and $_.height -gt 0 } |
+        Sort-Object x
+    if ($tabs.Count -eq 0) { throw "No result tab '$Title' found." }
+    Invoke-Ui @('click', $tabs[-1].selector) -Attempts 4 | Out-Null
+}
 function Right-Click-Element {
     param([string]$Selector)
     Focus-App
@@ -278,6 +311,10 @@ Invoke-Ui @('focus', 'Editor') | Out-Null
 try {
     Test-UI 'window shows the studio title' {
         Assert-True ((Invoke-Ui @('list-windows', '--json')) -join '' -match 'Larik SQL Studio') 'main window not found'
+    }
+
+    Test-UI 'the results pane starts collapsed' {
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'the results pane was visible before a query'
     }
 
     Test-UI 'sidebar lists the active workspace tabs' {
@@ -510,6 +547,27 @@ try {
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
     }
 
+    Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'Ctrl+R did not hide the results pane'
+
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -gt 0) 'Ctrl+R did not show the results pane'
+
+        Send-Keys 'ctrl+r'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Results grid').matchCount -eq 0) 'the second hide did not work'
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'FULL NAME' 20
+        Assert-True ((Find-Element 'Results grid').matchCount -gt 0) 'running a query did not reopen the results pane'
+    }
+
     Test-UI 'Ctrl+Enter runs only the statement under the caret' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -557,6 +615,52 @@ try {
         Assert-True ((Get-EditorText) -eq 'select 42') 'Ctrl+Y did not redo the typing'
     }
 
+    Test-UI 'Ctrl+F counts and cycles matches' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select customer_id from customers; select customer_id from orders;' -Literal
+        Start-Sleep -Milliseconds 400
+
+        Send-Keys 'ctrl+f'
+        Wait-ForText 'Find text'
+        Send-Keys 'customer_id' -Literal
+        Wait-ForText '1 of 2'
+
+        Send-Keys 'enter'
+        Wait-ForText '2 of 2'
+        Send-Keys 'shift+enter'
+        Wait-ForText '1 of 2'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Find text').matchCount -eq 0) 'Escape left the find bar open'
+        Assert-True ((Get-EditorText) -eq 'select customer_id from customers; select customer_id from orders;') 'finding changed the document'
+    }
+
+    Test-UI 'replace all rewrites every match in one undoable step' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select customer_id from customers; select customer_id from orders;' -Literal
+        Start-Sleep -Milliseconds 400
+
+        Send-Keys 'ctrl+h'
+        Wait-ForText 'Replace text'
+        Send-Keys 'customer_id' -Literal
+        Wait-ForText '1 of 2'
+
+        Focus-Element 'Replace text'
+        Send-Keys 'id' -Literal
+        Click-Element 'Replace all matches'
+        Wait-ForText 'Replaced 2'
+        Assert-True ((Get-EditorText) -eq 'select id from customers; select id from orders;') "replace all produced '$((Get-EditorText))'"
+
+        # One find/replace edit must be one undo step, like typing.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+z'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -eq 'select customer_id from customers; select customer_id from orders;') 'Ctrl+Z did not undo the whole replace-all'
+    }
+
     Test-UI 'FROM suggests every table in the active database' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -578,7 +682,25 @@ try {
         Assert-True ((Find-Element 'customers').matchCount -gt 0) 'customers is not suggested'
         Send-Keys 'tab'
         Start-Sleep -Milliseconds 600
-        Assert-True ((Get-EditorText) -eq 'select * from customers AS c') "alias was not appended: '$((Get-EditorText))'"
+        Assert-True ((Get-EditorText) -eq 'select * from dbo.customers AS c') "schema/alias was not appended: '$((Get-EditorText))'"
+
+        # The inserted reference must parse back, or the next alias completion silently dies.
+        Send-Keys ' where c.' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'full_name').matchCount -gt 0) 'columns do not complete after a schema-qualified insert'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'typing a schema narrows table suggestions without repeating it' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from dbo.' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'orders').matchCount -gt 0) 'schema-qualified table is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -eq 'select * from dbo.orders AS o') "the typed schema was repeated or the alias was lost: '$((Get-EditorText))'"
     }
 
     Test-UI 'join condition is suggested after ON' {
@@ -743,6 +865,190 @@ try {
         Assert-True ((Find-Element 'rows returned').matchCount -gt 0) 'query did not report rows'
     }
 
+    Test-UI 'USE switches the tab, picker and completion to another database' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'use msdb' -Literal
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'msdb' 30
+
+        # Completion now reads msdb: only a USE that reached the shell reloads the schema, and the
+        # insert is schema-qualified and bracketed for T-SQL.
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from back' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'backupset').matchCount -gt 0) 'msdb tables are not suggested after USE'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[backupset] AS [b]') "schema/alias insert was '$((Get-EditorText))'"
+
+        # A bracketed schema and alias must parse back for column completion.
+        Send-Keys ' where b.' -Literal
+        Start-Sleep -Milliseconds 1200
+        Assert-True ((Find-Element 'backup_set_id').matchCount -gt 0) 'columns do not complete through the bracketed alias'
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'Shift+Space previews the referenced rows of a foreign key' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select top 5 dbms_id from dbo.MSdbms_datatype;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'dbms_id' 30
+        Start-Sleep -Milliseconds 1500
+
+        Focus-Element 'Results grid'
+        Send-Keys 'home'
+        Assert-True ((Find-Element 'References dbo.MSdbms.dbms_id').matchCount -gt 0) 'the foreign-key header icon is missing'
+        Send-Keys 'shift+space'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'MSdbms' 20
+        Assert-True ((Find-Element 'MSSQLSERVER').matchCount -gt 0) 'the full lookup table was not listed'
+        Assert-True ((Find-Element 'match on row 1').matchCount -gt 0) 'the matching reference row is not reported'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Reference preview').matchCount -eq 0) 'Esc did not close the reference preview'
+
+        # The header link icon is the discoverable equivalent of Shift+Space.
+        Click-Element 'References dbo.MSdbms.dbms_id'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'MSSQLSERVER' 20
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'a large reference table is looked up by key, not listed in full' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select top 5 default_datatype_mapping_id from dbo.MSdbms_map;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'default_datatype_mapping_id' 30
+        Start-Sleep -Milliseconds 1500
+
+        Focus-Element 'Results grid'
+        Send-Keys 'home'
+        Send-Keys 'shift+space'
+        Wait-ForText 'Reference preview' 20
+        Wait-ForText 'Matching rows' 20
+        Assert-True ((Find-Element 'Full list').matchCount -eq 0) 'a large reference table was listed in full'
+        Assert-True ((Find-Element 'match on row 1').matchCount -gt 0) 'the matching lookup row is not reported'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'Ctrl+K browses the schema and inserts a table name' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from ' -Literal
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'backup' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'backupset').matchCount -gt 0) 'schema search did not find msdb tables'
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[backupset]') "schema insert produced '$((Get-EditorText))'"
+        Assert-True ((Find-Element 'Search schema').matchCount -eq 0) 'the schema peek stayed open after inserting'
+    }
+
+    Test-UI 'completion suggests views and executes a procedure with its parameters' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from autoadmin_backup_configurations' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'autoadmin_backup_configurations').matchCount -gt 0) 'views are not suggested in FROM'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'select * from [dbo].[autoadmin_backup_configurations] AS [abc]') "view insert was '$((Get-EditorText))'"
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'exec autoadmin_metadata_query_dbs' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'autoadmin_metadata_query_dbs').matchCount -gt 0) 'procedures are not suggested after EXEC'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'exec [dbo].[autoadmin_metadata_query_dbs] @task_agent_guid = NULL, @schema_version = NULL, @db_name = NULL') "procedure insert was '$((Get-EditorText))'"
+
+        # Accepting the signature selects the first NULL; typing over it proves the placeholder.
+        Send-Keys '1'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -like '*@task_agent_guid = 1,*') "the first parameter was not selected: '$((Get-EditorText))'"
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 200
+    }
+
+    Test-UI 'the schema browser lists a view and inserts a procedure call' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'autoadmin_backup_configurations' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'autoadmin_backup_configurations').matchCount -gt 0) 'schema search did not find the view'
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq '[dbo].[autoadmin_backup_configurations]') "view insert was '$((Get-EditorText))'"
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Send-Keys 'autoadmin_metadata_query_dbs' -Literal
+        Start-Sleep -Milliseconds 900
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -eq 'EXEC [dbo].[autoadmin_metadata_query_dbs] @task_agent_guid = NULL, @schema_version = NULL, @db_name = NULL') "procedure insert was '$((Get-EditorText))'"
+    }
+
+    Test-UI 'the schema peek can be pinned beside the editor' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+k'
+        Wait-ForText 'Search schema' 10
+        Click-Element 'Pin schema browser'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Search schema').matchCount -gt 0) 'pinning closed the schema surface'
+        Assert-True ((Find-Element 'Preview 100 rows').matchCount -eq 0) 'the pinned pane still shows the peek detail'
+        Click-Element 'Pin schema browser'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Search schema').matchCount -eq 0) 'unpinning left the inspector open'
+    }
+
+    Test-UI 'PRINT opens a Messages tab with the server output' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "print 'larik message test';" -Literal
+        Send-Keys 'f5'
+        Start-Sleep -Milliseconds 1500
+        Click-NewestResultTab 'Messages'
+        Wait-ForText 'larik message test' 20
+        Assert-True ((Find-Element 'Messages').matchCount -gt 0) 'PRINT did not open a Messages tab'
+    }
+
+    Test-UI 'switching back from Messages hides the message text over the rows' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "print 'larik behind rows';" -Literal
+        Send-Keys 'f5'
+        Start-Sleep -Milliseconds 1500
+        Click-NewestResultTab 'Messages'
+        Wait-ForText 'larik behind rows' 20
+
+        # Running a row query replaces the active Messages result. The message panel must clear
+        # instead of staying painted over the grid.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 1 as alpha;' -Literal
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'alpha' 30
+        Start-Sleep -Milliseconds 500
+
+        Assert-True ((Find-Element 'larik behind rows').matchCount -eq 0) 'the message text is still visible over the result rows'
+        Assert-True ((Find-Element 'alpha').matchCount -gt 0) 'the result rows did not render after Messages'
+    }
+
     Test-UI 'Ctrl+B collapses and restores the sidebar' {
         Send-Keys 'ctrl+b'
         Start-Sleep -Milliseconds 700
@@ -797,6 +1103,26 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Find-Element 'database_name').matchCount -gt 0) 'the tab result was not restored'
         Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab'
+    }
+
+    Test-UI 'the cell preview is remembered per tab, not shared' {
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the preview did not open on Query 2'
+
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Cell preview').matchCount -eq 0) 'Query 1 inherited Query 2 preview'
+
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 800
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'Query 2 did not restore its own preview'
+
+        Focus-Element 'Results grid'
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
     }
 
     Test-UI 'a large result switches tabs quickly' {
@@ -883,6 +1209,23 @@ try {
         Assert-True ($withHeaders -match 'master') "the column values are missing: $withHeaders"
     }
 
+    Test-UI 'Space opens the cell preview and Esc closes it' {
+        Focus-Element 'Results grid'
+        Send-Keys 'ctrl+home'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the cell preview did not open'
+
+        # The panel follows the focused cell, so arrowing must not close it.
+        Send-Keys 'right'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Cell preview').matchCount -gt 0) 'the preview closed while moving between cells'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Find-Element 'Cell preview').matchCount -eq 0) 'Esc did not close the cell preview'
+    }
+
     Test-UI 'a column width can be dragged from the header' {
         $handle = @((Find-Element 'Resize name column').matches) | Select-Object -First 1
         Assert-True ($null -ne $handle) 'the column resize handle was not found'
@@ -898,6 +1241,45 @@ try {
         $moved = @((Find-Element 'database_id').matches) | Select-Object -First 1
         Assert-True ($null -ne $moved) 'the next column disappeared after resizing'
         Assert-True ($moved.x -gt ($next.x + 50)) "the column did not widen (before=$($next.x) after=$($moved.x))"
+    }
+
+    Test-UI 'the grid exports the whole result to a CSV file' {
+        # The save picker's file type is the format choice; drive it end to end so the bytes on
+        # disk (header, CRLF rows, NULL handling) are what a person would actually get.
+        $path = Join-Path $env:TEMP ("larik-export-{0}.csv" -f [guid]::NewGuid().ToString('n'))
+        Focus-Element 'Results grid'
+        $cell = @((Find-Element 'master').matches) | Where-Object { $_.width -gt 0 -and $_.height -gt 0 } | Select-Object -First 1
+        Assert-True ($null -ne $cell) 'no visible result cell to right-click'
+        Focus-App
+        Invoke-Ui @('click', $cell.selector, '--right') -Attempts 4 | Out-Null
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Export results').matchCount -gt 0) 'the grid menu has no export action'
+
+        Invoke-Ui @('click', 'Export results') | Out-Null
+        Wait-ForText 'Save As' 15
+
+        # The picker runs in its own process, so find its window and drive that.
+        $dialog = @((Get-AllWindows) | Where-Object { $_.title -eq 'Save As' -and $_.hwnd } | Select-Object -First 1)
+        Assert-True ($dialog.Count -gt 0) 'the save picker window was not found'
+        $picker = [string]$dialog[0].hwnd
+
+        $nameBox = @((Get-PickerJson @('search', 'File name', '--json') $picker).matches |
+                Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $nameBox) 'the save picker has no file-name field'
+        Invoke-PickerUi @('focus', $nameBox.selector) $picker | Out-Null
+        Invoke-PickerUi @('set-value', $nameBox.selector, $path) $picker | Out-Null
+
+        $save = @((Get-PickerJson @('search', 'Save', '--json') $picker).matches |
+                Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+        Assert-True ($null -ne $save) 'the save picker has no Save button'
+        Invoke-PickerUi @('invoke', $save.selector) $picker | Out-Null
+        Wait-ForText 'Exported' 15
+
+        Assert-True (Test-Path $path) "no file was written at $path"
+        $csv = Get-Content $path -Raw
+        Assert-True ($csv -match '^name,database_id') "the CSV header is missing: $($csv.Substring(0, [math]::Min(80, $csv.Length)))"
+        Assert-True ($csv -match 'master') 'the exported CSV has no result rows'
+        Remove-Item $path -ErrorAction SilentlyContinue
     }
 
     Test-UI 'a batch opens one result tab per statement' {
@@ -1146,6 +1528,28 @@ try {
         $state = Get-StudioStateText
         Assert-True ($state -match 'Customer totals') 'seeded tabs are missing from the database'
         Assert-True ($state -match 'Query 1') 'the new tab is missing from the database'
+    }
+
+    Test-UI 'window size and position are remembered' {
+        Focus-App
+        $hwnd = [IntPtr]([int64]$script:MainWindow)
+        [LarikWin32]::ShowWindow($hwnd, 9) | Out-Null
+        Start-Sleep -Milliseconds 300
+
+        # Resize in physical pixels; the app stores DIPs, so the saved value stays 820x620.
+        $scale = [LarikWin32]::GetDpiForWindow($hwnd) / 96.0
+        [LarikWin32]::SetWindowPos(
+            $hwnd, [IntPtr]::Zero, 140, 100, [int](820 * $scale), [int](620 * $scale), 0x0014) | Out-Null
+        Start-Sleep -Milliseconds 1500
+
+        # Written from AppWindow.Changed (debounced), not only on close, so a killed process keeps it.
+        $state = Get-StudioStateText
+        $width = [regex]::Match($state, '"Width":\s*(\d+)')
+        $height = [regex]::Match($state, '"Height":\s*(\d+)')
+        Assert-True ($width.Success -and $height.Success) 'the window rectangle was not saved with the session'
+        Assert-True ([math]::Abs([int]$width.Groups[1].Value - 820) -le 3) "saved width is $($width.Groups[1].Value), expected 820"
+        Assert-True ([math]::Abs([int]$height.Groups[1].Value - 620) -le 3) "saved height is $($height.Groups[1].Value), expected 620"
+        Assert-True ($state -match '"Maximized":\s*false') 'the saved window was not in its restored state'
     }
 
     Test-UI 'refuses a mutating statement without WHERE' {

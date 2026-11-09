@@ -69,8 +69,14 @@ workspaces (click and a horizontal trackpad swipe), new-workspace creation is ga
 dialog, `sel` → suggestion popup →
 Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs only the statement
 under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
-syntax highlighting is applied without breaking Ctrl+Z, query and result tabs drag-reorder,
-`FROM ` lists every table and appends a generated alias, `ON ` suggests a join condition, columns
+syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
+replace all rewrites every match as one undo step, query and result tabs drag-reorder,
+`FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
+(`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `Ctrl+K`
+finds a table in the schema peek and inserts its quoted name, views complete like tables, `EXEC`
+expands a procedure with its parameters and selects the first `NULL`, the peek also inserts a full
+procedure call, the peek pins beside the editor and unpins, a `PRINT` opens a Messages tab with the
+server text, `ON ` suggests a join condition, columns
 are offered through their alias, `UPDATE SET` / `INSERT INTO` list the target table's columns,
 declared `@variables`, `USE` databases and CTE names complete, workspace switching swaps
 connection + tabs + editor, a
@@ -82,7 +88,10 @@ appends a new one, a transaction opened in one tab does not leak into another ta
 running `WAITFOR`, each result remembers its scroll row across result/query tab switches, a
 1,000-row result switches tabs quickly, a wide result scrolls horizontally under its sticky header,
 results are capped by the provider at 5,000 rows, cells/ranges copy as TSV and copy with headers,
-Ctrl+Space selects a column, a header drag resizes it, the connection dialog renders the provider's
+Space opens the cell preview and Esc closes it, Shift+Space previews the referenced row,
+the grid menu exports the whole result to a CSV file through the real save dialog,
+Ctrl+Space selects a column, a header drag resizes it, the window rectangle is saved with the
+session, the connection dialog renders the provider's
 declared fields and its Test result, saved state is written to disk, and a real **SQL Server**
 workspace is
 connected, its databases listed and `sys.databases` queried (that check needs SQL Server LocalDB
@@ -132,10 +141,24 @@ contract-compatibility rules.
 `TableSchema` also carries `PrimaryKey` and `ForeignKeys`. Providers that report them get
 foreign-key-backed join suggestions (the SQL Server provider reads `sys.indexes` and
 `sys.foreign_keys`; the Demo provider declares them). Without key metadata, completion falls back
-to the desktop app's name heuristics.
+to the desktop app's name heuristics. `TableSchema.Kind` distinguishes a view from a base table and
+`ColumnDetails` adds the engine's data types; `RoutineSchema` (with ordered `RoutineParameter`s)
+describes procedures and functions. All are additive, so an older provider that reports only names
+and columns keeps working. The SQL Server provider reads views through `sys.objects`/`sys.columns`
+and procedures with their parameters from `sys.procedures`/`sys.parameters`; completion after
+`EXEC` is rendered by the dialect's `RoutineCall`, which is why PostgreSQL can use `CALL` without a
+shell change.
+
+**Foreign-key reference previews** use `QueryResult.Statement` (the SQL that produced the result,
+optional and null for older providers) plus the same `TableSchema.ForeignKeys` metadata. The dialect
+owns the lookup SQL through `RowsStatement` and `FormatLiteral`; `IDatabaseConnection.EstimateRowCountAsync`
+(optional, `sys.partitions` on SQL Server) chooses between listing a small lookup table and fetching
+only matching rows from a large one.
 
 `ProviderSetting.IsAdvanced` marks tuning fields (port, encryption, timeouts) that belong in the
-connection dialog's **Advanced** section instead of competing with the server and credentials.
+connection dialog's **Advanced** section instead of competing with the server and credentials. The
+SQL Server provider's `queryTimeout` (seconds, `0` waits indefinitely) lives there: a statement
+is no longer cut off at a timeout the app chose.
 
 `IDatabaseConnection.ExecuteAsync` has an overload taking `QueryExecutionOptions`. Providers should
 stop reading at `EffectiveMaxRows + 1` and set `QueryResult.IsTruncated`/`RowLimit`; the default is
@@ -146,6 +169,10 @@ are needed, so a new provider only has to stop its own reader/cursor early.
 `ExecuteBatchAsync` returns one `QueryResult` per result set, which becomes one result tab. SQL
 Server reads native multiple result sets with `NextResultAsync`; the Demo provider splits on `;`.
 Providers that only implement the single-result method still work through a default implementation.
+`QueryResult.Messages` carries informational output that is not a result set (`PRINT`, `RAISERROR`
+up to severity 10, `SET STATISTICS IO/TIME`, warnings). SQL Server fills it from
+`SqlConnection.InfoMessage`; the shell gives it a **Messages** tab, and providers without message
+output simply leave it empty.
 
 A provider connection is a **session**, not a shared server handle: the shell creates one per query
 tab. Providers that support transactions implement `SupportsTransactions`,
@@ -153,8 +180,18 @@ tab. Providers that support transactions implement `SupportsTransactions`,
 interface implementations return "no transaction" and keep older providers working (the shell then
 hides the transaction guard). The SQL Server provider reads `@@TRANCOUNT` and `XACT_STATE()`.
 
+`IDatabaseConnection.GetCurrentDatabaseAsync` is the other optional member: it reports the session's
+database after a batch, which is how a script's `USE` reaches the tab, rail and picker. Its default
+returns null, so a provider that cannot tell simply never changes the tab's database. `TableSchema`
+carries `Schema` and `ForeignKeySchema` carries `ReferencedSchema`; completion inserts a
+schema-qualified name using the dialect's `QuoteIdentifier` (`[dbo].[Promotion] AS [p]`), and falls
+back to the bare name for providers that report no schema.
+
 Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or SQL auth,
-`sys.databases` for the picker, `sys.tables`/`sys.columns` for completion) and
+`sys.databases` for the picker, `sys.objects`/`sys.schemas`/`sys.columns` for schema-qualified
+completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
+`sys.partitions` for reference-preview row estimates, and
+`DB_NAME()` so a `USE` reaches the shell) and
 `Larik.Data.Demo` (in-memory, used by the sample workspaces).
 
 ## What works in this slice
@@ -196,7 +233,10 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the active tab, filled from the provider once connected, and it is absent while disconnected
   instead of showing a dead "not connected" control. Switching
   database updates that tab (and the space while it is active): the rail, toolbar badge, status bar,
-  tab subtitle, snippet dialect and completion schema all follow. Other tabs keep their own database
+  tab subtitle, snippet dialect and completion schema all follow. A `USE <database>` executed in a
+  tab is adopted the same way: after the batch the provider reports the session's database and the
+  tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
+  Other tabs keep their own database
   and schema. An Arc-style row of workspace dots at the bottom of the
   rail shows every workspace with the current one ringed; clicking a dot switches workspace.
   **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
@@ -211,6 +251,15 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the side the new workspace lives on (left/right matches the dot order), and is skipped when
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
   the ends.
+- **Schema browser**: `Ctrl+K` (or the browse button beside the database row) opens a **peek**: one
+  search field over tables, views, procedures and columns, recents first, grouped by schema, with the
+  highlighted object's detail in a pane. Tables and views show their columns with types and PK/FK
+  badges; procedures show their parameters and are inserted as a full `EXEC` call (never previewed).
+  Enter inserts the dialect-quoted name at the caret (`[dbo].[Orders]`), Shift+Enter previews the top
+  100 rows into a new result tab, Up/Down move, Esc returns to the editor. The **pin** button docks
+  the same surface as a 300 px inspector beside the editor (columns and parameters expand under the
+  selected object); the pin unpins it. Recents are kept per workspace for the session and only track
+  tables/views, and the popup never replaces the tab rail.
 - **Real execution**: connect opens the provider connection and the grid renders returned
   columns/rows (NULLs dimmed, numerics right-aligned). Errors come back from the provider with
   timing. **Ctrl+Enter runs only the statement under the caret** and leaves it selected, so the
@@ -221,6 +270,11 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   the toolbar disables Run and shows **Stop**, which cancels the command without closing the
   session. The active provider's editor language owns tokenizing and boundaries; T-SQL understands
   strings, quoted identifiers, line/block comments and `GO` separators (including indented `GO`).
+- **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
+  warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
+  open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
+  batch keeps attribution honest (messages can arrive between result sets); errors keep their own
+  result tab, and the status bar reports the message count.
 - **Transactions, visibly**: because each tab owns a session, `BEGIN TRAN` / `COMMIT` /
   `ROLLBACK` behave per tab. After every run the app reads `@@TRANCOUNT` and `XACT_STATE()` and shows
   a `TXN` badge on the tab plus a status-bar guard ("1 open transaction") with **Commit** and
@@ -231,18 +285,34 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   `SET TRANSACTION ISOLATION LEVEL ...` works, and now only affects the tab that issued it.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
-  **Tab or Enter accepts**, Esc dismisses. Expansion honours `${cursor}`, `${1:placeholder}` (left
+  **Tab or Enter accepts**, Esc dismisses. In a column list, **Space ticks the highlighted column**
+  (column rows carry a checkbox) so several can be picked, and one Tab/Enter inserts them
+  comma-separated (`o.Id, o.Intent, o.Status`). Picks survive filtering and closing the popup while
+  the caret stays at the same insertion point, so a selection can be built in several passes; moving
+  to another word or statement starts fresh, and accepting clears them. Space only ticks when the
+  word being typed is empty or a pick is already in progress, so a space mid-word is never swallowed.
+  Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
-  lists every table in the active database, appending a generated alias in join positions
-  (`customers AS c`, plus a `no alias` variant); after `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
-  statement's columns through their aliases (`c.full_name`), offers join conditions (declared
-  foreign keys first, then `xxx_id`/shared-column heuristics — `o.customer_id = c.id`), and the
+  lists every table in the active database with its schema, and inserts a runnable name in the
+  dialect's quoting — `[dbo].[Promotion] AS [p]` on SQL Server (plus a `no alias` variant); typing a
+  schema (`FROM dbo.`) narrows the list and is not repeated in the insert. After
+  `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
+  statement's columns through their aliases (`c.full_name`) — scoped to the tables of the statement,
+  even when the FROM clause sits below the caret, which is how `SELECT t.` lists only `t`'s table —
+  suggests join conditions after `ON` only (not after `WHERE`), offers the clause continuations
+  (`GROUP BY`, `HAVING`, `ORDER BY`, `UNION`, `OPTION`) after a predicate, and the
   built-in functions (`COUNT()`, caret inside); after `UPDATE x SET` and `INSERT INTO x (` only that
   table's columns are offered (with ` = ` for SET); `DECLARE`d `@variables`, `USE` databases and
   CTEs complete too — a CTE takes its columns from an explicit list, its SELECT aliases, or the
-  source table when it selects `*`, and shadows a real table of the same name. Elsewhere it mixes
-  snippets, keywords and schema.
+  source table when it selects `*`, and shadows a real table of the same name. Views complete exactly
+  like tables (their detail says `view`), and after `EXEC`/`EXECUTE` (`CALL` for engines that use it)
+  procedures are offered with their parameters: accepting one inserts the whole call
+  (`EXEC [dbo].[find_user] @id = NULL, @name = NULL`) and leaves the first `NULL` selected, so the
+  signature is visible instead of memorised. Elsewhere it mixes
+  snippets, keywords and schema. Ranking follows what was typed: a keyword or table that *starts*
+  with the word beats a snippet that merely contains it (`wher` leads with `WHERE`, not the `selw`
+  snippet), and keyword matches keep the dialect's declared order instead of sorting alphabetically.
 - **Snippet manager (Settings)**: the gear in the query toolbar opens a Settings page with a
   **Snippets** section modelled on the desktop app's `SnippetsDialog`: search and category filters,
   a built-in/custom badge, and an editor for the trigger, name, category, description and expansion
@@ -255,7 +325,9 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   (`larik-winui-dev.db` in Debug builds) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
   `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
-  tabs, their SQL, pins, archive history and snippet edits survive a restart. WAL mode, foreign keys
+  tabs, their SQL, pins, archive history and snippet edits survive a restart, as does the **window
+  rectangle** (stored under `app_state` as DIPs, never the maximized size) and the **results-pane
+  height / cell-preview width**, so the next launch opens where you left it. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
   columns/tables in place); a pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
@@ -268,22 +340,52 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
   packaged (MSIX) build's writes into
   `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\Larik WinUI` — standard MSIX
   AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
-- **Result tabs and grid**: a batch (or a statement returning several result sets) opens one result
-  tab per result, DBeaver-style. Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
+- **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
+  reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
+  the pane, and running a query while it is hidden opens it again. A batch (or a
+  statement returning several result sets) opens one result tab per result, DBeaver-style.
+  Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
   query tab. **Drag a result tab to reorder it** within the query tab; the active result stays
   active and the remaining tabs renumber. Each grid is virtualized — a `ListView` realizes only
   the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
-  extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. Ctrl+C copies the
+  extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
+  **cell preview** beside the grid with the full, untruncated value (the grid ellipsizes cells),
+  the column type and row number, explicit NULL/empty states and a copy button. Arrow keys keep it
+  in step with the focused cell; it stays open while switching result or query tabs (showing the
+  active cell in the new context, and returning to the cell you left), and Esc or its close button
+  turns it off until you open it again. **Shift+Space** opens the foreign-key reference instead: for a
+  small lookup table the whole table is shown as a real column/row grid with the matching row
+  highlighted; for a large one only the matching rows are fetched (a metadata row estimate chooses)
+  and shown as record cards, where a wide row reads better in the narrow pane. A composite key
+  filters on the columns present in the result. The link button toggles value/reference for the same
+  cell, and the resolver only previews a reference when the source table is unambiguous. A small link
+  icon in the column header marks a foreign-key column (tooltip names the target) and opens the same
+  preview. JSON and XML values are
+  auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector overrides the guess
+  (invalid input falls back to the raw text with a note), Copy takes the formatted value, and the
+  panel's left edge can be dragged between 240 and 720 px while the grid keeps a usable width.
+  Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
-  context menu offers Copy / Copy with headers / Select all. Drag a header edge to resize a column;
+  context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
+  writes the whole result (not the selection) through the Windows save picker, where the file type
+  *is* the format choice: CSV (RFC 4180, CRLF, header row, NULL as an empty field, UTF-8 with BOM
+  so Excel reads non-ASCII) or JSON (array of row objects, real `null`s, duplicate column names
+  suffixed). The status bar reports the row count and file name. Drag a header edge to resize a column;
   widths persist with that result set. Each result also remembers its vertical/horizontal scroll
   offset and active cell, so switching to another result or query tab and back returns to the same
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
   running a query while another tab is active writes to the tab that started it.
+- **Find and replace**: Ctrl+F opens a compact bar over the top of the editor (Ctrl+H opens it with
+  the replace row revealed); the bar counts matches (`3 of 12`, `No results`) and Enter / Shift+Enter
+  or F3 / Shift+F3 walk them with wrap-around. A selection seeds the query, so select a word and
+  Ctrl+F to find the next occurrence. Matches are shown as real selections, which keeps them on the
+  theme's selection brush (including HighContrast) instead of fighting the syntax colours. Replace
+  and **Replace all** are one undo step each, Esc (or the close button) returns to the text, and
+  switching tabs closes the bar because it belongs to the editor, not the document.
 - **Syntax highlighting**: the active provider's `IEditorLanguage` classifies keywords, functions,
   strings, numbers, variables and comments live with theme-aware tokens (`StudioSyntax*Brush`,
   HighContrast falls back to the system text colour). The editor tokenizes on a 140 ms debounce so
@@ -310,7 +412,10 @@ Shipped today: `Larik.Data.SqlServer` (Microsoft.Data.SqlClient, integrated or S
 | Gap | Why / next step |
 |---|---|
 | Only two providers ship | SQL Server and Demo. PostgreSQL/MongoDB only need new provider assemblies (see above and `docs/PROVIDERS.md`), not app changes. |
+| Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but the SQL Server provider reads `sys.procedures` only. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
+| Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect` today). |
+| Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; dollar-quoted PostgreSQL bodies need `SqlLanguageOptions` extensions. Nested `BEGIN/END` awareness needs the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |

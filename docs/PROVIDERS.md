@@ -20,15 +20,16 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | Type | Purpose |
 |---|---|
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`. |
-| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, plus optional transaction state/commit/rollback. |
+| `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
 | `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
-| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `GeneratedQuery`. |
-| `TableSchema` / `ForeignKeySchema` | Table name, optional `Schema`, columns, primary key, foreign keys (with `ReferencedSchema`). |
+| `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`, and `Statement` (the SQL that produced the result, used to resolve references). |
+| `TableSchema` / `ForeignKeySchema` | Table or view name, optional `Schema`, `Kind` (`Table`/`View`), columns, `ColumnDetails` (types), primary key, foreign keys (with `ReferencedSchema`). |
+| `RoutineSchema` / `RoutineParameter` | Stored procedure or function: optional `Schema`, `Kind`, ordered parameters with type/output/default. |
 | `QueryExecutionOptions` | `MaxRows` with a 5,000 default / 100,000 ceiling. |
 | `SessionTransactionState` | `TransactionCount`, `XactState`, `HasTransaction`, `IsDoomed`, `CanCommit`, `CanRollback`. |
 | `IEditorLanguage` | `Id`, `Tokenize`, `Split`, `SplitBatches`, `StatementAt`. Non-SQL engines implement this. |
-| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `QuoteIdentifier`. |
+| `ISqlDialect` | `IEditorLanguage` plus `Keywords`, `Functions`, `TableContextKeywords`, `RoutineContextKeywords`, `RoutineCall`, `RoutineInvocation`, `PreviewStatement`, `RowsStatement`, `FormatLiteral`, `QuoteIdentifier`. |
 | `SqlLanguage` / `SqlLanguageOptions` | Reusable SQL lexer/splitter; provider assemblies subclass it. |
 
 `IDatabaseConnection` already uses default interface members for the row-cap overload,
@@ -83,8 +84,11 @@ Therefore:
    the record body instead (`ForeignKeySchema.ReferencedSchema` follows this rule; the four-argument
    constructor is unchanged).
 4. **New metadata is optional and nullable.** `QueryResult.GeneratedQuery`, `TableSchema.Schema` and
-   `ForeignKeySchema.ReferencedSchema` are all null for existing providers, and nothing is persisted
-   in a new format.
+   `ForeignKeySchema.ReferencedSchema` are all null for existing providers; `QueryResult.Statement`,
+   `TableSchema.Kind` defaults to `Table`, `ColumnDetails`/`Routines`/`Parameters` default to empty,
+   `GetRoutinesAsync` returns `[]`, `EstimateRowCountAsync` returns null, and the dialect's
+   `RowsStatement`/`FormatLiteral` have defaults, so an older provider behaves exactly as before and
+   nothing is persisted in a new format.
 5. **Prefer string tags over contract enums** for open sets. `StatementSpan.Language` is a string so
    a future MongoDB language can tag spans `"shell"`, `"line"`, `"sql"` without a contract change.
 
@@ -258,7 +262,12 @@ new TableSchema
 {
     Name = "users",
     Schema = "public",                 // optional; null for engines without schemas
+    Kind = TableKind.View,             // optional; defaults to Table
     Columns = [...],
+    ColumnDetails =                    // optional; names alone still work
+    [
+        new TableColumn { Name = "id", DataType = "bigint", IsNullable = false },
+    ],
     PrimaryKey = [...],
     ForeignKeys =
     [
@@ -268,11 +277,61 @@ new TableSchema
         },
     ],
 };
+
+new RoutineSchema
+{
+    Name = "refresh_stats",
+    Schema = "public",
+    Kind = RoutineKind.Procedure,
+    Parameters =
+    [
+        new RoutineParameter { Name = "p_schema", DataType = "text" },
+    ],
+};
 ```
 
-Completion currently normalizes and matches **bare** table names only. Schema-qualified matching is
-deferred; see the gaps table. Populate `Schema`/`ReferencedSchema` now so the data is available when
-completion learns about it.
+Completion matches a reference either bare or schema-qualified (`[dbo].[users]`, `public.users`)
+against `Schema` + `Name`, and inserts a schema-qualified name in the dialect's quoting
+(`[dbo].[users] AS [u]` for T-SQL). A schema typed before the dot (`FROM public.`) narrows the list
+and is not repeated in the insert. A provider that reports no `Schema` keeps the bare name, so this
+is additive for engines without schemas. Views use the same `TableSchema` shape with `Kind = View`;
+completion and the browser treat them like read-only tables.
+
+The shell's schema browser lists tables, views and routines from these two calls. It draws no
+engine-specific icons or columns: `Kind` chooses the view icon, `ColumnDetails` fills the type
+column, and `RoutineSchema.Parameters` fills a procedure's detail. Return `[]` from
+`GetRoutinesAsync` (the default) when the engine has no routines or the login cannot read them.
+
+Routine syntax belongs to the dialect. After a `RoutineContextKeywords` word (`EXEC` for T-SQL,
+`CALL` for PostgreSQL), completion offers procedures and calls `ISqlDialect.RoutineCall`, which
+returns the insert text plus the span of the first argument value to select. The default renders
+only the quoted name; T-SQL overrides it with named arguments
+(`[dbo].[p] @a = NULL, @b = NULL`), and PostgreSQL should override it with positional `NULL`s.
+`RoutineInvocation` prefixes the first keyword for the schema browser's Enter action.
+`PreviewStatement` is the third dialect hook: the shell asks for a table or view's first rows
+instead of hard-coding `SELECT TOP`, so PostgreSQL can answer with `LIMIT` and a provider without a
+row-limit clause falls back to plain `SELECT`.
+
+### Foreign-key reference previews
+
+`QueryResult.Statement` lets the shell map an output column back to its source table (the resolver
+uses the same lexer as completion, so aliased/ambiguous columns are deliberately skipped). It then
+looks up `TableSchema.ForeignKeys` and asks the dialect for the rows:
+
+```csharp
+dialect.RowsStatement(
+    targetSchema,
+    targetTable,
+    filters,                 // RowFilter(column, formattedValue, sourceDataType)
+    orderByColumn,           // key column for full-list mode
+    limit);
+```
+
+`FormatLiteral` turns the already-formatted cell text into an engine literal (T-SQL keeps numeric,
+bit and `0x` values bare and escapes strings). `EstimateRowCountAsync` is the optional size hint:
+a target at or below the list limit is shown in full with matching rows highlighted; a larger one
+is fetched with the available key filters only. Returning null (the default) means "unknown" and
+also uses the filtered lookup.
 
 ---
 
@@ -285,6 +344,10 @@ completion learns about it.
   assuming a fresh connection per call.
 - Return one result per statement even if only one has columns.
 - `QueryResult.Error` is the shape for a statement error (the grid shows the message and timing).
+- `QueryResult.Messages` is for output that is neither rows nor an error: `PRINT`, `RAISERROR` up
+  to severity 10, `SET STATISTICS IO/TIME`, optimizer warnings, and `USE`'s database-context line.
+  The SQL Server provider fills it from `SqlConnection.InfoMessage` (one Messages tab per batch);
+  other providers leave it empty and the tab never appears.
 - `QueryResult.GeneratedQuery` is for engines that translate user text. Example: a MongoDB provider
   compiling a SQL `SELECT` to an aggregation pipeline can report the pipeline it actually ran. The
   app currently stores it but does not display it; a result-tab "generated query" bar is future work.
@@ -334,8 +397,12 @@ manifest, unload) only when third-party plugins are actually expected.
    - one physical connection **per database** (Postgres cannot switch database on a live
      connection), or a pool keyed by database; `ExecuteAsync(sql, database, ...)` selects it;
    - `GetDatabasesAsync` from `pg_database`;
-   - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema` and
-     `ForeignKeySchema.ReferencedSchema`;
+   - `GetSchemaAsync` from `information_schema`/`pg_catalog`, populating `TableSchema.Schema`,
+     `TableSchema.Kind` (base table vs view), `ColumnDetails` from `format_type(a.atttypid,
+     a.atttypmod)`, and `ForeignKeySchema.ReferencedSchema`;
+   - `GetRoutinesAsync` from `information_schema.routines` (`routine_type` maps to
+     `Procedure`/`Function`) and `information_schema.parameters` (or `pg_proc.proargtypes` for
+     unnamed arguments), ordered by `ordinal_position`;
    - row caps and cancellation;
    - `ExecuteBatchAsync` may split on `;` only outside strings/comments/dollar quotes;
    - transactions: `SupportsTransactions => true`, `GetTransactionStateAsync` mapping
@@ -343,13 +410,18 @@ manifest, unload) only when third-party plugins are actually expected.
      per-database connection. Remember the shell refreshes state after every batch, including a
      failed one.
 4. `PostgresDialect : SqlLanguage, ISqlDialect` — keywords, functions, `"` quoting, no `GO`, no
-   `@` variables. Add dollar-quote support to `SqlLanguageOptions` when you get there.
+   `@` variables. `RoutineContextKeywords` should be `CALL` (procedures), and `RoutineCall` should
+   render positional arguments (`"public"."refresh_stats"(NULL, NULL)`, or `CALL ...` for a
+   procedure); scalar functions used in expressions are a later completion scope. Override
+   `PreviewStatement` with `SELECT * FROM <name> LIMIT n`, `RowsStatement` with `LIMIT` and a typed
+   `FormatLiteral`, and answer `EstimateRowCountAsync` from `pg_class.reltuples` when available. Add
+   dollar-quote support to `SqlLanguageOptions` when you get there.
 5. Register in `Larik/App.xaml.cs` (`typeof(PostgresProvider).Assembly`) and reference the project
    from `Larik.csproj`. No shell/editor changes.
 6. Add contract tests: split/token cases, schema mapping, execution/row-cap against a real server.
 
-Still open for PostgreSQL: schema-qualified completion, a `Choice`/`FilePath` setting kind, and
-provider-driven `ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`).
+Still open for PostgreSQL: a `Choice`/`FilePath` setting kind, and provider-driven
+`ConnectionViewModel.Endpoint` (today it special-cases `"mssql"`).
 
 ---
 
@@ -409,6 +481,11 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 - [ ] `ExecuteBatchAsync` returns one result per result set.
 - [ ] `GetSchemaAsync` returns columns, primary keys and foreign keys; populate `Schema` when the
       engine has schemas.
+- [ ] Views report `Kind = View`; populate `ColumnDetails` when the engine exposes types.
+- [ ] Procedures/functions (if any) come from `GetRoutinesAsync` with ordered parameters; returning
+      `[]` is a valid choice that simply hides routine completion.
+- [ ] `QueryResult.Statement` carries the executed SQL (needed for foreign-key reference previews),
+      and `EstimateRowCountAsync` can answer cheaply when the engine has catalog metadata.
 - [ ] `EditorLanguage` reuses `SqlLanguage` for SQL engines; no SQL assumptions for non-SQL engines.
 - [ ] Splitting handles strings, quoted identifiers, comments and the engine's terminator.
 - [ ] Tests: token/split golden cases, caret semantics, schema mapping, row cap.
@@ -424,8 +501,8 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 | Area | State |
 |---|---|
 | PostgreSQL / MongoDB | Not implemented. This seam exists so they are additive. |
-| Completion model | SQL-clause-shaped and token-based; still T-SQL-biased in its alias/CTE heuristics. Keyword/function/table-context lists come from the dialect. |
-| Schema-qualified completion | `TableSchema.Schema` exists but `FindTable`/`NormalizeIdentifier` still strip qualification. |
+| Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. A PostgreSQL/MySQL provider should promote those into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
+| Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `public.users AS u`); SQL Server reads `sys.schemas`. Views/routines are not in the schema model, so only base tables complete. |
 | Statement splitting | Dollar quotes, `E'...'`, `::` and `$1` are not in `SqlLanguageOptions` yet. T-SQL `GO n` repeat counts are parsed but not expanded. |
 | Formatter | `SqlFormatter` is app-owned and keyword-based; not dialect-aware. |
 | Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. |

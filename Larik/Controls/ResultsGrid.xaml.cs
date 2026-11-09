@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Larik.Data;
 using Larik.Models;
 using Larik.Services;
@@ -11,6 +12,8 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI.Core;
 
@@ -56,6 +59,32 @@ public sealed partial class ResultsGrid : UserControl
     private Brush _headerBackground = null!;
     private Brush _dividerBrush = null!;
 
+    // Cell preview: the full value of the focused cell, which the grid itself ellipsizes.
+    private const int PreviewCharacterLimit = 100_000;
+    private const double MinPreviewWidth = 240;
+    private const double MaxPreviewWidth = 720;
+    private const double GridReserveWidth = 320;
+    private bool _previewOpen;
+    private bool _previewRequested;
+    private int _previewRow = -1;
+    private int _previewColumn = -1;
+    private CellFormat _previewFormat = CellFormat.Auto;
+    private string _previewCopyText = string.Empty;
+    private bool _resizingPreview;
+    private double _previewResizeStartX;
+    private double _previewResizeStartWidth;
+    private double _desiredPreviewWidth = 340;
+    private PreviewMode _previewMode = PreviewMode.Value;
+    private CancellationTokenSource? _referenceCancellation;
+    private Brush _referenceMatchBrush = null!;
+    private Brush _referenceBorderBrush = null!;
+
+    private enum PreviewMode
+    {
+        Value,
+        Reference,
+    }
+
     /// <summary>Per-result scroll/selection state, so each result tab remembers where it was.</summary>
     private sealed class ResultViewState
     {
@@ -72,6 +101,9 @@ public sealed partial class ResultsGrid : UserControl
         public int FocusRow { get; set; }
 
         public int FocusColumn { get; set; }
+
+        /// <summary>Whether the cell preview was open for this result; state is per result/tab.</summary>
+        public bool PreviewRequested { get; set; }
     }
 
     public ResultsGrid()
@@ -88,15 +120,85 @@ public sealed partial class ResultsGrid : UserControl
             UIElement.PointerPressedEvent,
             new PointerEventHandler(RowsList_PointerPressed),
             handledEventsToo: true);
+
+        // The results pane can start collapsed, when ActualWidth is still 0. Apply the stored
+        // preview width once the control has real space, and re-clamp it when the window changes.
+        Loaded += (_, _) =>
+        {
+            EnsureListScroller();
+            ApplyPreviewWidth();
+        };
+        SizeChanged += (_, _) =>
+        {
+            EnsureListScroller();
+            ApplyPreviewWidth();
+        };
+    }
+
+    /// <summary>
+    /// Finds the ListView's inner scroller. A collapsed results pane may have fired Loaded before
+    /// its template existed, so this is retried when the control gets real size and when a result
+    /// is shown; otherwise the sticky header would never follow horizontal scrolling.
+    /// </summary>
+    private void EnsureListScroller()
+    {
+        var scroller = FindDescendant<ScrollViewer>(RowsList);
+        if (scroller is null || ReferenceEquals(scroller, _listScroller))
+        {
+            return;
+        }
+
+        if (_listScroller is not null)
+        {
+            _listScroller.ViewChanged -= RowsList_ViewChanged;
+        }
+
+        _listScroller = scroller;
+        _listScroller.ViewChanged += RowsList_ViewChanged;
+    }
+
+    private void ApplyPreviewWidth()
+    {
+        if (ActualWidth <= 0)
+        {
+            return;
+        }
+
+        CellPreview.Width = Math.Clamp(_desiredPreviewWidth, MinPreviewWidth, MaxPreviewWidthForControl());
     }
 
     /// <summary>Raised after a copy so the shell can report it in the status bar.</summary>
     public event EventHandler<string>? StatusChanged;
 
+    /// <summary>Raised when the user finishes dragging the preview's width.</summary>
+    public event EventHandler<double>? PreviewWidthChanged;
+
+    /// <summary>The preview pane's width; persisted by the shell across launches.</summary>
+    public double PreviewWidth
+    {
+        get => _desiredPreviewWidth;
+        set
+        {
+            _desiredPreviewWidth = value;
+            ApplyPreviewWidth();
+        }
+    }
+
+    /// <summary>
+    /// Resolves foreign-key references for the current result. Null disables Shift+Space reference
+    /// previews; the shell supplies a new controller whenever the active result changes.
+    /// </summary>
+    public ICellReferenceController? ReferenceController { get; set; }
+
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
     {
         SaveViewState();
+        HideCellPreview();
+
+        // The messages panel shares the row area with the grid. A previous Messages tab can leave
+        // it visible, and its selectable text would then sit over the next tab's rows.
+        MessagesScroll.Visibility = Visibility.Collapsed;
 
         _accentHex = accentHex;
         UpdateAccentBrushes();
@@ -111,6 +213,14 @@ public sealed partial class ResultsGrid : UserControl
         {
             Clear();
             _result = result;
+
+            if (result.Messages.Count > 0)
+            {
+                MessagesText.Text = string.Join(Environment.NewLine, result.Messages);
+                MessagesScroll.Visibility = Visibility.Visible;
+                return;
+            }
+
             EmptyText.Text = result.Message;
             EmptyText.Visibility = Visibility.Visible;
             return;
@@ -131,15 +241,27 @@ public sealed partial class ResultsGrid : UserControl
 
         EmptyText.Visibility = Visibility.Collapsed;
         RowsList.ItemsSource = _rows;
+        RowsList.UpdateLayout();
+        EnsureListScroller();
         AccentRule.Background = StudioColors.Brush(accentHex);
         AccentRule.Visibility = Visibility.Visible;
 
         UpdateSelectionVisuals();
         RestoreViewState(state, result);
+
+        // The preview remembers its open state per result, not globally: switching to a tab or
+        // result that never opened it must not inherit another tab's inspector.
+        _previewRequested = state.PreviewRequested;
+        if (_previewRequested && _hasSelection)
+        {
+            ShowCellPreview(_focusRow, _focusColumn, _previewMode);
+        }
     }
 
     private void Clear()
     {
+        HideCellPreview();
+        _previewRequested = false;
         _result = null;
         _layout = null;
         _rows = [];
@@ -153,8 +275,9 @@ public sealed partial class ResultsGrid : UserControl
         AccentRule.Visibility = Visibility.Collapsed;
         EmptyText.Text = string.Empty;
         EmptyText.Visibility = Visibility.Collapsed;
+        MessagesText.Text = string.Empty;
+        MessagesScroll.Visibility = Visibility.Collapsed;
     }
-
     // ---------------------------------------------------------------- layout + rows
 
     private ResultLayout GetOrBuildLayout(QueryResult result)
@@ -200,6 +323,7 @@ public sealed partial class ResultsGrid : UserControl
             columns.Add(new ResultColumnLayout
             {
                 Name = result.Columns[c].Name,
+                DataType = result.Columns[c].DataType,
                 Width = Math.Clamp(24 + (longest * 7.2), 72, 360),
                 Numeric = numeric,
             });
@@ -236,6 +360,7 @@ public sealed partial class ResultsGrid : UserControl
         for (var index = 0; index < layout.Columns.Count; index++)
         {
             var column = layout.Columns[index];
+            var referenceLabel = ReferenceController?.Describe(index);
             var container = new Grid
             {
                 Width = column.Width,
@@ -248,7 +373,7 @@ public sealed partial class ResultsGrid : UserControl
                 Background = _headerBackground,
                 BorderBrush = _dividerBrush,
                 BorderThickness = new Thickness(0, 0, 1, 0),
-                Padding = new Thickness(12, 0, 12, 0),
+                Padding = new Thickness(8, 0, referenceLabel is null ? 8 : 20, 0),
             };
 
             surface.Child = new TextBlock
@@ -271,6 +396,30 @@ public sealed partial class ResultsGrid : UserControl
             };
 
             container.Children.Add(surface);
+
+            if (referenceLabel is not null)
+            {
+                var referenceButton = new Button
+                {
+                    Width = 14,
+                    Height = 18,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                    Content = new FontIcon { Glyph = "\uE71B", FontSize = 9 },
+                };
+                AutomationProperties.SetName(referenceButton, referenceLabel);
+                ToolTipService.SetToolTip(referenceButton, $"{referenceLabel} (Shift+Space)");
+                referenceButton.Click += (_, _) =>
+                {
+                    MoveTo(_focusRow, headerIndex, extend: false);
+                    ShowCellPreview(_focusRow, headerIndex, PreviewMode.Reference);
+                };
+                container.Children.Add(referenceButton);
+            }
 
             var handle = new ColumnResizeHandle
             {
@@ -523,6 +672,18 @@ public sealed partial class ResultsGrid : UserControl
                 SelectColumn(_focusColumn, extend: false);
                 e.Handled = true;
                 break;
+            case VirtualKey.Space when shift:
+                ToggleCellPreview(reference: true);
+                e.Handled = true;
+                break;
+            case VirtualKey.Space:
+                ToggleCellPreview(reference: false);
+                e.Handled = true;
+                break;
+            case VirtualKey.Escape when _previewOpen:
+                CloseCellPreview();
+                e.Handled = true;
+                break;
         }
     }
 
@@ -589,6 +750,7 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         UpdateHeaderSelection();
+        RefreshPreviewIfOpen();
     }
 
     internal void AttachRow(ResultRowView row) => ApplyRowSelection(row);
@@ -633,6 +795,542 @@ public sealed partial class ResultsGrid : UserControl
             _listScroller.ChangeView(left + width - viewport, null, null, disableAnimation: true);
         }
     }
+
+    // ---------------------------------------------------------------- export
+
+    private bool _exporting;
+
+    /// <summary>
+    /// Writes the whole result, not the selection: the save picker's file type is the format
+    /// choice, so there is no second dialog asking a question the extension already answers.
+    /// </summary>
+    private async void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (_exporting || _result is not { } result || result.Columns.Count == 0)
+        {
+            return;
+        }
+
+        _exporting = true;
+        try
+        {
+            var picker = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = $"results_{DateTime.Now:yyyy-MM-dd_HHmm}",
+            };
+            picker.FileTypeChoices.Add("CSV file", [ResultExport.CsvExtension]);
+            picker.FileTypeChoices.Add("JSON file", [ResultExport.JsonExtension]);
+
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.WindowHandle);
+
+            var file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            var format = string.Equals(file.FileType, ResultExport.JsonExtension, StringComparison.OrdinalIgnoreCase)
+                ? ResultExportFormat.Json
+                : ResultExportFormat.Csv;
+
+            var text = ResultExport.Format(result, format);
+
+            // The picker already granted access to the file; writing through its stream keeps a
+            // packaged (MSIX) app out of file-system virtualization trouble. Excel needs the BOM
+            // to read UTF-8 CSV correctly; strict JSON readers prefer no BOM.
+            await using var stream = await file.OpenStreamForWriteAsync();
+            stream.SetLength(0);
+            await using (var writer = new StreamWriter(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: format == ResultExportFormat.Csv)))
+            {
+                await writer.WriteAsync(text);
+            }
+
+            StatusChanged?.Invoke(this, $"Exported {result.Rows.Count:N0} rows to {file.Name}");
+        }
+        catch (Exception ex)
+        {
+            // A save dialog or disk failure must be visible, not silent, and must not crash the shell.
+            StatusChanged?.Invoke(this, $"Export failed: {ex.Message}");
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- cell preview
+
+    /// <summary>
+    /// Space opens the focused cell's value; Shift+Space opens the referenced rows when the column
+    /// has a foreign key (and falls back to the value otherwise). Pressing the same combination on
+    /// the same cell closes the panel.
+    /// </summary>
+    private void ToggleCellPreview(bool reference)
+    {
+        if (_layout is null || !_hasSelection || _rows.Count == 0)
+        {
+            return;
+        }
+
+        var mode = reference && ReferenceController?.CanPreview(_focusColumn) == true
+            ? PreviewMode.Reference
+            : PreviewMode.Value;
+
+        if (_previewOpen && _previewRow == _focusRow && _previewColumn == _focusColumn && _previewMode == mode)
+        {
+            CloseCellPreview();
+            return;
+        }
+
+        ShowCellPreview(_focusRow, _focusColumn, mode);
+    }
+
+    private void ShowCellPreview(int row, int column, PreviewMode mode = PreviewMode.Value)
+    {
+        if (_layout is null || row < 0 || row >= _rows.Count || column < 0 || column >= _layout.Columns.Count)
+        {
+            return;
+        }
+
+        if (mode == PreviewMode.Reference && ReferenceController?.CanPreview(column) != true)
+        {
+            mode = PreviewMode.Value;
+        }
+
+        _referenceCancellation?.Cancel();
+        _referenceCancellation?.Dispose();
+        _referenceCancellation = null;
+
+        _previewRequested = true;
+        _previewOpen = true;
+        _previewRow = row;
+        _previewColumn = column;
+        _previewMode = mode;
+        PreviewHost.Visibility = Visibility.Visible;
+
+        var canPreviewReference = ReferenceController?.CanPreview(column) == true;
+        ReferenceToggleButton.Visibility = canPreviewReference ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(
+            ReferenceToggleButton,
+            mode == PreviewMode.Reference
+                ? "Show the cell value (Space)"
+                : "Preview referenced rows (Shift+Space)");
+        PreviewFormatButton.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+        ValueView.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+        ReferenceView.Visibility = mode == PreviewMode.Reference ? Visibility.Visible : Visibility.Collapsed;
+        CellPreviewFooter.Visibility = mode == PreviewMode.Value ? Visibility.Visible : Visibility.Collapsed;
+
+        if (mode == PreviewMode.Reference)
+        {
+            CellPreviewTitle.Text = _layout.Columns[column].Name;
+            CellPreviewSubtitle.Text = "Reference";
+            ShowReferenceLoading();
+            _ = LoadReferenceAsync(row, column);
+            return;
+        }
+
+        ShowValuePreview(row, column);
+    }
+
+    private void ShowValuePreview(int row, int column)
+    {
+        if (_layout is null || row < 0 || row >= _rows.Count || column < 0 || column >= _layout.Columns.Count)
+        {
+            return;
+        }
+
+        var layout = _layout.Columns[column];
+        var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
+        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
+            ? $"row {_rows[row].Index + 1}"
+            : $"{layout.DataType} · row {_rows[row].Index + 1}";
+
+        CellPreviewTitle.Text = layout.Name;
+
+        if (value is null)
+        {
+            _previewCopyText = string.Empty;
+            CellPreviewSubtitle.Text = subtitle;
+            CellPreviewValue.Text = "NULL";
+            CellPreviewValue.Foreground = muted;
+            CellPreviewFooter.Text = string.Empty;
+            return;
+        }
+
+        if (value.Length == 0)
+        {
+            _previewCopyText = string.Empty;
+            CellPreviewSubtitle.Text = subtitle;
+            CellPreviewValue.Text = "\"\"";
+            CellPreviewValue.Foreground = muted;
+            CellPreviewFooter.Text = "Empty string";
+            return;
+        }
+
+        var formatted = CellContentFormatter.Format(value, _previewFormat);
+        _previewCopyText = formatted.Text;
+
+        CellPreviewSubtitle.Text = formatted.Kind is CellFormat.Json or CellFormat.Xml
+            ? $"{subtitle} · {formatted.Kind.ToString().ToUpperInvariant()}"
+            : subtitle;
+
+        // A single multi-megabyte cell would make the TextBlock the slowest thing in the window;
+        // the copy button still hands over the whole formatted value.
+        var display = formatted.Text.Length > PreviewCharacterLimit
+            ? formatted.Text[..PreviewCharacterLimit]
+            : formatted.Text;
+
+        CellPreviewValue.Text = display;
+        CellPreviewValue.Foreground = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+
+        var footer = formatted.Text.Length > PreviewCharacterLimit
+            ? $"Showing first {PreviewCharacterLimit:N0} of {formatted.Text.Length:N0} characters — Copy copies all"
+            : $"{formatted.Text.Length:N0} characters";
+
+        if (formatted.Error is { } error)
+        {
+            footer = $"{footer} · {error}";
+        }
+
+        CellPreviewFooter.Text = footer;
+    }
+
+    private void ShowReferenceLoading()
+    {
+        ReferenceSummary.Text = string.Empty;
+        ReferenceFooter.Text = string.Empty;
+        HideReferenceViews();
+        ReferenceStatus.Text = "Loading referenced rows…";
+        ReferenceStatus.Visibility = Visibility.Visible;
+    }
+
+    private void HideReferenceViews()
+    {
+        ReferenceTable.Clear();
+        ReferenceTable.Visibility = Visibility.Collapsed;
+        ReferenceRecords.Clear();
+        ReferenceRecords.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task LoadReferenceAsync(int row, int column)
+    {
+        var controller = ReferenceController;
+        if (controller is null)
+        {
+            ShowValuePreview(row, column);
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _referenceCancellation = cancellation;
+
+        try
+        {
+            var snapshot = await controller.PreviewAsync(row, column, cancellation.Token);
+            if (cancellation.IsCancellationRequested
+                || !_previewOpen
+                || _previewMode != PreviewMode.Reference
+                || _previewRow != row
+                || _previewColumn != column)
+            {
+                return;
+            }
+
+            RenderReference(snapshot);
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing the pane or moving to another cell cancels the lookup silently.
+        }
+        catch (Exception exception)
+        {
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            HideReferenceViews();
+            ReferenceStatus.Text = $"Reference preview failed: {exception.Message}";
+            ReferenceStatus.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            if (ReferenceEquals(_referenceCancellation, cancellation))
+            {
+                _referenceCancellation = null;
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private void RenderReference(CellReferenceSnapshot snapshot)
+    {
+        if (snapshot.Reference is not { } reference)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = snapshot.Error ?? "This cell has no reference.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        CellPreviewTitle.Text = reference.SourceColumn;
+        CellPreviewSubtitle.Text = $"References {snapshot.TargetLabel}";
+
+        var mode = snapshot.IsList ? "full list" : "matching rows";
+        var estimate = snapshot.EstimatedRows is { } rowEstimate ? $" · ~{rowEstimate:N0} rows" : string.Empty;
+        ReferenceSummary.Text = $"{reference.Constraint} · {mode}{estimate}";
+
+        if (snapshot.IsNullValue)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = "This cell is NULL — no referenced row.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        if (snapshot.Error is { } error)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = error;
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        var result = snapshot.Result;
+        if (result is null || result.Rows.Count == 0)
+        {
+            HideReferenceViews();
+            ReferenceStatus.Text = snapshot.Warning ?? "No referenced rows found.";
+            ReferenceStatus.Visibility = Visibility.Visible;
+            ReferenceFooter.Text = string.Empty;
+            return;
+        }
+
+        if (snapshot.IsList)
+        {
+            ReferenceRecords.Clear();
+            ReferenceRecords.Visibility = Visibility.Collapsed;
+            ReferenceTable.Show(
+                result,
+                snapshot.MatchedRows,
+                _referenceMatchBrush,
+                _referenceBorderBrush,
+                _dividerBrush);
+            ReferenceTable.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ReferenceTable.Clear();
+            ReferenceTable.Visibility = Visibility.Collapsed;
+            ReferenceRecords.Show(
+                result,
+                snapshot.MatchedRows,
+                _referenceMatchBrush,
+                _referenceBorderBrush);
+            ReferenceRecords.Visibility = Visibility.Visible;
+        }
+
+        ReferenceStatus.Visibility = Visibility.Collapsed;
+        var footer = snapshot.IsList
+            ? $"Full list · {result.Rows.Count:N0} row{(result.Rows.Count == 1 ? string.Empty : "s")}"
+            : $"Matching rows · {result.Rows.Count:N0} row{(result.Rows.Count == 1 ? string.Empty : "s")}";
+
+        if (snapshot.MatchedRows.Count > 0)
+        {
+            footer += $" · match on row {snapshot.MatchedRows[0] + 1:N0}";
+        }
+        else if (snapshot.Warning is null)
+        {
+            footer += " · no match in loaded rows";
+        }
+
+        if (snapshot.Truncated)
+        {
+            footer += " · truncated";
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.Warning))
+        {
+            footer += $" · {snapshot.Warning}";
+        }
+
+        ReferenceFooter.Text = footer;
+    }
+
+    private void HideCellPreview()
+    {
+        if (!_previewOpen)
+        {
+            return;
+        }
+
+        _referenceCancellation?.Cancel();
+        _referenceCancellation?.Dispose();
+        _referenceCancellation = null;
+
+        _previewOpen = false;
+        _previewRow = -1;
+        _previewColumn = -1;
+        _previewCopyText = string.Empty;
+        PreviewHost.Visibility = Visibility.Collapsed;
+        CellPreviewValue.Text = string.Empty;
+        CellPreviewFooter.Text = string.Empty;
+        HideReferenceViews();
+        ReferenceView.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>User closed the pane: it stays closed across results until opened again.</summary>
+    private void CloseCellPreview()
+    {
+        _previewRequested = false;
+        HideCellPreview();
+    }
+
+    /// <summary>Keeps the panel in step with the focused cell while the user arrows around.</summary>
+    private void RefreshPreviewIfOpen()
+    {
+        if (_previewOpen)
+        {
+            ShowCellPreview(_focusRow, _focusColumn, _previewMode);
+        }
+    }
+
+    private void ReferenceToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_previewOpen || _previewRow < 0 || _previewColumn < 0)
+        {
+            return;
+        }
+
+        ShowCellPreview(
+            _previewRow,
+            _previewColumn,
+            _previewMode == PreviewMode.Reference ? PreviewMode.Value : PreviewMode.Reference);
+    }
+
+
+    private void PreviewCell_Click(object sender, RoutedEventArgs e) =>
+        ShowCellPreview(_focusRow, _focusColumn);
+
+    private void CopyPreview_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_previewOpen)
+        {
+            return;
+        }
+
+        var package = new DataPackage();
+        package.SetText(_previewCopyText);
+
+        try
+        {
+            Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke(this, $"Copy failed: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            // Another process can briefly hold the clipboard open; the content is already set.
+            Clipboard.Flush();
+        }
+        catch
+        {
+            // Best effort.
+        }
+
+        StatusChanged?.Invoke(this, "Cell value copied");
+        Focus(FocusState.Programmatic);
+    }
+
+    private void ClosePreview_Click(object sender, RoutedEventArgs e)
+    {
+        CloseCellPreview();
+        Focus(FocusState.Programmatic);
+    }
+
+    private void SetPreviewFormat(CellFormat format)
+    {
+        _previewFormat = format;
+        PreviewFormatLabel.Text = format switch
+        {
+            CellFormat.Json => "JSON",
+            CellFormat.Xml => "XML",
+            CellFormat.Plain => "Plain",
+            _ => "Auto",
+        };
+
+        if (_previewOpen)
+        {
+            ShowCellPreview(_previewRow, _previewColumn);
+        }
+    }
+
+    private void FormatAuto_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Auto);
+
+    private void FormatJson_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Json);
+
+    private void FormatXml_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Xml);
+
+    private void FormatPlain_Click(object sender, RoutedEventArgs e) => SetPreviewFormat(CellFormat.Plain);
+
+    // ---------------------------------------------------------------- preview resize
+
+    private void PreviewResizeHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _resizingPreview = true;
+        _previewResizeStartWidth = CellPreview.ActualWidth;
+        _previewResizeStartX = e.GetCurrentPoint(this).Position.X;
+        PreviewResizeHandle.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingPreview)
+        {
+            return;
+        }
+
+        var x = e.GetCurrentPoint(this).Position.X;
+        CellPreview.Width = Math.Clamp(
+            _previewResizeStartWidth - (x - _previewResizeStartX),
+            MinPreviewWidth,
+            MaxPreviewWidthForControl());
+        _desiredPreviewWidth = CellPreview.Width;
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingPreview)
+        {
+            return;
+        }
+
+        _resizingPreview = false;
+        PreviewResizeHandle.ReleasePointerCapture(e.Pointer);
+        PreviewWidthChanged?.Invoke(this, CellPreview.Width);
+        e.Handled = true;
+    }
+
+    private void PreviewResizeHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e) =>
+        _resizingPreview = false;
+
+    /// <summary>The preview never squeezes the grid below a usable width.</summary>
+    private double MaxPreviewWidthForControl() =>
+        Math.Max(MinPreviewWidth, Math.Min(MaxPreviewWidth, ActualWidth - GridReserveWidth));
 
     // ---------------------------------------------------------------- clipboard
 
@@ -724,16 +1422,7 @@ public sealed partial class ResultsGrid : UserControl
 
     private void RowsList_Loaded(object sender, RoutedEventArgs e)
     {
-        if (_listScroller is not null)
-        {
-            return;
-        }
-
-        _listScroller = FindDescendant<ScrollViewer>(RowsList);
-        if (_listScroller is not null)
-        {
-            _listScroller.ViewChanged += RowsList_ViewChanged;
-        }
+        EnsureListScroller();
     }
 
     private void RowsList_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
@@ -779,6 +1468,7 @@ public sealed partial class ResultsGrid : UserControl
         state.AnchorColumn = _anchorColumn;
         state.FocusRow = _focusRow;
         state.FocusColumn = _focusColumn;
+        state.PreviewRequested = _previewRequested;
     }
 
     private void RestoreViewState(ResultViewState state, QueryResult result)
@@ -811,6 +1501,8 @@ public sealed partial class ResultsGrid : UserControl
         _selectionBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x2E));
         _activeCellBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x70));
         _headerSelectionBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x42));
+        _referenceMatchBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0x24));
+        _referenceBorderBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0xC0));
     }
 
     private static Brush BrushOr(string key, Brush fallback) =>

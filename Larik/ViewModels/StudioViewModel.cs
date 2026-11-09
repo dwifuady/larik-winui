@@ -18,9 +18,10 @@ public partial class StudioViewModel : ObservableObject
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _archiveTimer;
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
+    private IReadOnlyList<RoutineSchema> _routines = [];
 
     // Schemas are per database; keeping them makes switching tabs back to a database instant.
-    private readonly Dictionary<string, IReadOnlyList<TableSchema>> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SchemaSnapshot> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
 
     public StudioViewModel()
     {
@@ -61,6 +62,46 @@ public partial class StudioViewModel : ObservableObject
     }
 
     public ObservableCollection<SpaceViewModel> Spaces { get; } = [];
+
+    /// <summary>
+    /// Last window rectangle (DIPs). The shell restores it at launch and updates it while the
+    /// window moves; it travels with the session so the next launch opens where the user left it.
+    /// </summary>
+    public WindowBoundsState? WindowBounds { get; private set; }
+
+    /// <summary>Last results-pane height, or null until the user resizes it.</summary>
+    public double? ResultsPaneHeight { get; private set; }
+
+    /// <summary>Last cell-preview width, or null for the default.</summary>
+    public double? CellPreviewWidth { get; private set; }
+
+    public void SetWindowBounds(WindowBoundsState? bounds)
+    {
+        WindowBounds = bounds;
+        ScheduleSave();
+    }
+
+    public void SetResultsPaneHeight(double height)
+    {
+        if (height <= 0 || Math.Abs((ResultsPaneHeight ?? 0) - height) < 0.5)
+        {
+            return;
+        }
+
+        ResultsPaneHeight = height;
+        ScheduleSave();
+    }
+
+    public void SetCellPreviewWidth(double width)
+    {
+        if (width <= 0 || Math.Abs((CellPreviewWidth ?? 0) - width) < 0.5)
+        {
+            return;
+        }
+
+        CellPreviewWidth = width;
+        ScheduleSave();
+    }
 
     /// <summary>Tabs of the active space. Mutated in place so the ListView keeps its identity.</summary>
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
@@ -185,6 +226,9 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>Schema of the active database, used for completion. Empty until a connection opens.</summary>
     public IReadOnlyList<TableSchema> Tables => _schema;
+
+    /// <summary>Procedures of the active database, used after EXEC and by the schema browser.</summary>
+    public IReadOnlyList<RoutineSchema> Routines => _routines;
 
     public QueryResult? LastResult { get; private set; }
 
@@ -711,6 +755,88 @@ public partial class StudioViewModel : ObservableObject
     public Task RunSqlAsync(string sql, bool append = false) => RunBatchesAsync([sql], append);
 
     /// <summary>
+    /// Runs a reference-preview lookup on the active tab's own session without touching the query
+    /// tab's results or status. The session keeps temp tables and transaction context, which is what
+    /// a reference to a temp/user table needs.
+    /// </summary>
+    public async Task<QueryResult> RunCellReferenceQueryAsync(
+        string sql,
+        int maxRows,
+        CancellationToken cancellationToken)
+    {
+        var tab = ActiveTab;
+        var space = ActiveSpace;
+        if (tab is null || space?.Connection.IsConnected != true)
+        {
+            return QueryResult.Error("Connect the workspace to preview referenced rows.", TimeSpan.Zero);
+        }
+
+        var database = DatabaseNameFor(space, tab);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetime.Token);
+        var results = await tab.Session.ExecuteBatchAsync(
+            sql,
+            database,
+            new QueryExecutionOptions { MaxRows = maxRows },
+            linked.Token);
+
+        return results.FirstOrDefault(result => !result.IsError && result.Columns.Count > 0)
+               ?? results.FirstOrDefault(result => result.IsError)
+               ?? QueryResult.Error("No reference rows returned.", TimeSpan.Zero, database);
+    }
+
+    /// <summary>A row-count estimate for choosing list vs lookup; null when the provider cannot tell.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        var tab = ActiveTab;
+        var space = ActiveSpace;
+        if (tab is null || space?.Connection.IsConnected != true)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _lifetime.Token);
+            return await tab.Session.EstimateRowCountAsync(
+                DatabaseNameFor(space, tab),
+                schema,
+                table,
+                linked.Token);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Creates the reference resolver for a result. Null when the active provider has no SQL
+    /// dialect, because building a safe lookup is the dialect's job.
+    /// </summary>
+    public ICellReferenceController? CreateCellReferenceController(QueryResult result)
+    {
+        if (ActiveLanguage is not ISqlDialect dialect)
+        {
+            return null;
+        }
+
+        return new CellReferenceController(
+            result,
+            string.IsNullOrWhiteSpace(result.Statement) ? ActiveTab?.Content : result.Statement,
+            Tables,
+            dialect,
+            RunCellReferenceQueryAsync,
+            EstimateRowCountAsync);
+    }
+
+    /// <summary>
     /// Runs one or more GO-delimited batches in order on the tab's own session. Semicolons stay
     /// inside a batch, so declared variables and temp tables keep their scope exactly as they do
     /// when SQL Server receives a native batch; <c>GO</c> starts a new server batch.
@@ -806,6 +932,10 @@ public partial class StudioViewModel : ObservableObject
             }
 
             ApplyResults(tab, results, append);
+
+            // A USE inside the script changed the session's database. Adopt it as the tab's database,
+            // so the next run does not switch the session back and completion/picker follow.
+            await AdoptCurrentDatabaseAsync(tab, space);
         }
         catch (OperationCanceledException)
         {
@@ -970,18 +1100,25 @@ public partial class StudioViewModel : ObservableObject
             var result = results[0];
             return result.IsError
                 ? "Error"
-                : result.IsTruncated
-                    ? $"Showing first {result.RowLimit:N0} rows"
-                    : $"{result.Rows.Count} rows returned";
+                : result.Messages.Count > 0
+                    ? DescribeMessages(result.Messages.Count)
+                    : result.IsTruncated
+                        ? $"Showing first {result.RowLimit:N0} rows"
+                        : $"{result.Rows.Count} rows returned";
         }
 
-        var rows = results.Where(result => !result.IsError).Sum(result => result.Rows.Count);
+        // The Messages tab is not a result set; don't count it as one in the summary.
+        var data = results.Where(result => result.Messages.Count == 0).ToList();
+        var rows = data.Where(result => !result.IsError).Sum(result => result.Rows.Count);
         var suffix = errors > 0 ? $" · {errors} error{(errors == 1 ? string.Empty : "s")}" : string.Empty;
-        var sets = $"result set{(results.Count == 1 ? string.Empty : "s")}";
+        var sets = $"result set{(data.Count == 1 ? string.Empty : "s")}";
         return append
-            ? $"Added {results.Count} {sets}{suffix}"
-            : $"{results.Count} {sets} · {rows} rows{suffix}";
+            ? $"Added {data.Count} {sets}{suffix}"
+            : $"{data.Count} {sets} · {rows} rows{suffix}";
     }
+
+    private static string DescribeMessages(int count) =>
+        $"{count} message{(count == 1 ? string.Empty : "s")}";
 
     /// <summary>Republishes the active tab's result tabs; an empty tab clears the grid.</summary>
     private void SyncResultMirror(TabViewModel? tab)
@@ -1115,6 +1252,40 @@ public partial class StudioViewModel : ObservableObject
         {
             await SyncSchemaForTabAsync(ActiveSpace, ActiveTab);
         }
+    }
+
+    /// <summary>
+    /// Mirrors a <c>USE</c> into the shell. The provider reports the session's real database after a
+    /// run; if it differs from the tab's, the tab, rail, picker and completion schema adopt it, so
+    /// the next run is not switched back to the old database.
+    /// </summary>
+    private async Task AdoptCurrentDatabaseAsync(TabViewModel tab, SpaceViewModel space)
+    {
+        var current = await tab.Session.GetCurrentDatabaseAsync(_lifetime.Token);
+        if (string.IsNullOrWhiteSpace(current)
+            || string.Equals(current, tab.Database, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        tab.Database = current;
+
+        if (!ReferenceEquals(space, ActiveSpace) || !ReferenceEquals(tab, ActiveTab))
+        {
+            ScheduleSave();
+            return;
+        }
+
+        var database = space.FindDatabase(current);
+        if (database is not null)
+        {
+            ApplyDatabase(database);
+        }
+
+        await SyncSchemaForTabAsync(space, tab);
+        StatusText = database is not null
+            ? $"{database.Name} · {space.StatusText}"
+            : $"{current} · {space.StatusText}";
     }
 
     public void SelectTab(TabViewModel? tab)
@@ -1339,6 +1510,9 @@ public partial class StudioViewModel : ObservableObject
         QueryCounter = _queryCounter,
         AutoArchiveEnabled = AutoArchiveEnabled,
         AutoArchiveDays = EffectiveAutoArchiveDays,
+        WindowBounds = WindowBounds,
+        ResultsPaneHeight = ResultsPaneHeight,
+        CellPreviewWidth = CellPreviewWidth,
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -1425,6 +1599,9 @@ public partial class StudioViewModel : ObservableObject
 
     private void Restore(StudioState state)
     {
+        WindowBounds = state.WindowBounds;
+        ResultsPaneHeight = state.ResultsPaneHeight;
+        CellPreviewWidth = state.CellPreviewWidth;
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);
@@ -1672,8 +1849,7 @@ public partial class StudioViewModel : ObservableObject
         var key = SchemaKey(space, database);
         if (_schemaCache.TryGetValue(key, out var cached))
         {
-            _schema = cached;
-            OnPropertyChanged(nameof(Tables));
+            ApplySchema(cached);
             return;
         }
 
@@ -1682,14 +1858,27 @@ public partial class StudioViewModel : ObservableObject
         try
         {
             var schema = await tab.Session.GetSchemaAsync(database, _lifetime.Token);
-            _schemaCache[key] = schema;
+
+            // Routine metadata is an enhancement: a provider that cannot read it must not cost
+            // the user table/browser completion for the database.
+            IReadOnlyList<RoutineSchema> routines;
+            try
+            {
+                routines = await tab.Session.GetRoutinesAsync(database, _lifetime.Token);
+            }
+            catch
+            {
+                routines = [];
+            }
+
+            var snapshot = new SchemaSnapshot(schema, routines);
+            _schemaCache[key] = snapshot;
 
             if (ReferenceEquals(space, ActiveSpace)
                 && ReferenceEquals(tab, ActiveTab)
                 && string.Equals(DatabaseNameFor(space, tab), database, StringComparison.OrdinalIgnoreCase))
             {
-                _schema = schema;
-                OnPropertyChanged(nameof(Tables));
+                ApplySchema(snapshot);
             }
         }
         catch
@@ -1698,9 +1887,11 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    /// <summary>The database a tab is bound to, falling back to the space default when it is unknown.</summary>
+    /// <summary>The database a tab is bound to, falling back to the space default only for an unbound tab.</summary>
     private static string? DatabaseNameFor(SpaceViewModel space, TabViewModel tab) =>
-        space.FindDatabase(tab.Database)?.Name ?? space.ActiveDatabase?.Name;
+        string.IsNullOrWhiteSpace(tab.Database)
+            ? space.ActiveDatabase?.Name
+            : space.FindDatabase(tab.Database)?.Name ?? tab.Database;
 
     private static string SchemaKey(SpaceViewModel space, string database) =>
         $"{space.Id}\u001F{database}";
@@ -1708,8 +1899,23 @@ public partial class StudioViewModel : ObservableObject
     private void ClearSchema()
     {
         _schema = [];
+        _routines = [];
         OnPropertyChanged(nameof(Tables));
+        OnPropertyChanged(nameof(Routines));
     }
+
+    private void ApplySchema(SchemaSnapshot snapshot)
+    {
+        _schema = snapshot.Tables;
+        _routines = snapshot.Routines;
+        OnPropertyChanged(nameof(Tables));
+        OnPropertyChanged(nameof(Routines));
+    }
+
+    /// <summary>What one database contributes to completion and browsing, cached together.</summary>
+    private sealed record SchemaSnapshot(
+        IReadOnlyList<TableSchema> Tables,
+        IReadOnlyList<RoutineSchema> Routines);
 
     /// <summary>Sets the space's active database without touching the active tab.</summary>
     private void ApplyDatabase(DatabaseViewModel? database)

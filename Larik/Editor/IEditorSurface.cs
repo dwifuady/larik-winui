@@ -17,6 +17,12 @@ public enum EditorCommandKind
 
     NewTab,
     ToggleSidebar,
+
+    /// <summary>Toggle the results pane (Ctrl+R).</summary>
+    ToggleResults,
+
+    /// <summary>Open the schema peek (Ctrl+K).</summary>
+    BrowseSchema,
 }
 
 /// <summary>One-based caret position in the document.</summary>
@@ -74,6 +80,12 @@ public interface IEditorSurface
 
     /// <summary>Selects a span without moving focus (used to show the statement being run).</summary>
     void Select(EditorSpan span);
+
+    /// <summary>
+    /// Replaces the current selection with <paramref name="text"/> and leaves the caret after it.
+    /// The schema browser inserts through this so the shell never assembles editor text itself.
+    /// </summary>
+    void InsertText(string text);
 
     /// <summary>Supplies snippets/keywords/schema. The shell swaps this when the space or schema changes.</summary>
     IEditorCompletionSource? CompletionSource { get; set; }

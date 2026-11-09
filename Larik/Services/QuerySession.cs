@@ -101,6 +101,69 @@ public sealed class QuerySession
         }
     }
 
+    /// <summary>Routines for the tab's database, on the same session as its schema and queries.</summary>
+    public async Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(
+        string? database,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var session = await EnsureOpenCoreAsync(cancellationToken);
+            return await session.GetRoutinesAsync(database, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>A metadata-only row-count estimate for one table, or null when unsupported.</summary>
+    public async Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var session = await EnsureOpenCoreAsync(cancellationToken);
+            return await session.EstimateRowCountAsync(database, schema, table, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The database the session actually uses, when the provider can tell. A <c>USE</c> inside a
+    /// script changes it; the shell adopts the answer so the next run does not switch back.
+    /// </summary>
+    public async Task<string?> GetCurrentDatabaseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_session is not { State: ConnectionState.Connected })
+            {
+                return null;
+            }
+
+            return await _session.GetCurrentDatabaseAsync(cancellationToken);
+        }
+        catch (Exception)
+        {
+            // The database name is bookkeeping; a failed lookup must not hide the query results.
+            return null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task CommitAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);

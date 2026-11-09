@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Larik.Data;
 using Larik.Editor;
+using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -40,9 +41,16 @@ public sealed partial class MainPage : Page
     private double _splitStartY;
     private double _splitStartHeight;
     private double _splitTotalHeight;
+    private double _splitResultsHeight;
+    private bool _resultsVisible;
+    private Storyboard? _resultsSlide;
+    private const double DefaultResultsPaneHeight = 320;
 
     private bool _newTabPaletteOpen;
     private List<string> _paletteDatabases = [];
+
+    private bool _schemaPinned;
+    private readonly Dictionary<string, List<string>> _recentObjects = new(StringComparer.Ordinal);
 
     public StudioViewModel ViewModel { get; } = new();
 
@@ -68,6 +76,7 @@ public sealed partial class MainPage : Page
         _completionSource = new StudioCompletionSource(
             () => ViewModel.Snippets,
             () => ViewModel.Tables,
+            () => ViewModel.Routines,
             () =>
             {
                 var space = ViewModel.ActiveSpace;
@@ -82,6 +91,21 @@ public sealed partial class MainPage : Page
         {
             Root.Background = (Brush)Application.Current.Resources["StudioBackgroundBrush"];
         }
+
+        // One schema control serves both placements; the shell owns what insert and preview mean.
+        SchemaPeek.CloseRequested += (_, _) => CloseSchemaPeek();
+        SchemaPeek.PinRequested += (_, _) => PinSchemaBrowser(open: true);
+        SchemaPeek.Activated += (_, selection) => InsertSchemaObject(selection, closePeek: true);
+        SchemaPeek.PreviewRequested += (_, selection) => _ = PreviewSchemaObjectAsync(selection, closePeek: true);
+        SchemaPeek.StatusRequested += (_, message) => ViewModel.StatusText = message;
+
+        SchemaPinned.CloseRequested += (_, _) => PinSchemaBrowser(open: false);
+        SchemaPinned.PinRequested += (_, _) => PinSchemaBrowser(open: false);
+        SchemaPinned.Activated += (_, selection) => InsertSchemaObject(selection, closePeek: false);
+        SchemaPinned.PreviewRequested += (_, selection) => _ = PreviewSchemaObjectAsync(selection, closePeek: false);
+        SchemaPinned.StatusRequested += (_, message) => ViewModel.StatusText = message;
+
+        ResultsGrid.PreviewWidthChanged += (_, width) => ViewModel.SetCellPreviewWidth(width);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -107,6 +131,7 @@ public sealed partial class MainPage : Page
         // The caption lives inside the content column (the rail runs full height), so the page owns the drag region.
         App.Window.SetTitleBar(AppTitleBar);
 
+        ResultsGrid.PreviewWidth = ViewModel.CellPreviewWidth ?? 340;
         SyncEditorFromActiveTab();
         RenderResults();
         SqlEditor.FocusEditor();
@@ -117,6 +142,197 @@ public sealed partial class MainPage : Page
 
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(SettingsPage));
+
+    // ---------------------------------------------------------------- schema browser
+
+    private void SchemaAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        OpenSchemaPeek();
+    }
+
+    private void ToggleResultsAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ToggleResultsPane();
+    }
+
+    private void BrowseSchema_Click(object sender, RoutedEventArgs e) => OpenSchemaPeek();
+
+    private void OpenSchemaPeek()
+    {
+        if (SchemaPeekHost.Visibility == Visibility.Visible)
+        {
+            CloseSchemaPeek();
+            return;
+        }
+
+        if (ViewModel.ActiveSpace is not { IsConnected: true })
+        {
+            ViewModel.StatusText = "Connect the workspace to browse its schema";
+            return;
+        }
+
+        RefreshSchemaBrowsers();
+        SchemaPeek.ResetSearch();
+        SchemaPeekHost.Visibility = Visibility.Visible;
+        SchemaPeek.FocusSearch();
+    }
+
+    private void CloseSchemaPeek()
+    {
+        if (SchemaPeekHost.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        SchemaPeekHost.Visibility = Visibility.Collapsed;
+        SqlEditor.FocusEditor();
+    }
+
+    private void SchemaPeekBackdrop_Tapped(object sender, TappedRoutedEventArgs e) => CloseSchemaPeek();
+
+    /// <summary>Re-feeds both placements from the active tab's schema.</summary>
+    private void RefreshSchemaBrowsers()
+    {
+        var database = ViewModel.ActiveSpace?.ActiveDatabase?.Name ?? ViewModel.ActiveTab?.Database;
+        var recents = RecentsForActiveSpace();
+        SchemaPeek.Show(ViewModel.Tables, ViewModel.Routines, database, recents);
+
+        if (_schemaPinned)
+        {
+            SchemaPinned.Show(ViewModel.Tables, ViewModel.Routines, database, recents);
+        }
+    }
+
+    private void PinSchemaBrowser(bool open)
+    {
+        _schemaPinned = open;
+        Root.ColumnDefinitions[1].Width = open ? new GridLength(300) : new GridLength(0);
+        SchemaPinnedHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+
+        if (open)
+        {
+            CloseSchemaPeek();
+            RefreshSchemaBrowsers();
+            SchemaPinned.FocusSearch();
+            ViewModel.StatusText = "Schema pinned beside the editor";
+        }
+        else
+        {
+            ViewModel.StatusText = "Schema unpinned";
+        }
+    }
+
+    private void InsertSchemaObject(SchemaSelection selection, bool closePeek)
+    {
+        string text;
+        if (selection.Routine is { } routine)
+        {
+            text = RoutineInvocation(routine);
+        }
+        else if (selection.Table is { } table)
+        {
+            text = selection.Column ?? QualifiedTableName(table);
+            RememberSchemaObject(table);
+        }
+        else
+        {
+            return;
+        }
+
+        SqlEditor.InsertText(text);
+        ViewModel.StatusText = $"Inserted {text}";
+
+        if (closePeek)
+        {
+            CloseSchemaPeek();
+        }
+        else if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
+    }
+
+    private async Task PreviewSchemaObjectAsync(SchemaSelection selection, bool closePeek)
+    {
+        if (selection.Table is not { } table)
+        {
+            return;
+        }
+
+        var name = QualifiedTableName(table);
+        RememberSchemaObject(table);
+
+        if (closePeek)
+        {
+            CloseSchemaPeek();
+        }
+        else if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
+
+        ViewModel.StatusText = $"Previewing {name} · top 100";
+        var statement = ViewModel.ActiveLanguage is ISqlDialect dialect
+            ? dialect.PreviewStatement(table.Schema, table.Name, 100)
+            : $"SELECT * FROM {name}";
+        await ViewModel.RunSqlAsync($"{statement};", append: true);
+    }
+
+    /// <summary>A complete procedure call in the active dialect, parameters filled with NULL.</summary>
+    private string RoutineInvocation(RoutineSchema routine)
+    {
+        if (ViewModel.ActiveLanguage is ISqlDialect dialect)
+        {
+            return dialect.RoutineInvocation(routine.Schema, routine.Name, routine.Parameters);
+        }
+
+        return string.IsNullOrWhiteSpace(routine.Schema)
+            ? routine.Name
+            : $"{routine.Schema}.{routine.Name}";
+    }
+
+    /// <summary>The name inserted into the editor, quoted the way the active dialect requires.</summary>
+    private string QualifiedTableName(TableSchema table)
+    {
+        var dialect = ViewModel.ActiveLanguage as ISqlDialect;
+        string Quote(string value) => dialect?.QuoteIdentifier(value) ?? value;
+
+        return string.IsNullOrWhiteSpace(table.Schema)
+            ? Quote(table.Name)
+            : $"{Quote(table.Schema)}.{Quote(table.Name)}";
+    }
+
+    private List<string> RecentsForActiveSpace()
+    {
+        var id = ViewModel.ActiveSpace?.Id;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return [];
+        }
+
+        if (!_recentObjects.TryGetValue(id, out var list))
+        {
+            list = [];
+            _recentObjects[id] = list;
+        }
+
+        return list;
+    }
+
+    private void RememberSchemaObject(TableSchema table)
+    {
+        var list = RecentsForActiveSpace();
+        var key = SchemaKeys.For(table);
+        list.Remove(key);
+        list.Insert(0, key);
+
+        while (list.Count > 5)
+        {
+            list.RemoveAt(list.Count - 1);
+        }
+    }
 
     // ---------------------------------------------------------------- workspace switching
 
@@ -129,6 +345,16 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(StudioViewModel.Tables) or nameof(StudioViewModel.Routines))
+        {
+            if (SchemaPeekHost.Visibility == Visibility.Visible || _schemaPinned)
+            {
+                RefreshSchemaBrowsers();
+            }
+
+            return;
+        }
+
         if (e.PropertyName == nameof(StudioViewModel.ActiveLanguage))
         {
             SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
@@ -147,6 +373,17 @@ public sealed partial class MainPage : Page
         }
 
         _lastSpaceIndex = index;
+
+        // The rail changed workspace: the peek belongs to the tab you left, the pin follows along.
+        if (SchemaPeekHost.Visibility == Visibility.Visible)
+        {
+            CloseSchemaPeek();
+        }
+
+        if (_schemaPinned)
+        {
+            RefreshSchemaBrowsers();
+        }
     }
 
     private void SlideQueryContent(int direction)
@@ -283,6 +520,12 @@ public sealed partial class MainPage : Page
             case EditorCommandKind.ToggleSidebar:
                 ViewModel.ToggleSidebarCommand.Execute(null);
                 break;
+            case EditorCommandKind.ToggleResults:
+                ToggleResultsPane();
+                break;
+            case EditorCommandKind.BrowseSchema:
+                OpenSchemaPeek();
+                break;
         }
     }
 
@@ -297,6 +540,8 @@ public sealed partial class MainPage : Page
     {
         var text = SqlEditor.Text;
         var selection = SqlEditor.Selection;
+
+        ShowResultsPane();
 
         IReadOnlyList<string> batches;
         if (!selection.IsEmpty)
@@ -1410,12 +1655,115 @@ public sealed partial class MainPage : Page
 
     // ---------------------------------------------------------------- splitter
 
+    /// <summary>
+    /// Reveals the results pane on the first run of a session. The saved height is reused; the
+    /// pane slides up from below so the editor's loss of space is visible rather than a jump.
+    /// </summary>
+    private void ShowResultsPane()
+    {
+        if (_resultsVisible)
+        {
+            return;
+        }
+
+        _resultsVisible = true;
+        ResultsPane.Visibility = Visibility.Visible;
+        Splitter.Visibility = Visibility.Visible;
+
+        var total = EditorRow.ActualHeight + ResultsRow.ActualHeight;
+        var height = ViewModel.ResultsPaneHeight ?? DefaultResultsPaneHeight;
+        if (total > 0)
+        {
+            height = Math.Clamp(height, 140, Math.Max(160, total - 160));
+        }
+
+        ResultsRow.Height = new GridLength(height);
+        EditorRow.Height = new GridLength(1, GridUnitType.Star);
+
+        var transform = ResultsPane.RenderTransform as TranslateTransform;
+        if (transform is null)
+        {
+            transform = new TranslateTransform();
+            ResultsPane.RenderTransform = transform;
+        }
+
+        transform.Y = 0;
+        ResultsPane.Opacity = 1;
+
+        if (!new UISettings().AnimationsEnabled)
+        {
+            return;
+        }
+
+        _resultsSlide?.Stop();
+        transform.Y = 28;
+        ResultsPane.Opacity = 0;
+
+        var duration = new Duration(TimeSpan.FromMilliseconds(180));
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var board = new Storyboard();
+
+        var slide = new DoubleAnimation { To = 0, Duration = duration, EasingFunction = easing };
+        Storyboard.SetTarget(slide, transform);
+        Storyboard.SetTargetProperty(slide, "Y");
+
+        var fade = new DoubleAnimation { To = 1, Duration = duration, EasingFunction = easing };
+        Storyboard.SetTarget(fade, ResultsPane);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        board.Children.Add(slide);
+        board.Children.Add(fade);
+        _resultsSlide = board;
+        board.Begin();
+    }
+
+    private void ToggleResultsPane()
+    {
+        if (_resultsVisible)
+        {
+            HideResultsPane();
+        }
+        else
+        {
+            ShowResultsPane();
+        }
+    }
+
+    private void HideResultsPane()
+    {
+        if (!_resultsVisible)
+        {
+            return;
+        }
+
+        _resultsVisible = false;
+        _resultsSlide?.Stop();
+
+        var height = ResultsRow.ActualHeight;
+        if (height > 0)
+        {
+            ViewModel.SetResultsPaneHeight(height);
+        }
+
+        ResultsPane.Visibility = Visibility.Collapsed;
+        Splitter.Visibility = Visibility.Collapsed;
+        ResultsRow.Height = new GridLength(0);
+        EditorRow.Height = new GridLength(1, GridUnitType.Star);
+        ResultsPane.Opacity = 1;
+
+        if (ResultsPane.RenderTransform is TranslateTransform transform)
+        {
+            transform.Y = 0;
+        }
+    }
+
     private void Splitter_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         _draggingSplitter = true;
         _splitStartY = e.GetCurrentPoint(Root).Position.Y;
         _splitStartHeight = EditorRow.ActualHeight;
         _splitTotalHeight = EditorRow.ActualHeight + ResultsRow.ActualHeight;
+        _splitResultsHeight = Math.Max(0, _splitTotalHeight - _splitStartHeight);
         Splitter.CapturePointer(e.Pointer);
         e.Handled = true;
     }
@@ -1431,12 +1779,14 @@ public sealed partial class MainPage : Page
         var height = Math.Clamp(_splitStartHeight + delta, 120, Math.Max(140, _splitTotalHeight - 120));
         EditorRow.Height = new GridLength(height);
         ResultsRow.Height = new GridLength(1, GridUnitType.Star);
+        _splitResultsHeight = Math.Max(0, _splitTotalHeight - height);
     }
 
     private void Splitter_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         _draggingSplitter = false;
         Splitter.ReleasePointerCapture(e.Pointer);
+        ViewModel.SetResultsPaneHeight(_splitResultsHeight);
         e.Handled = true;
     }
 
@@ -1449,6 +1799,9 @@ public sealed partial class MainPage : Page
             ? StudioColors.Danger
             : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
 
+        ResultsGrid.ReferenceController = result is null
+            ? null
+            : ViewModel.CreateCellReferenceController(result);
         ResultsGrid.ShowResult(result, ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
         BringActiveResultTabIntoView();
     }

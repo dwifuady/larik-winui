@@ -96,6 +96,12 @@ public sealed class QueryExecutionOptions
 }
 
 /// <summary>
+/// One equality predicate for a filtered row lookup (for example a foreign-key reference). The
+/// value is the already-formatted cell text; the dialect turns it into a SQL literal.
+/// </summary>
+public sealed record RowFilter(string Column, string? Value, string? DataType = null);
+
+/// <summary>
 /// The session's transaction state as reported by the engine. SQL Server fills
 /// <see cref="TransactionCount"/> from <c>@@TRANCOUNT</c> and <see cref="XactState"/> from
 /// <c>XACT_STATE()</c> (1 = committable, 0 = no transaction, -1 = doomed).
@@ -128,6 +134,13 @@ public sealed class QueryResult
     /// <summary>True when the provider stopped at its row cap; <see cref="RowLimit"/> says where.</summary>
     public bool IsTruncated { get; init; }
 
+    /// <summary>
+    /// Informational output the engine sent around the result: <c>PRINT</c>, <c>RAISERROR</c> up to
+    /// severity 10, <c>SET STATISTICS IO/TIME</c> and optimizer warnings. Empty for providers (and
+    /// engines) without messages; additive, so older providers keep working.
+    /// </summary>
+    public IReadOnlyList<string> Messages { get; init; } = [];
+
     public int? RowLimit { get; init; }
 
     /// <summary>
@@ -136,6 +149,13 @@ public sealed class QueryResult
     /// executed text is what the user wrote.
     /// </summary>
     public string? GeneratedQuery { get; init; }
+
+    /// <summary>
+    /// The statement/batch that produced this result, when the provider can report it. The shell
+    /// uses it to map result columns back to their source table (foreign-key previews) without
+    /// guessing from whatever is in the editor now. Null keeps older providers working.
+    /// </summary>
+    public string? Statement { get; init; }
 
     public static QueryResult Error(string message, TimeSpan elapsed, string? database = null) => new()
     {
@@ -166,7 +186,29 @@ public sealed record ForeignKeySchema(
     public string? ReferencedSchema { get; init; }
 }
 
-/// <summary>Tables and columns, used to feed completion after a connection opens.</summary>
+/// <summary>What a <see cref="TableSchema"/> describes. Views browse and complete like tables.</summary>
+public enum TableKind
+{
+    Table,
+    View,
+}
+
+/// <summary>
+/// A column with the engine-reported data type. Types are optional: a provider that cannot report
+/// them leaves them null and the browser falls back to the name-only list.
+/// </summary>
+public sealed class TableColumn
+{
+    public required string Name { get; init; }
+
+    /// <summary>Type as written in DDL, e.g. <c>nvarchar(120)</c>, <c>numeric(18,2)</c>, <c>int</c>.</summary>
+    public string? DataType { get; init; }
+
+    /// <summary>Null when the provider cannot tell.</summary>
+    public bool? IsNullable { get; init; }
+}
+
+/// <summary>Tables, views and columns, used to feed completion and the schema browser.</summary>
 public sealed class TableSchema
 {
     public required string Name { get; init; }
@@ -181,6 +223,53 @@ public sealed class TableSchema
 
     /// <summary>Foreign keys declared on this table, used to suggest join conditions.</summary>
     public IReadOnlyList<ForeignKeySchema> ForeignKeys { get; init; } = [];
+
+    /// <summary>
+    /// Base table or view. Defaults to a table, so a provider written before this member existed
+    /// keeps browsing and completing exactly as before.
+    /// </summary>
+    public TableKind Kind { get; init; } = TableKind.Table;
+
+    /// <summary>
+    /// Columns with their types, when the provider can report them. <see cref="Columns"/> stays the
+    /// name-only projection completion and older code use.
+    /// </summary>
+    public IReadOnlyList<TableColumn> ColumnDetails { get; init; } = [];
+}
+
+/// <summary>The kind of stored routine a <see cref="RoutineSchema"/> describes.</summary>
+public enum RoutineKind
+{
+    Procedure,
+    Function,
+}
+
+/// <summary>One routine parameter as the engine stores it.</summary>
+public sealed class RoutineParameter
+{
+    /// <summary>Name including the engine's prefix, e.g. <c>@id</c> for T-SQL or <c>p_id</c> for PostgreSQL.</summary>
+    public required string Name { get; init; }
+
+    public string? DataType { get; init; }
+
+    public bool IsOutput { get; init; }
+
+    public bool HasDefault { get; init; }
+}
+
+/// <summary>
+/// A stored procedure or function: what completion offers after EXEC/CALL and what the schema
+/// browser lists. Parameters are ordered as the engine defines them.
+/// </summary>
+public sealed class RoutineSchema
+{
+    public required string Name { get; init; }
+
+    public string? Schema { get; init; }
+
+    public RoutineKind Kind { get; init; } = RoutineKind.Procedure;
+
+    public IReadOnlyList<RoutineParameter> Parameters { get; init; } = [];
 }
 
 /// <summary>
@@ -232,6 +321,14 @@ public interface IDatabaseConnection : IAsyncDisposable
     /// <summary>Databases visible on this connection.</summary>
     Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The database the open session is using, when the engine can report it. A script's
+    /// <c>USE</c> changes this; the shell adopts the name so the tab, rail, database picker and
+    /// completion follow it. Null means "unknown", which keeps older providers working.
+    /// </summary>
+    Task<string?> GetCurrentDatabaseAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<string?>(null);
+
     Task<QueryResult> ExecuteAsync(string sql, string? database, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -258,6 +355,26 @@ public interface IDatabaseConnection : IAsyncDisposable
         [await ExecuteAsync(sql, database, options, cancellationToken)];
 
     Task<IReadOnlyList<TableSchema>> GetSchemaAsync(string? database, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stored procedures and functions for completion and the schema browser. Optional: the default
+    /// returns nothing, so a provider that cannot enumerate routines keeps working. Kept separate
+    /// from <see cref="GetSchemaAsync"/> so browsing tables never waits on routine metadata.
+    /// </summary>
+    Task<IReadOnlyList<RoutineSchema>> GetRoutinesAsync(string? database, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RoutineSchema>>([]);
+
+    /// <summary>
+    /// A cheap row-count estimate for one table, used to choose between listing a small reference
+    /// table and looking up only the matching rows in a large one. Optional: null means "unknown",
+    /// which keeps older providers working (the shell then does a filtered lookup).
+    /// </summary>
+    Task<long?> EstimateRowCountAsync(
+        string? database,
+        string? schema,
+        string table,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<long?>(null);
 
     /// <summary>
     /// True when the provider can report and finish transactions the user started in SQL.

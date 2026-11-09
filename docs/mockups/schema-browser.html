@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Schema browser — mockups</title>
+<style>
+  :root{
+    --bg:#161618; --panel:#1c1c1e; --card:#232326; --elev:#2a2a2e;
+    --text:#f5f5f7; --text2:rgba(245,245,247,.72); --muted:rgba(245,245,247,.42);
+    --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+    --space:#67e8f9; --space-soft:rgba(103,232,249,.16); --accent:#6366f1;
+    --green:#22c55e; --amber:#f59e0b; --blue:#93c5fd;
+    --mono:'Cascadia Mono',Consolas,'Courier New',monospace;
+    --sans:'Segoe UI Variable Text','Segoe UI',system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{background:transparent;margin:0}
+  body{font-family:var(--sans);color:var(--text);-webkit-font-smoothing:antialiased}
+  .wrap{width:100%;max-width:720px;margin:0 auto}
+  .caption{display:flex;align-items:baseline;gap:8px;margin:0 0 8px 2px;font-size:11.5px;color:var(--muted)}
+  .caption b{color:var(--text2);font-weight:600;font-size:12px}
+  .caption span{font-size:10.5px}
+  .board{position:relative;width:100%;height:600px;margin:0 0 30px;background:var(--bg);
+    border:1px solid var(--line);border-radius:16px;overflow:hidden;
+    box-shadow:0 22px 60px rgba(0,0,0,.35)}
+  .board.pinned{height:504px}
+
+  /* window chrome */
+  .titlebar{height:30px;display:flex;align-items:center;padding:0 10px 0 12px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .appmark{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);letter-spacing:.02em}
+  .appmark i{width:12px;height:12px;border-radius:4px;background:linear-gradient(140deg,var(--space),var(--accent));display:block;opacity:.85}
+  .captionbtns{margin-left:auto;display:flex;gap:2px}
+  .captionbtns span{width:28px;height:22px;display:grid;place-items:center;font-size:10px;color:var(--muted);border-radius:4px}
+
+  .app{display:grid;grid-template-columns:150px 1fr;height:calc(100% - 30px)}
+  .rail{border-right:1px solid var(--line);padding:9px 8px 8px;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .workspace{display:flex;align-items:center;gap:7px;height:28px;padding:0 7px;border-radius:8px;background:rgba(255,255,255,.05);font-size:12px;font-weight:600;min-width:0}
+  .wsdot{width:8px;height:8px;border-radius:50%;background:var(--space);box-shadow:0 0 0 3px rgba(103,232,249,.14);flex:none}
+  .workspace .chev{margin-left:auto;color:var(--muted)}
+  .conn{display:flex;align-items:center;gap:5px;padding:5px 7px 7px;font-size:10px;color:var(--muted)}
+  .conn .dot{width:5px;height:5px;border-radius:50%;background:var(--green)}
+  .conn .act{margin-left:auto;color:var(--text2);font-size:9.5px}
+  .dbpill{display:flex;align-items:center;gap:6px;height:28px;padding:0 7px;margin-bottom:6px;border-radius:7px;background:var(--card);border:1px solid var(--line);font-size:11px;color:var(--text2);min-width:0}
+  .dbpill .name{font-family:var(--mono);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dbpill .chev{margin-left:auto;color:var(--muted);flex:none}
+  .rlbl{display:flex;align-items:center;gap:6px;padding:6px 7px 4px;font-size:8.5px;letter-spacing:.09em;color:var(--muted)}
+  .rlbl .spacer{flex:1}
+  .tab{position:relative;display:flex;flex-direction:column;justify-content:center;height:40px;padding:0 8px 0 10px;border-radius:7px;font-size:11px;color:var(--text2);overflow:hidden}
+  .tab small{font-size:9px;color:var(--muted);margin-top:1px}
+  .tab.active{background:var(--space-soft);color:var(--text)}
+  .tab.active:before{content:'';position:absolute;left:0;top:7px;bottom:7px;width:2px;border-radius:2px;background:var(--space)}
+  .tab .x{margin-left:auto;color:var(--muted);font-size:11px}
+  .newtab{display:flex;align-items:center;gap:6px;height:30px;margin-top:2px;padding:0 9px;border-radius:7px;font-size:10.5px;color:var(--muted)}
+  .newtab .plus{font-size:13px;line-height:1}
+  .railfoot{margin-top:auto;display:flex;align-items:center;gap:6px;padding:6px 7px 0}
+  .dots{display:flex;gap:5px;align-items:center}
+  .dots i{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.16);display:block}
+  .dots i.on{background:var(--space);box-shadow:0 0 0 2px rgba(103,232,249,.25)}
+  .railfoot .gear{margin-left:auto;color:var(--muted);font-size:12px}
+
+  /* stage */
+  .stage{position:relative;min-width:0;display:flex;flex-direction:column;gap:8px;padding:9px 10px 10px;
+    background:radial-gradient(120% 90% at 0% 0%,rgba(103,232,249,.045),transparent 58%)}
+  .toolbar{display:flex;align-items:center;gap:6px;height:28px}
+  .tb{height:24px;padding:0 9px;border-radius:6px;font-size:10.5px;color:var(--text2);display:flex;align-items:center}
+  .tb.ghost{color:var(--muted)}
+  .run{margin-left:auto;width:30px;height:26px;border-radius:6px;background:var(--space);color:#141418;display:grid;place-items:center;font-size:11px}
+  .editor{flex:1;min-height:0;border-radius:10px;border:1px solid var(--line);background:var(--card);padding:13px 14px;
+    font-family:var(--mono);font-size:11px;line-height:1.85;color:rgba(245,245,247,.86);overflow:hidden}
+  .kw{color:#c792ea}.fn{color:#82aaff}.str{color:#a5d6a7}.var{color:#ffcb6b}.com{color:#7a8194}
+  .caret{display:inline-block;width:1px;height:11px;background:var(--space);vertical-align:-1px;margin-left:1px}
+  .resstrip{display:flex;gap:5px;align-items:center}
+  .res{height:22px;padding:0 8px;border-radius:5px;font-size:9.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+  .res.on{background:var(--space-soft);color:var(--text)}
+  .gridmini{height:88px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02);overflow:hidden}
+  .gr{display:grid;grid-template-columns:1.4fr 1fr .8fr;height:22px;align-items:center;padding:0 10px;gap:8px;font-size:9.5px;color:var(--muted);border-bottom:1px solid rgba(255,255,255,.04)}
+  .gr.h{font-size:8.5px;letter-spacing:.06em;background:rgba(255,255,255,.03)}
+  .scrim{position:absolute;inset:0;background:rgba(12,12,14,.34)}
+
+  /* the peek */
+  .peek{position:absolute;left:162px;top:92px;width:540px;height:480px;border-radius:14px;display:flex;flex-direction:column;overflow:hidden;
+    background:linear-gradient(180deg,rgba(38,38,42,.97),rgba(28,28,31,.985));
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 34px 90px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06)}
+  .peek-head{display:flex;align-items:center;gap:6px;padding:11px 10px 8px}
+  .search{flex:1;display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:9px;
+    background:rgba(255,255,255,.055);border:1px solid rgba(103,232,249,.5);box-shadow:0 0 0 3px rgba(103,232,249,.12);min-width:0}
+  .search .ph{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .search .key{margin-left:auto;font-size:8.5px;color:var(--muted);border:1px solid var(--line2);border-radius:4px;padding:1px 4px;flex:none}
+  .iconbtn{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:var(--muted);flex:none}
+  .iconbtn.pin{color:var(--text2);background:rgba(255,255,255,.045)}
+  .peek-context{display:flex;align-items:center;gap:7px;padding:0 13px 9px;font-size:9.5px;color:var(--muted)}
+  .chip{display:inline-flex;align-items:center;gap:5px;height:19px;padding:0 6px;border-radius:5px;background:rgba(255,255,255,.06);color:var(--text2);font-family:var(--mono);font-size:9px}
+  .peek-body{flex:1;min-height:0;display:grid;grid-template-columns:300px 1fr;border-top:1px solid var(--line);overflow:hidden}
+  .peek-list{min-height:0;padding:5px 6px 6px;overflow:hidden}
+  .group{padding:9px 8px 4px;font-size:8.5px;letter-spacing:.09em;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .group .n{margin-left:auto;font-size:8.5px;color:rgba(245,245,247,.3);letter-spacing:0}
+  .row{display:flex;align-items:center;gap:8px;height:29px;padding:0 8px;border-radius:7px;font-size:11.5px;color:var(--text2)}
+  .row .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .meta{font-size:9px;color:var(--muted);flex:none}
+  .row .ico{width:14px;height:14px;display:grid;place-items:center;color:var(--muted);flex:none}
+  .tico{width:12px;height:11px;border:1px solid currentColor;border-radius:2px;flex:none;position:relative;opacity:.7}
+  .tico:before,.tico:after{content:'';position:absolute;left:0;right:0;height:1px;background:currentColor;opacity:.55}
+  .tico:before{top:3px}.tico:after{top:7px}
+  .vico{width:13px;height:9px;border:1px solid currentColor;border-radius:50%;flex:none;position:relative;opacity:.7}
+  .vico:before{content:'';position:absolute;width:3px;height:3px;border-radius:50%;background:currentColor;left:4px;top:2px}
+  .cico{width:3px;height:12px;border-radius:1px;background:currentColor;flex:none;opacity:.45}
+  .row.sel .tico,.row.sel .vico,.row.sel .cico{color:var(--space)}
+  .row.sel{background:var(--space-soft);color:var(--text);box-shadow:inset 2px 0 0 var(--space)}
+  .row.sel .ico{color:var(--space)}
+  .row .kb{margin-left:auto;font-size:8.5px;color:rgba(245,245,247,.28);flex:none}
+  .row mark{background:transparent;color:var(--space);font-weight:600}
+  .sub{font-size:8.5px;color:var(--muted);margin-left:22px;margin-top:-2px}
+  .peek-detail{border-left:1px solid var(--line);padding:12px 12px 8px;min-width:0;display:flex;flex-direction:column;gap:9px}
+  .dtitle{font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+  .dsub{font-size:9.5px;color:var(--muted);margin-top:2px}
+  .actions{display:flex;gap:6px;margin-top:1px}
+  .btn{height:25px;border-radius:6px;display:flex;align-items:center;gap:5px;padding:0 9px;font-size:10px;color:var(--text2);background:rgba(255,255,255,.06)}
+  .btn.primary{background:var(--space);color:#101014;font-weight:600}
+  .iconbtn.sm{width:25px;height:25px;background:rgba(255,255,255,.06)}
+  .colhead{display:flex;align-items:center;gap:6px;margin-top:2px;font-size:8.5px;letter-spacing:.08em;color:var(--muted)}
+  .colhead .line{flex:1;height:1px;background:var(--line)}
+  .col{display:flex;align-items:center;gap:6px;height:23px;font-family:var(--mono);font-size:10.5px;color:var(--text2)}
+  .col .ty{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--muted)}
+  .badge{font-family:var(--sans);font-size:7.5px;letter-spacing:.05em;padding:1px 4px;border-radius:3px;color:var(--muted);background:rgba(255,255,255,.06);flex:none}
+  .badge.pk{color:#fbbf24;background:rgba(245,158,11,.13)}
+  .badge.fk{color:var(--blue);background:rgba(59,130,246,.13)}
+  .more{font-size:8.5px;color:var(--muted);padding:4px 0 0 2px}
+  .peek-foot{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px;border-top:1px solid var(--line);background:#1e1e22;font-size:9px;color:var(--muted)}
+  .peek-foot .right{margin-left:auto;display:flex;align-items:center;gap:4px}
+  kbd{font-family:var(--sans);font-size:8.5px;color:var(--text2);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:4px;padding:1px 4px;margin-right:3px}
+
+  /* pinned inspector */
+  .inspector{min-width:0;border-right:1px solid var(--line);background:rgba(255,255,255,.012);padding:0 6px;display:flex;flex-direction:column;gap:3px}
+  .insp-head{display:flex;align-items:center;gap:5px;padding:9px 5px 6px}
+  .insp-head .ttl{font-size:9.5px;letter-spacing:.1em;color:var(--muted)}
+  .insp-head .spacer{flex:1}
+  .isearch{height:28px;margin:0 4px 4px;border-radius:7px;background:rgba(255,255,255,.05);border:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:0 8px;font-size:10px;color:var(--muted)}
+  .ctx{font-family:var(--mono);font-size:9px;color:var(--muted);padding:0 8px 5px}
+  .trow{display:flex;align-items:center;gap:6px;height:24px;padding:0 6px;border-radius:5px;font-size:10.5px;color:var(--text2)}
+  .trow .ch{width:10px;color:var(--muted);font-size:9px;text-align:center;flex:none}
+  .trow.sel{background:var(--space-soft);color:var(--text)}
+  .trow.sel .ch{color:var(--space)}
+  .trow .cnt{margin-left:auto;font-size:8.5px;color:var(--muted)}
+  .trow.indent{padding-left:20px}
+  .trow.indent2{padding-left:34px}
+  .tcol{display:flex;align-items:center;gap:5px;height:20px;padding-left:48px;font-family:var(--mono);font-size:9.5px;color:var(--muted)}
+  .tcol .ty{margin-left:auto;font-size:8px;color:rgba(245,245,247,.3)}
+  .tcol .badge{font-size:7px;padding:0 3px}
+  .insp-foot{margin-top:auto;padding:6px 6px 8px;font-size:8.5px;color:var(--muted);border-top:1px solid var(--line)}
+  .board.pinned .app{grid-template-columns:150px 204px 1fr}
+  .board.pinned .stage{padding:8px 9px}
+  .board.pinned .editor{font-size:10px;line-height:1.7;padding:10px 11px}
+  .board.pinned .gridmini{height:132px}
+  .board.pinned .gr{height:21px;font-size:9px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="caption"><b>1 · Schema peek</b><span>The default. Ctrl+K or the database pill; search-first, dismisses back into the editor.</span></div>
+  <section class="board">
+    <div class="titlebar">
+      <div class="appmark"><i></i>Larik SQL Studio</div>
+      <div class="captionbtns"><span>—</span><span>□</span><span>✕</span></div>
+    </div>
+    <div class="app">
+      <aside class="rail">
+        <div class="workspace"><span class="wsdot"></span>Staging<span class="chev">⌄</span></div>
+        <div class="conn"><span class="dot"></span>Connected<span class="act">Disconnect</span></div>
+        <div class="dbpill"><span style="font-size:10px">▤</span><span class="name">larik_staging</span><span class="chev">⌄</span></div>
+        <div class="rlbl">TABS<span class="spacer"></span><span style="font-size:9px">▣</span></div>
+        <div class="tab active">Query 2<small>larik_staging</small><span class="x">×</span></div>
+        <div class="tab">Customers<small>larik_staging</small><span class="x">×</span></div>
+        <div class="newtab"><span class="plus">+</span>New query</div>
+        <div class="railfoot"><div class="dots"><i></i><i class="on"></i><i></i><i></i></div><span class="gear">⚙</span></div>
+      </aside>
+      <main class="stage">
+        <div class="toolbar"><div class="tb ghost">Format</div><div class="run">▶</div></div>
+        <div class="editor"><span class="kw">SELECT</span> c.full_name,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="fn">COUNT</span>(o.id) <span class="kw">AS</span> orders<br><span class="kw">FROM</span> [dbo].[Customers] <span class="kw">AS</span> [c]<br><span class="kw">INNER JOIN</span> [dbo].[Orders] <span class="kw">AS</span> [o]<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="kw">ON</span> o.customer_id = c.id<br><span class="kw">WHERE</span> c.tenant_id = <span class="var">@tenant</span><br><span class="kw">GROUP BY</span> c.full_name<br><span class="kw">ORDER BY</span> orders <span class="kw">DESC</span>;<span class="caret"></span></div>
+        <div class="resstrip"><div class="res on">Result 1 <span style="opacity:.6">24 rows</span></div><div class="res">Messages</div></div>
+        <div class="gridmini">
+          <div class="gr h"><span>FULL NAME</span><span>EMAIL</span><span>ORDERS</span></div>
+          <div class="gr"><span>Ada Lovelace</span><span>ada@…</span><span>7</span></div>
+          <div class="gr"><span>Grace Hopper</span><span>grace@…</span><span>5</span></div>
+          <div class="gr"><span>Alan Turing</span><span>alan@…</span><span>3</span></div>
+        </div>
+        <div class="scrim"></div>
+      </main>
+    </div>
+
+    <div class="peek">
+      <div class="peek-head">
+        <div class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg>
+          <span class="ph">Search tables, views, columns</span>
+          <span class="key">⌘K</span>
+        </div>
+        <div class="iconbtn pin" title="Pin beside the editor"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5l6.5 6.5-3 .6-3.4 3.4-.6 3.5-6.5-6.5 3.5-.6L13.4 6.5z"/><path d="M8 16l-4 4"/></svg></div>
+        <div class="iconbtn" title="Close"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+      </div>
+      <div class="peek-context">
+        <span class="chip">▤ larik_staging</span>
+        <span>12 tables · 3 views · 148 columns</span>
+        <span style="margin-left:auto">refreshed 2m ago</span>
+      </div>
+      <div class="peek-body">
+        <div class="peek-list">
+          <div class="group">RECENT<span class="n">this workspace</span></div>
+          <div class="row"><span class="tico"></span><span class="nm">Customers</span><span class="meta">24 rows</span></div>
+          <div class="row"><span class="tico"></span><span class="nm">Orders</span><span class="meta">128 rows</span></div>
+          <div class="group">TABLES<span class="n">12</span></div>
+          <div class="row sel"><span class="tico"></span><span class="nm">Customers</span><span class="meta">12 cols</span></div>
+          <div class="row"><span class="tico"></span><span class="nm">Order items</span><span class="meta">8 cols</span></div>
+          <div class="row"><span class="tico"></span><span class="nm">Products</span><span class="meta">9 cols</span></div>
+          <div class="row"><span class="tico"></span><span class="nm">Tenants</span><span class="meta">6 cols</span></div>
+          <div class="group">VIEWS<span class="n">3</span></div>
+          <div class="row"><span class="vico"></span><span class="nm">Active customers</span><span class="meta">view</span></div>
+          <div class="group">COLUMNS<span class="n">matched</span></div>
+          <div class="row"><span class="cico"></span><span class="nm">full_name</span><span class="meta">Customers</span></div>
+        </div>
+        <div class="peek-detail">
+          <div>
+            <div class="dtitle">dbo.Customers</div>
+            <div class="dsub">Table · 24 rows · 12 columns</div>
+          </div>
+          <div class="actions">
+            <div class="btn primary">Preview 100 rows</div>
+            <div class="btn">Copy name</div>
+          </div>
+          <div class="colhead">COLUMNS<span class="line"></span>PK / FK</div>
+          <div class="col"><span>id</span><span class="badge pk">PK</span><span class="ty">int</span></div>
+          <div class="col"><span>full_name</span><span class="ty">nvarchar(120)</span></div>
+          <div class="col"><span>email</span><span class="ty">nvarchar(255)</span></div>
+          <div class="col"><span>tenant_id</span><span class="badge fk">FK</span><span class="ty">uniqueidentifier</span></div>
+          <div class="col"><span>created_at</span><span class="ty">datetime2</span></div>
+          <div class="col"><span>country</span><span class="ty">char(2)</span></div>
+          <div class="more">+ 6 more · Enter inserts dbo.Customers at the caret</div>
+        </div>
+      </div>
+      <div class="peek-foot">
+        <span><kbd>↑↓</kbd>Move</span><span><kbd>→</kbd>Expand</span><span><kbd>↵</kbd>Insert</span><span><kbd>⇧↵</kbd>Preview</span><span><kbd>Esc</kbd>Close</span>
+        <span class="right">⌖ Pin to keep open</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="caption" style="margin-top:0"><b>2 · Pinned inspector</b><span>Opt-in pin from the peek. Same surface, docked beside the editor — never in place of the tabs.</span></div>
+  <section class="board pinned">
+    <div class="titlebar">
+      <div class="appmark"><i></i>Larik SQL Studio</div>
+      <div class="captionbtns"><span>—</span><span>□</span><span>✕</span></div>
+    </div>
+    <div class="app">
+      <aside class="rail">
+        <div class="workspace"><span class="wsdot"></span>Staging<span class="chev">⌄</span></div>
+        <div class="conn"><span class="dot"></span>Connected<span class="act">Disconnect</span></div>
+        <div class="dbpill"><span style="font-size:10px">▤</span><span class="name">larik_staging</span><span class="chev">⌄</span></div>
+        <div class="rlbl">TABS<span class="spacer"></span><span style="font-size:9px">▣</span></div>
+        <div class="tab active">Query 2<small>larik_staging</small><span class="x">×</span></div>
+        <div class="tab">Customers<small>larik_staging</small><span class="x">×</span></div>
+        <div class="newtab"><span class="plus">+</span>New query</div>
+        <div class="railfoot"><div class="dots"><i></i><i class="on"></i><i></i><i></i></div><span class="gear">⚙</span></div>
+      </aside>
+
+      <aside class="inspector">
+        <div class="insp-head"><span class="ttl">SCHEMA</span><span class="spacer"></span><span class="iconbtn" style="width:22px;height:22px" title="Unpin"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5l6.5 6.5-3 .6-3.4 3.4-.6 3.5-6.5-6.5 3.5-.6L13.4 6.5z"/><path d="M8 16l-4 4"/></svg></span><span class="iconbtn" style="width:22px;height:22px" title="Refresh"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg></span></div>
+        <div class="isearch"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg><span>Filter objects</span></div>
+        <div class="ctx">larik_staging · live</div>
+        <div class="trow"><span class="ch">▾</span><span style="font-size:9.5px;letter-spacing:.08em;color:var(--muted)">dbo</span><span class="cnt">15</span></div>
+        <div class="trow indent"><span class="ch">▾</span>Tables<span class="cnt">12</span></div>
+        <div class="trow indent2 sel"><span class="ch"><span class="tico" style="width:10px;height:9px"></span></span>Customers</div>
+        <div class="tcol"><span>id</span><span class="badge pk">PK</span><span class="ty">int</span></div>
+        <div class="tcol"><span>full_name</span><span class="ty">nvarchar</span></div>
+        <div class="tcol"><span>email</span><span class="ty">nvarchar</span></div>
+        <div class="tcol"><span>tenant_id</span><span class="badge fk">FK</span><span class="ty">uniqueid</span></div>
+        <div class="trow indent2"><span class="ch"><span class="tico" style="width:10px;height:9px"></span></span>Order items</div>
+        <div class="trow indent2"><span class="ch"><span class="tico" style="width:10px;height:9px"></span></span>Orders</div>
+        <div class="trow indent2"><span class="ch"><span class="tico" style="width:10px;height:9px"></span></span>Products</div>
+        <div class="trow indent2"><span class="ch"><span class="tico" style="width:10px;height:9px"></span></span>Tenants</div>
+        <div class="trow indent"><span class="ch">▸</span>Views<span class="cnt">3</span></div>
+        <div class="insp-foot">↵ insert · ⇧↵ preview · ⌘K opens the peek</div>
+      </aside>
+
+      <main class="stage">
+        <div class="toolbar"><div class="tb ghost">Format</div><div class="run">▶</div></div>
+        <div class="editor"><span class="kw">SELECT</span> c.full_name, o.total_amount<br><span class="kw">FROM</span> [dbo].[Customers] <span class="kw">AS</span> [c]<br><span class="kw">JOIN</span> [dbo].[Orders] <span class="kw">AS</span> [o]<br>&nbsp;&nbsp; <span class="kw">ON</span> o.customer_id = c.id<br><span class="kw">WHERE</span> c.country = <span class="str">'ID'</span>;<span class="caret"></span></div>
+        <div class="resstrip"><div class="res on">Result 1 <span style="opacity:.6">24 rows</span></div></div>
+        <div class="gridmini">
+          <div class="gr h"><span>FULL NAME</span><span>TOTAL AMOUNT</span><span>STATUS</span></div>
+          <div class="gr"><span>Ada Lovelace</span><span>128.50</span><span>paid</span></div>
+          <div class="gr"><span>Grace Hopper</span><span>92.00</span><span>pending</span></div>
+          <div class="gr"><span>Alan Turing</span><span>54.75</span><span>paid</span></div>
+          <div class="gr"><span>Katherine Johnson</span><span>210.10</span><span>paid</span></div>
+          <div class="gr"><span>Linus Torvalds</span><span>18.00</span><span>refunded</span></div>
+        </div>
+      </main>
+    </div>
+  </section>
+</div>
+</body>
+</html>
