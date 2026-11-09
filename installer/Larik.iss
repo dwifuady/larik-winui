@@ -56,7 +56,9 @@ OutputDir={#OutputDir}
 OutputBaseFilename=Larik-{#AppVersion}-win-{#Arch}-setup
 SetupIconFile=..\Larik\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\Larik.exe
-UninstallDisplayName=Larik SQL Studio {#AppVersion}
+; The Tauri app is also called "Larik SQL Studio" and installs side by side,
+; so the WinUI build keeps a distinct Apps & Features name and shortcut.
+UninstallDisplayName=Larik SQL Studio (WinUI) {#AppVersion}
 
 Compression=lzma2/max
 SolidCompression=yes
@@ -76,8 +78,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Larik SQL Studio"; Filename: "{app}\Larik.exe"
-Name: "{autodesktop}\Larik SQL Studio"; Filename: "{app}\Larik.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Larik SQL Studio (WinUI)"; Filename: "{app}\Larik.exe"
+Name: "{autodesktop}\Larik SQL Studio (WinUI)"; Filename: "{app}\Larik.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Larik.exe"; Description: "{cm:LaunchProgram,Larik SQL Studio}"; Flags: nowait postinstall skipifsilent

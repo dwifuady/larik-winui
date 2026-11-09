@@ -13,8 +13,9 @@ Published for `win-x64` and `win-arm64` from
 [Releases](https://github.com/dwifuady/larik-winui/releases):
 
 - **Installer** — `Larik-<version>-win-<arch>-setup.exe`. Per-user install to
-  `%LOCALAPPDATA%\Programs\Larik SQL Studio`, no admin rights, Start menu
-  shortcut, uninstalls from **Apps & Features**.
+  `%LOCALAPPDATA%\Programs\Larik SQL Studio`, no admin rights, a
+  **Larik SQL Studio (WinUI)** Start menu entry, and it uninstalls from
+  **Apps & Features**. It installs and runs beside the Tauri app.
 - **Portable** — `Larik-<version>-win-<arch>.zip`. Unpack anywhere and run
   `Larik.exe`. Both builds keep their data in `%LOCALAPPDATA%\Larik WinUI`.
 
