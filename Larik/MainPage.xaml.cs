@@ -873,7 +873,7 @@ public sealed partial class MainPage : Page
     private void PinnedTabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
         ViewModel.SyncTabOrder();
 
-    /// <summary>The dots at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
+    /// <summary>The icons at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
     private void WorkspaceIndicator_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: SpaceViewModel space })
@@ -882,10 +882,19 @@ public sealed partial class MainPage : Page
         }
     }
 
+    /// <summary>Above six workspaces the footer is a pill; its icon opens the same list as the switcher.</summary>
+    private void WorkspacePill_Click(object sender, RoutedEventArgs e) =>
+        ShowWorkspaceFlyout((FrameworkElement)sender);
+
+    /// <summary>One step along the workspace order. The pill's chevrons never wrap.</summary>
+    private void WorkspacePrevious_Click(object sender, RoutedEventArgs e) => ViewModel.SelectRelativeSpace(-1);
+
+    private void WorkspaceNext_Click(object sender, RoutedEventArgs e) => ViewModel.SelectRelativeSpace(1);
+
     /// <summary>
     /// The workspace panel. Its one job is switching, so the current workspace's identity controls
-    /// stay at the top (colour), then its connection, then the list, then creation. It also opens
-    /// from the toolbar badge while the rail is collapsed, which is why the connection action is
+    /// stay at the top (icon and colour), then its connection, then the list, then creation. It also
+    /// opens from the toolbar badge while the rail is collapsed, which is why the connection action is
     /// repeated here: the rail is not always on screen to carry it.
     /// </summary>
     private void SpaceSwitcher_Click(object sender, RoutedEventArgs e) => ShowWorkspaceFlyout(SpaceSwitcherButton);
@@ -967,13 +976,7 @@ public sealed partial class MainPage : Page
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var dot = new Ellipse
-        {
-            Width = 8,
-            Height = 8,
-            VerticalAlignment = VerticalAlignment.Center,
-            Fill = space.AccentBrush,
-        };
+        var icon = CreateSpaceIcon(space.IconGlyph, space.Monogram, 14, space.IsActive ? primaryBrush : secondaryBrush);
 
         var name = new TextBlock
         {
@@ -995,7 +998,7 @@ public sealed partial class MainPage : Page
 
         Grid.SetColumn(name, 1);
         Grid.SetColumn(check, 2);
-        content.Children.Add(dot);
+        content.Children.Add(icon);
         content.Children.Add(name);
         content.Children.Add(check);
 
@@ -1085,6 +1088,39 @@ public sealed partial class MainPage : Page
         AutomationProperties.SetName(button, label.TrimEnd('…'));
         button.Click += async (_, _) => await action();
         return button;
+    }
+
+    /// <summary>
+    /// A workspace's icon, or its first letter until one is picked, in the colour the surface needs.
+    /// One helper so the rail footer, the workspace list and the dialog preview cannot drift apart.
+    /// </summary>
+    private static FrameworkElement CreateSpaceIcon(string glyph, string monogram, double size, Brush brush)
+    {
+        var hasIcon = glyph.Length > 0;
+        var visual = new Grid { Width = size, Height = size, VerticalAlignment = VerticalAlignment.Center };
+
+        visual.Children.Add(new FontIcon
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = size - 1,
+            Foreground = brush,
+            Glyph = glyph,
+            Visibility = hasIcon ? Visibility.Visible : Visibility.Collapsed,
+        });
+
+        visual.Children.Add(new TextBlock
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = Math.Round(size * 0.62),
+            FontWeight = FontWeights.SemiBold,
+            Foreground = brush,
+            Text = monogram,
+            Visibility = hasIcon ? Visibility.Collapsed : Visibility.Visible,
+        });
+
+        return visual;
     }
 
     /// <summary>
@@ -1358,28 +1394,228 @@ public sealed partial class MainPage : Page
         FrameworkElement content = form;
         var selectedColour = editing?.ColorHex
             ?? StudioColors.Palette[ViewModel.Spaces.Count % StudioColors.Palette.Length];
+        var selectedIcon = editing?.IconName;
+        var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
+        var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
 
-        // Name and colour are always part of the form: a workspace is identified by them, and
-        // editing one is editing the other. The default is ready to accept.
+        // Identity is one row: icon, name, colour. The icon is the only new decision, and leaving it
+        // unanswered is valid — the first letter of the name stands in, so no workspace is a blank.
         var nameBox = new TextBox
         {
             Text = creating ? $"Space {ViewModel.Spaces.Count + 1}" : editing!.Name,
             PlaceholderText = "Workspace name",
+            VerticalAlignment = VerticalAlignment.Center,
         };
         AutomationProperties.SetName(nameBox, "Workspace name");
 
-        var nameGroup = new StackPanel { Spacing = 4 };
-        nameGroup.Children.Add(new TextBlock { Text = "Name", FontSize = 11 });
-        nameGroup.Children.Add(nameBox);
+        var iconButton = new Button
+        {
+            Width = 40,
+            Height = 40,
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            CornerRadius = new CornerRadius(9),
+            Style = iconStyle,
+        };
+        AutomationProperties.SetName(iconButton, "Workspace icon");
 
-        var swatches = CreateColourSwatches(selectedColour, hex => selectedColour = hex);
+        var iconPicker = new Flyout
+        {
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft,
+            ShouldConstrainToRootBounds = true,
+        };
+
+        void RefreshIcon()
+        {
+            // A caret in the corner, so the icon reads as a control that opens something.
+            var content = new Grid();
+            content.Children.Add(CreateSpaceIcon(
+                SpaceIcons.Glyph(selectedIcon) ?? string.Empty,
+                SpaceIcons.Monogram(nameBox.Text),
+                20,
+                secondaryBrush));
+            content.Children.Add(new FontIcon
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                FontSize = 7,
+                Glyph = "\uE70D",
+                Foreground = secondaryBrush,
+                Opacity = 0.7,
+            });
+
+            iconButton.Content = content;
+            iconButton.Background = StudioColors.Tint(selectedColour);
+            iconButton.BorderBrush = StudioColors.Brush(selectedColour);
+            iconButton.BorderThickness = new Thickness(1);
+            AutomationProperties.SetName(iconButton, $"Workspace icon, {SpaceIcons.Label(selectedIcon)}");
+            AutomationProperties.SetHelpText(iconButton, "Opens the icon picker");
+            ToolTipService.SetToolTip(iconButton, $"Change icon · {SpaceIcons.Label(selectedIcon)}");
+        }
+
+        // A shipped, named set rather than the whole Fluent font: a 15 px glyph is only readable as
+        // itself if the shapes differ, and a search box over unnamed code points helps nobody.
+        void ShowIconPicker()
+        {
+            var panel = new StackPanel { Width = 276, Spacing = 8 };
+            var search = new TextBox { PlaceholderText = "Search icons", FontSize = 12 };
+            AutomationProperties.SetName(search, "Search icons");
+
+            var gridHost = new Grid();
+            var scroller = new ScrollViewer
+            {
+                Content = gridHost,
+                MaxHeight = 208,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            };
+
+            void Fill(string? query)
+            {
+                gridHost.Children.Clear();
+                gridHost.ColumnDefinitions.Clear();
+                gridHost.RowDefinitions.Clear();
+
+                const int columns = 6;
+                for (var column = 0; column < columns; column++)
+                {
+                    gridHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
+
+                var icons = SpaceIcons.Search(query);
+                for (var index = 0; index < icons.Count; index++)
+                {
+                    var icon = icons[index];
+                    var row = index / columns;
+                    if (row >= gridHost.RowDefinitions.Count)
+                    {
+                        gridHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                    }
+
+                    var selected = string.Equals(icon.Name, selectedIcon, StringComparison.OrdinalIgnoreCase);
+                    var tile = new Button
+                    {
+                        Height = 34,
+                        Margin = new Thickness(1),
+                        Padding = new Thickness(0),
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Center,
+                        VerticalContentAlignment = VerticalAlignment.Center,
+                        CornerRadius = new CornerRadius(6),
+                        Background = selected ? StudioColors.Tint(selectedColour) : null,
+                        BorderBrush = selected ? StudioColors.Brush(selectedColour) : null,
+                        BorderThickness = selected ? new Thickness(1) : new Thickness(0),
+                        Content = new FontIcon { FontSize = 15, Glyph = icon.Glyph, Foreground = secondaryBrush },
+                        Style = iconStyle,
+                    };
+
+                    AutomationProperties.SetName(tile, icon.Label);
+                    ToolTipService.SetToolTip(tile, icon.Label);
+                    tile.Click += (_, _) =>
+                    {
+                        selectedIcon = icon.Name;
+                        RefreshIcon();
+                        iconPicker.Hide();
+                    };
+
+                    Grid.SetRow(tile, row);
+                    Grid.SetColumn(tile, index % columns);
+                    gridHost.Children.Add(tile);
+                }
+
+                if (icons.Count == 0)
+                {
+                    gridHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                    var empty = new TextBlock
+                    {
+                        Margin = new Thickness(8, 12, 8, 12),
+                        FontSize = 12,
+                        Foreground = mutedBrush,
+                        Text = "No icons match.",
+                    };
+                    Grid.SetColumnSpan(empty, columns);
+                    gridHost.Children.Add(empty);
+                }
+            }
+
+            var letter = new Button
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Background = selectedIcon is null ? StudioColors.Tint(selectedColour) : null,
+                Style = iconStyle,
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            VerticalAlignment = VerticalAlignment.Center,
+                            FontSize = 12,
+                            FontWeight = FontWeights.SemiBold,
+                            Foreground = StudioColors.Brush(selectedColour),
+                            Text = SpaceIcons.Monogram(nameBox.Text),
+                        },
+                        new TextBlock
+                        {
+                            VerticalAlignment = VerticalAlignment.Center,
+                            FontSize = 12,
+                            Text = "Use the first letter",
+                        },
+                    },
+                },
+            };
+            AutomationProperties.SetName(letter, "Use the first letter");
+            letter.Click += (_, _) =>
+            {
+                selectedIcon = null;
+                RefreshIcon();
+                iconPicker.Hide();
+            };
+
+            search.TextChanged += (_, _) => Fill(search.Text);
+            Fill(null);
+
+            panel.Children.Add(search);
+            panel.Children.Add(scroller);
+            panel.Children.Add(letter);
+
+            iconPicker.Content = panel;
+
+            // Attach before showing: Loaded fires while ShowAt builds the popup.
+            search.Loaded += (_, _) => search.Focus(FocusState.Programmatic);
+            iconPicker.ShowAt(iconButton);
+        }
+
+        iconButton.Click += (_, _) => ShowIconPicker();
+
+        var swatches = CreateColourSwatches(selectedColour, hex =>
+        {
+            selectedColour = hex;
+            RefreshIcon();
+        });
 
         var colourGroup = new StackPanel { Spacing = 4 };
         colourGroup.Children.Add(new TextBlock { Text = "Colour", FontSize = 11 });
         colourGroup.Children.Add(swatches);
 
+        var identity = new Grid { ColumnSpacing = 10 };
+        identity.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        identity.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        identity.Children.Add(iconButton);
+        Grid.SetColumn(nameBox, 1);
+        identity.Children.Add(nameBox);
+
+        nameBox.TextChanged += (_, _) => RefreshIcon();
+        RefreshIcon();
+
         var header = new StackPanel { Spacing = 12 };
-        header.Children.Add(nameGroup);
+        header.Children.Add(identity);
         header.Children.Add(colourGroup);
 
         var root = new Grid { MinWidth = 360, RowSpacing = 16 };
@@ -1467,6 +1703,7 @@ public sealed partial class MainPage : Page
                 var created = ViewModel.CreateSpace(
                     nameBox.Text,
                     selectedColour,
+                    selectedIcon,
                     provider.Id,
                     BuildProfile());
 
@@ -1482,6 +1719,7 @@ public sealed partial class MainPage : Page
                     editing!,
                     nameBox.Text,
                     selectedColour,
+                    selectedIcon,
                     provider.Id,
                     BuildProfile());
 

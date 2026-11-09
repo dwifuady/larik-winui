@@ -58,6 +58,9 @@ public sealed class SpaceState
 
     public string Color { get; set; } = "#C4B5FD";
 
+    /// <summary>A <see cref="SpaceIcons"/> name; null means the workspace shows its first letter.</summary>
+    public string? Icon { get; set; }
+
     public string ProviderId { get; set; } = "mssql";
 
     public Dictionary<string, string> Profile { get; set; } = [];
@@ -128,7 +131,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed class StudioStore
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -221,6 +224,7 @@ public sealed class StudioStore
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 color TEXT,
+                icon TEXT,
                 provider_id TEXT NOT NULL DEFAULT 'mssql',
                 active_database TEXT,
                 last_active_tab_id TEXT,
@@ -274,10 +278,11 @@ public sealed class StudioStore
             CREATE INDEX IF NOT EXISTS idx_archived_tabs_archived_at ON archived_tabs(archived_at DESC);
             """);
 
-        // Version 2 adds pin state, the inactivity clock and the archive table. Existing
-        // version 1 databases keep their rows; the new tab columns are added in place.
+        // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
+        // workspace icon. Existing rows keep their data; the new columns are added in place.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
+        EnsureColumn(connection, transaction, "spaces", "icon", "TEXT");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();
@@ -344,7 +349,7 @@ public sealed class StudioStore
         {
             command.CommandText =
                 """
-                SELECT id, name, COALESCE(color, ''), provider_id, active_database, last_active_tab_id
+                SELECT id, name, COALESCE(color, ''), provider_id, active_database, last_active_tab_id, COALESCE(icon, '')
                 FROM spaces
                 ORDER BY sort_order, name;
                 """;
@@ -360,6 +365,7 @@ public sealed class StudioStore
                     ProviderId = reader.GetString(3),
                     ActiveDatabase = reader.IsDBNull(4) ? null : reader.GetString(4),
                     ActiveTabId = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    Icon = reader.GetString(6) is { Length: > 0 } icon ? icon : null,
                 });
             }
         }
@@ -480,11 +486,12 @@ public sealed class StudioStore
                 connection,
                 transaction,
                 """
-                INSERT INTO spaces (id, name, color, provider_id, active_database, last_active_tab_id, sort_order)
-                VALUES ($id, $name, $color, $provider, $database, $tab, $sort)
+                INSERT INTO spaces (id, name, color, icon, provider_id, active_database, last_active_tab_id, sort_order)
+                VALUES ($id, $name, $color, $icon, $provider, $database, $tab, $sort)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     color = excluded.color,
+                    icon = excluded.icon,
                     provider_id = excluded.provider_id,
                     active_database = excluded.active_database,
                     last_active_tab_id = excluded.last_active_tab_id,
@@ -494,6 +501,7 @@ public sealed class StudioStore
                 ("$id", space.Id),
                 ("$name", space.Name),
                 ("$color", space.Color),
+                ("$icon", space.Icon),
                 ("$provider", space.ProviderId),
                 ("$database", space.ActiveDatabase),
                 ("$tab", space.ActiveTabId),

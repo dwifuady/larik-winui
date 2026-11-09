@@ -12,11 +12,12 @@ namespace Larik.ViewModels;
 /// </summary>
 public partial class SpaceViewModel : ObservableObject
 {
-    public SpaceViewModel(string id, string name, string colorHex, ConnectionViewModel connection)
+    public SpaceViewModel(string id, string name, string colorHex, ConnectionViewModel connection, string? iconName = null)
     {
         Id = id;
         ColorHex = colorHex;
         Name = name;
+        IconName = iconName;
         Connection = connection;
 
         // Connection state belongs to the space, so its changes surface as space changes.
@@ -42,6 +43,7 @@ public partial class SpaceViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(AccentBrush))]
     [NotifyPropertyChangedFor(nameof(ActiveTintBrush))]
+    [NotifyPropertyChangedFor(nameof(IndicatorChipBrush))]
     public partial string ColorHex { get; set; }
 
     public SolidColorBrush AccentBrush => StudioColors.Brush(ColorHex);
@@ -53,13 +55,23 @@ public partial class SpaceViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TooltipText))]
     [NotifyPropertyChangedFor(nameof(IndicatorName))]
+    [NotifyPropertyChangedFor(nameof(Monogram))]
     public partial string Name { get; set; }
 
+    /// <summary>
+    /// The chosen icon's catalog name, or null for the first-letter monogram. Icon, name and colour are
+    /// the three parts of a workspace's identity, so they travel together through every surface.
+    /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsActiveDotVisible))]
-    [NotifyPropertyChangedFor(nameof(IndicatorDotSize))]
-    [NotifyPropertyChangedFor(nameof(IndicatorDotOpacity))]
-    [NotifyPropertyChangedFor(nameof(IndicatorRingVisibility))]
+    [NotifyPropertyChangedFor(nameof(IconGlyph))]
+    [NotifyPropertyChangedFor(nameof(HasIcon))]
+    [NotifyPropertyChangedFor(nameof(IconGlyphVisibility))]
+    [NotifyPropertyChangedFor(nameof(MonogramVisibility))]
+    public partial string? IconName { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IndicatorOpacity))]
+    [NotifyPropertyChangedFor(nameof(IndicatorChipBrush))]
     public partial bool IsActive { get; set; }
 
     [ObservableProperty]
@@ -127,17 +139,29 @@ public partial class SpaceViewModel : ObservableObject
             : Databases.FirstOrDefault(database =>
                 string.Equals(database.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    public double IsActiveDotVisible => IsActive ? 1 : 0;
+    // ---- workspace identity: an icon (or its first letter), tinted by the workspace colour
 
-    // ---- workspace indicator (bottom of the rail): one dot per workspace, the active one ringed
-
+    /// <summary>The footer/list announce this, so the icon is never the only label.</summary>
     public string IndicatorName => $"Workspace {Name}";
 
-    public double IndicatorDotSize => IsActive ? 9 : 7;
+    /// <summary>The Fluent glyph, or empty when the workspace has no icon and shows its monogram.</summary>
+    public string IconGlyph => SpaceIcons.Glyph(IconName) ?? string.Empty;
 
-    public double IndicatorDotOpacity => IsActive ? 1 : 0.45;
+    public bool HasIcon => IconGlyph.Length > 0;
 
-    public Visibility IndicatorRingVisibility => IsActive ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility IconGlyphVisibility => HasIcon ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility MonogramVisibility => HasIcon ? Visibility.Collapsed : Visibility.Visible;
+
+    public string Monogram => SpaceIcons.Monogram(Name);
+
+    /// <summary>Idle workspaces stay quiet; the active one is full strength on a tinted chip.</summary>
+    public double IndicatorOpacity => IsActive ? 1 : 0.45;
+
+    /// <summary>The active workspace's chip, so the marker never depends on hue alone.</summary>
+    public SolidColorBrush IndicatorChipBrush => IsActive ? ActiveTintBrush : TransparentBrush;
+
+    private static readonly SolidColorBrush TransparentBrush = new(Microsoft.UI.Colors.Transparent);
 
     /// <summary>Replaces the database list with what the server reported, keeping the selection by name.</summary>
     public void UpdateDatabases(IEnumerable<string> names)

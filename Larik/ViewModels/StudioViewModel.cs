@@ -50,7 +50,11 @@ public partial class StudioViewModel : ObservableObject
 
         RefreshArchiveView();
 
-        Spaces.CollectionChanged += (_, _) => ScheduleSave();
+        Spaces.CollectionChanged += (_, _) =>
+        {
+            ScheduleSave();
+            NotifyWorkspaceList();
+        };
         _snippets.Changed += (_, _) => OnPropertyChanged(nameof(Snippets));
         PropertyChanged += (_, args) =>
         {
@@ -184,6 +188,36 @@ public partial class StudioViewModel : ObservableObject
 
     [ObservableProperty]
     public partial SpaceViewModel? ActiveSpace { get; set; }
+
+    /// <summary>
+    /// Six icons fit in the rail footer at a legal hit-target size (26 px inside 172 px of usable
+    /// width). Beyond that the footer becomes a position pill: ten unlabelled marks identify nothing,
+    /// so the footer stops pretending to be a map and opens the labelled list instead.
+    /// </summary>
+    private const int FooterIconLimit = 6;
+
+    public IReadOnlyList<SpaceViewModel> FooterSpaces => [.. Spaces.Take(FooterIconLimit)];
+
+    public bool ShowsWorkspacePill => Spaces.Count > FooterIconLimit;
+
+    public Visibility FooterIconsVisibility => ShowsWorkspacePill ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility FooterPillVisibility => ShowsWorkspacePill ? Visibility.Visible : Visibility.Collapsed;
+
+    public string WorkspacePositionText => ActiveSpace is null
+        ? string.Empty
+        : $"{Spaces.IndexOf(ActiveSpace) + 1} / {Spaces.Count}";
+
+    public bool CanGoToPreviousSpace => ActiveSpace is not null && Spaces.IndexOf(ActiveSpace) > 0;
+
+    public bool CanGoToNextSpace
+    {
+        get
+        {
+            var index = ActiveSpace is null ? -1 : Spaces.IndexOf(ActiveSpace);
+            return index >= 0 && index < Spaces.Count - 1;
+        }
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowTitle))]
@@ -627,7 +661,7 @@ public partial class StudioViewModel : ObservableObject
     /// Creates a workspace from the create dialog. Nothing is created until the user confirms;
     /// the caller connects the returned space afterwards.
     /// </summary>
-    public SpaceViewModel CreateSpace(string name, string colorHex, string providerId, ConnectionProfile profile)
+    public SpaceViewModel CreateSpace(string name, string colorHex, string? iconName, string providerId, ConnectionProfile profile)
     {
         var displayName = string.IsNullOrWhiteSpace(name) ? $"Space {Spaces.Count + 1}" : name.Trim();
         var color = string.IsNullOrWhiteSpace(colorHex)
@@ -638,7 +672,8 @@ public partial class StudioViewModel : ObservableObject
             Guid.NewGuid().ToString("n"),
             displayName,
             color,
-            new ConnectionViewModel(providerId, profile));
+            new ConnectionViewModel(providerId, profile),
+            string.IsNullOrWhiteSpace(iconName) ? null : iconName);
 
         space.Tabs.Add(new TabViewModel(Guid.NewGuid().ToString("n"), "Query 1", string.Empty, space, string.Empty));
 
@@ -660,6 +695,7 @@ public partial class StudioViewModel : ObservableObject
         SpaceViewModel space,
         string name,
         string colorHex,
+        string? iconName,
         string providerId,
         ConnectionProfile profile)
     {
@@ -668,6 +704,8 @@ public partial class StudioViewModel : ObservableObject
         {
             space.ColorHex = colorHex;
         }
+
+        space.IconName = string.IsNullOrWhiteSpace(iconName) ? null : iconName;
 
         var connectionChanged = !ConnectionMatches(space.Connection, providerId, profile);
         var isActive = ReferenceEquals(space, ActiveSpace);
@@ -1172,6 +1210,7 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(Snippets));
         OnPropertyChanged(nameof(ActiveLanguage));
         OnPropertyChanged(nameof(ActiveSpace));
+        NotifyWorkspaceFooter();
     }
 
     /// <summary>
@@ -1194,6 +1233,24 @@ public partial class StudioViewModel : ObservableObject
 
         SelectSpace(Spaces[target]);
         return true;
+    }
+
+    /// <summary>The footer is derived from the space list; the list itself only changes structurally.</summary>
+    private void NotifyWorkspaceList()
+    {
+        OnPropertyChanged(nameof(FooterSpaces));
+        OnPropertyChanged(nameof(ShowsWorkspacePill));
+        OnPropertyChanged(nameof(FooterIconsVisibility));
+        OnPropertyChanged(nameof(FooterPillVisibility));
+        NotifyWorkspaceFooter();
+    }
+
+    /// <summary>Position and chevrons follow the active workspace, without rebuilding the icon strip.</summary>
+    private void NotifyWorkspaceFooter()
+    {
+        OnPropertyChanged(nameof(WorkspacePositionText));
+        OnPropertyChanged(nameof(CanGoToPreviousSpace));
+        OnPropertyChanged(nameof(CanGoToNextSpace));
     }
 
     /// <summary>Re-tints the active workspace; the change schedules a save through TrackSpace.</summary>
@@ -1518,6 +1575,7 @@ public partial class StudioViewModel : ObservableObject
             Id = space.Id,
             Name = space.Name,
             Color = space.ColorHex,
+            Icon = space.IconName,
             ProviderId = space.Connection.ProviderId,
             Profile = VisibleProfile(space.Connection),
             ActiveDatabase = space.PreferredDatabase,
@@ -1623,7 +1681,8 @@ public partial class StudioViewModel : ObservableObject
                 string.IsNullOrWhiteSpace(spaceState.Id) ? Guid.NewGuid().ToString("n") : spaceState.Id,
                 string.IsNullOrWhiteSpace(spaceState.Name) ? $"Space {Spaces.Count + 1}" : spaceState.Name,
                 color,
-                new ConnectionViewModel(providerId, profile))
+                new ConnectionViewModel(providerId, profile),
+                string.IsNullOrWhiteSpace(spaceState.Icon) ? null : spaceState.Icon)
             {
                 PreferredDatabase = spaceState.ActiveDatabase,
             };
@@ -1684,7 +1743,7 @@ public partial class StudioViewModel : ObservableObject
     {
         space.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase) or nameof(SpaceViewModel.ColorHex))
+            if (args.PropertyName is nameof(SpaceViewModel.Name) or nameof(SpaceViewModel.ActiveDatabase) or nameof(SpaceViewModel.ColorHex) or nameof(SpaceViewModel.IconName))
             {
                 ScheduleSave();
             }
@@ -1948,7 +2007,8 @@ public partial class StudioViewModel : ObservableObject
             "space-staging",
             "Staging",
             StudioColors.Palette[2],
-            new ConnectionViewModel("demo", DemoProfile("larik_staging,larik_sandbox")));
+            new ConnectionViewModel("demo", DemoProfile("larik_staging,larik_sandbox")),
+            "data");
         staging.Tabs.Add(new TabViewModel("t1", "Customer totals", "larik_staging", staging,
             "SELECT c.full_name, COUNT(*) AS orders_count\nFROM customers c\nINNER JOIN orders o ON o.customer_id = c.id\nGROUP BY c.full_name\nORDER BY orders_count DESC;"));
 
@@ -1956,7 +2016,8 @@ public partial class StudioViewModel : ObservableObject
             "space-local-sql",
             "Local SQL Server",
             StudioColors.Palette[0],
-            new ConnectionViewModel("mssql", SqlServerProfile()));
+            new ConnectionViewModel("mssql", SqlServerProfile()),
+            "terminal");
         localSql.Tabs.Add(new TabViewModel("t2", "Databases", "master", localSql,
             "SELECT name, state_desc\nFROM sys.databases\nORDER BY name;"));
 
@@ -1964,7 +2025,8 @@ public partial class StudioViewModel : ObservableObject
             "space-playground",
             "Local playground",
             StudioColors.Palette[3],
-            new ConnectionViewModel("demo", DemoProfile("playground")));
+            new ConnectionViewModel("demo", DemoProfile("playground")),
+            "beaker");
         playground.Tabs.Add(new TabViewModel("t3", "Notes", "playground", playground,
             "-- Local playground\n-- Connect the workspace, then run this\nSELECT * FROM products;"));
 

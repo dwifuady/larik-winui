@@ -237,18 +237,26 @@ completion plus views and column types, `sys.procedures`/`sys.parameters` for ro
   tab is adopted the same way: after the batch the provider reports the session's database and the
   tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
   Other tabs keep their own database
-  and schema. An Arc-style row of workspace dots at the bottom of the
-  rail shows every workspace with the current one ringed; clicking a dot switches workspace.
-  **New workspace** opens one dialog for the name, colour and connection (rare provider fields live
-  under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the workspace
-  list untouched. Each workspace owns a palette colour (dot, tab strip/tint and Run button).
-  **The pencil on a workspace row opens Workspace settings**: name, colour and the connection in one
-  form (a workspace *is* its connection), editable for any workspace without leaving the current
-  one. Saving rebuilds the connection only when it actually changed — renaming never drops a live
-  session — and a workspace you are not in stays disconnected instead of changing what is on screen.
+  and schema. An Arc-style row of **workspace icons** at the bottom of the
+  rail shows up to six workspaces, the current one tinted in its colour; clicking an icon switches
+  workspace. Past six the row becomes a position pill (`‹ icon › 4 / 10`) that steps to the
+  neighbour or opens the labelled workspace list, because ten unlabelled marks identify nothing.
+  Each workspace wears a curated Fluent icon and falls back to the first letter of its name, so no
+  workspace is ever a blank; the icon is picked beside the name in the workspace dialog. The active
+  workspace gets a tinted chip instead of the old ring — a ring only reads as a dot — and colour is
+  now a state signal (active workspace, tab tint), not the identity.
+  **New workspace** opens one dialog for the icon, name, colour and connection (rare provider fields
+  live under **Advanced**); nothing is created until **Create & connect**, so Cancel leaves the
+  workspace list untouched. Each workspace owns a palette colour (icon chip, tab strip/tint and Run
+  button).
+  **The pencil on a workspace row opens Workspace settings**: icon, name, colour and the connection
+  in one form (a workspace *is* its connection), editable for any workspace without leaving the
+  current one. Saving rebuilds the connection only when it actually changed — renaming never drops a
+  live session — and a workspace you are not in stays disconnected instead of changing what is on
+  screen.
   The database flyout is only about databases. Switching — from the top dropdown, the
-  dots, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
-  the side the new workspace lives on (left/right matches the dot order), and is skipped when
+  icons, or a two-finger horizontal trackpad swipe over the rail — slides the query content in from
+  the side the new workspace lives on (left/right matches the icon order), and is skipped when
   Windows animations are turned off. A swipe moves one workspace per gesture and does not wrap at
   the ends.
 - **Schema browser**: `Ctrl+K` (or the browse button beside the database row) opens a **peek**: one
