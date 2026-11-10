@@ -158,6 +158,59 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
     public void FocusEditor() => Editor.Focus(FocusState.Programmatic);
 
+    /// <summary>
+    /// Replaces the document as its own undo step. Formatting uses this rather than the
+    /// <see cref="Text"/> setter, which is a tab-switch operation that must not enter history.
+    /// </summary>
+    public void ReplaceAll(string text)
+    {
+        if (string.Equals(GetText(), text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var caret = CurrentCaretOffset();
+
+        // Formatting is one user action: push the pre-format text even if the last keystroke is
+        // still inside the typing-coalesce window, so a single Ctrl+Z reverts it.
+        _undo.Add(new UndoEntry(_lastKnownText, caret));
+        if (_undo.Count > MaxUndoEntries)
+        {
+            _undo.RemoveAt(0);
+        }
+
+        _redo.Clear();
+        _editAnchor = -1;
+
+        _suppressEvents = true;
+        try
+        {
+            Editor.Document.SetText(TextSetOptions.None, text);
+            var length = GetText().Length;
+            var restored = Math.Clamp(caret, 0, length);
+            Editor.Document.Selection.SetRange(restored, restored);
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+
+        // Typing after a format starts a fresh history entry rather than coalescing into it.
+        _lastKnownText = GetText();
+        _lastEditAt = DateTime.MinValue;
+
+        HideCompletions();
+        ApplyHighlighting();
+        RaiseTextChanged();
+        RaiseCaretChanged();
+        FocusEditor();
+
+        if (FindBar.Visibility == Visibility.Visible)
+        {
+            RefreshAfterEdit();
+        }
+    }
+
     // ---------------------------------------------------------------- text plumbing
 
     private string GetText()

@@ -752,6 +752,24 @@ try {
         Start-Sleep -Milliseconds 200
     }
 
+    Test-UI 'Format preserves string literals and is undoable' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select * from customers where country = 'ID';" -Literal
+        Start-Sleep -Milliseconds 400
+        Click-Element 'Format query'
+        Start-Sleep -Milliseconds 500
+        $formatted = Get-EditorText
+        Assert-True ($formatted -match 'SELECT') "keywords were not uppercased: '$formatted'"
+        Assert-True ($formatted -match 'FROM') "FROM is missing after format: '$formatted'"
+        Assert-True ($formatted.Contains("'ID'")) "the string literal was lost: '$formatted'"
+
+        # Formatting is one undo step; Ctrl+Z must bring the original text back.
+        Send-Keys 'ctrl+z'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -eq "select * from customers where country = 'ID';") "Ctrl+Z did not revert the format: '$((Get-EditorText))'"
+    }
+
     Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+r'

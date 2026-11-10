@@ -87,6 +87,12 @@ public interface IEditorSurface
     /// </summary>
     void InsertText(string text);
 
+    /// <summary>
+    /// Replaces the whole document as one undoable edit and raises <see cref="TextChanged"/>.
+    /// Formatting goes through this instead of <see cref="Text"/> so Ctrl+Z reverts it.
+    /// </summary>
+    void ReplaceAll(string text);
+
     /// <summary>Supplies snippets/keywords/schema. The shell swaps this when the space or schema changes.</summary>
     IEditorCompletionSource? CompletionSource { get; set; }
 
