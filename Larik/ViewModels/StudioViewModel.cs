@@ -392,6 +392,12 @@ public partial class StudioViewModel : ObservableObject
 
         if (ActiveSpace.Connection.Provider is null)
         {
+            if (!AddonPolicy.AddonsEnabled)
+            {
+                StatusText = "This driver isn't included in the Store edition. The GitHub build supports more databases.";
+                return;
+            }
+
             DriverInstallRequested?.Invoke(
                 this,
                 new DriverInstallRequest(ActiveSpace.Connection.ProviderId, ActiveSpace));

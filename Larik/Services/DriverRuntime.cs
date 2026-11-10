@@ -27,6 +27,19 @@ public static class DriverRuntime
 
         _initialized = true;
 
+        if (!AddonPolicy.AddonsEnabled)
+        {
+            // The Store build is built-ins only: no Plugins scan, no downloaded assemblies.
+            DatabaseProviderCatalog.Initialize(
+                [
+                    new ProviderSource("built-in: Demo", typeof(DemoProvider).Assembly),
+                    new ProviderSource("built-in: SQL Server", typeof(SqlServerProvider).Assembly),
+                    new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
+                ]);
+
+            return;
+        }
+
         var scan = AddonLocator.Scan(LarikPaths.PluginsDirectory);
         Loaded.AddRange(scan.Sources);
         Contexts.AddRange(scan.Contexts);
@@ -49,6 +62,11 @@ public static class DriverRuntime
     /// </summary>
     public static IReadOnlyList<IDatabaseProvider> LoadInstalled(string id)
     {
+        if (!AddonPolicy.AddonsEnabled)
+        {
+            return [];
+        }
+
         var directory = Path.Combine(LarikPaths.PluginsDirectory, id);
         if (!Directory.Exists(directory))
         {

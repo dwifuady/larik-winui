@@ -41,6 +41,15 @@
   </ItemGroup>
 
   <!--
+    The Store workflow writes obj\store\Package.appxmanifest from Partner Center's identity before
+    packaging. Use it instead of the dev manifest so the identity is never guessed.
+  -->
+  <ItemGroup Condition="'$(Configuration)' == 'Store'">
+    <AppxManifest Remove="Package.appxmanifest" />
+    <AppxManifest Include="obj\store\Package.appxmanifest" />
+  </ItemGroup>
+
+  <!--
     Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
     Tools extension to be activated for this project even if the Windows App SDK Nuget
     package has not yet been restored.
@@ -95,5 +104,18 @@
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <PublishReadyToRun>false</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <!--
+    Microsoft Store configuration: the Store package ships only the built-in providers. It never
+    scans Plugins, never downloads a driver, and hides the Drivers page. The GitHub build keeps
+    the add-on surface. Keep this flag out of runtime logic: provider differences still come from
+    the contracts.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Store'">
+    <DefineConstants>$(DefineConstants);LARIK_STORE</DefineConstants>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 </Project>

@@ -1816,6 +1816,12 @@ public sealed partial class MainPage : Page
             Padding = new Thickness(0),
         };
         AutomationProperties.SetName(installDriverLink, "Install another database driver");
+        if (!AddonPolicy.AddonsEnabled)
+        {
+            // The Store edition ships its drivers in the package; there is no add-on store.
+            installDriverLink.Visibility = Visibility.Collapsed;
+        }
+
         providerGroup.Children.Add(installDriverLink);
 
         var installEntries = new List<AddonIndexEntry>();

@@ -51,6 +51,12 @@ public sealed partial class SettingsPage : Page
         NavigationCacheMode = NavigationCacheMode.Required;
         SnippetList.ItemsSource = _visible;
         Loaded += SettingsPage_Loaded;
+
+        if (!AddonPolicy.AddonsEnabled)
+        {
+            // The Store edition has no add-on surface: no index, no downloaded assemblies.
+            AddonsNavItem.Visibility = Visibility.Collapsed;
+        }
     }
 
     // ---------------------------------------------------------------- page lifecycle
@@ -83,7 +89,8 @@ public sealed partial class SettingsPage : Page
             BuildDialectChips();
         }
 
-        if (string.Equals(InitialSection, "drivers", StringComparison.Ordinal))
+        if (AddonPolicy.AddonsEnabled &&
+            string.Equals(InitialSection, "drivers", StringComparison.Ordinal))
         {
             InitialSection = null;
             SettingsNav.SelectedItem = AddonsNavItem;
@@ -126,7 +133,8 @@ public sealed partial class SettingsPage : Page
         var tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag as string;
         var about = string.Equals(tag, "about", StringComparison.Ordinal);
         var appearance = string.Equals(tag, "appearance", StringComparison.Ordinal);
-        var drivers = string.Equals(tag, "drivers", StringComparison.Ordinal);
+        var drivers = AddonPolicy.AddonsEnabled &&
+            string.Equals(tag, "drivers", StringComparison.Ordinal);
 
         AppearanceSection.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
         SnippetsSection.Visibility = about || appearance || drivers ? Visibility.Collapsed : Visibility.Visible;

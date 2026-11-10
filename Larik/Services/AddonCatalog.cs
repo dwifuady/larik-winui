@@ -14,12 +14,12 @@ public static class AddonCatalog
     private static readonly HttpClient Http = CreateHttpClient();
 
     /// <summary>
-    /// The open channel for portable, installer and winget builds. A Store build should point at
-    /// <c>official.json</c>; the channel switch arrives with the Store packaging work.
+    /// The open channel for portable, installer and winget builds; the official channel for a
+    /// Store build. The Store build does not offer add-ons, so this is mostly future-proofing.
     /// </summary>
-    public static string IndexLocation =>
-        Environment.GetEnvironmentVariable("LARIK_ADDON_INDEX")
-        ?? "https://raw.githubusercontent.com/dwifuady/larik-addons/main/index.json";
+    public static string IndexLocation => AddonPolicy.IndexLocation;
+
+    public static bool AddonsEnabled => AddonPolicy.AddonsEnabled;
 
     public static string AppVersion { get; } = ReadAppVersion();
 

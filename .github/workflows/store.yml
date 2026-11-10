@@ -1,0 +1,134 @@
+name: Store package
+
+# Builds the unsigned MSIX that is uploaded to Partner Center. The Microsoft Store signs it.
+# Everything the Store edition needs is built in: SQL Server and PostgreSQL. Add-ons are not
+# scanned, downloaded or offered in this configuration.
+#
+# One-time setup in GitHub -> Settings -> Secrets and variables -> Actions -> Variables:
+#   STORE_IDENTITY_NAME          (Identity Name from Partner Center)
+#   STORE_PUBLISHER              (Publisher DN from Partner Center, e.g. CN=...)
+#   STORE_PUBLISHER_DISPLAY_NAME (Publisher display name)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version, three or four parts (for example 1.0.0 or 1.0.0.0)
+        required: true
+        default: '1.0.0.0'
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve identity and versions
+        id: identity
+        shell: pwsh
+        run: |
+          $identity = '${{ vars.STORE_IDENTITY_NAME }}'
+          $publisher = '${{ vars.STORE_PUBLISHER }}'
+          $display = '${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}'
+          $inputVersion = '${{ inputs.version }}'
+
+          if ([string]::IsNullOrWhiteSpace($identity)) {
+              throw 'STORE_IDENTITY_NAME is not set. Copy the Identity Name from Partner Center.'
+          }
+          if ([string]::IsNullOrWhiteSpace($publisher)) {
+              throw 'STORE_PUBLISHER is not set. Copy the Publisher DN from Partner Center.'
+          }
+          if ([string]::IsNullOrWhiteSpace($display)) {
+              throw 'STORE_PUBLISHER_DISPLAY_NAME is not set.'
+          }
+
+          if ($publisher -notmatch '=') {
+              $publisher = "CN=$publisher"
+          }
+
+          $parts = $inputVersion.Split('.')
+          if ($parts.Count -eq 3) {
+              $packageVersion = "$inputVersion.0"
+          }
+          elseif ($parts.Count -eq 4) {
+              $packageVersion = $inputVersion
+          }
+          else {
+              throw "Version '$inputVersion' must have three or four numeric parts."
+          }
+
+          $appVersion = ($parts | Select-Object -First 3) -join '.'
+
+          "identity=$identity" >> $env:GITHUB_OUTPUT
+          "publisher=$publisher" >> $env:GITHUB_OUTPUT
+          "display=$display" >> $env:GITHUB_OUTPUT
+          "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
+          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Identity:  $identity"
+          Write-Host "Publisher: $publisher"
+          Write-Host "Package:   $packageVersion"
+          Write-Host "App:       $appVersion"
+
+      - name: Prepare the Store manifest
+        shell: pwsh
+        run: |
+          ./scripts/prepare-store-manifest.ps1 `
+              -IdentityName "${{ steps.identity.outputs.identity }}" `
+              -Publisher "${{ steps.identity.outputs.publisher }}" `
+              -PublisherDisplayName "${{ steps.identity.outputs.display }}" `
+              -Version "${{ steps.identity.outputs.package_version }}"
+
+      - name: Build the Store MSIX (x64)
+        shell: pwsh
+        run: |
+          dotnet publish Larik/Larik.csproj `
+              -c Store `
+              -r win-x64 `
+              -p:Platform=x64 `
+              -p:Version="${{ steps.identity.outputs.app_version }}" `
+              -p:GenerateAppxPackageOnBuild=true `
+              -p:AppxPackageSigningEnabled=false `
+              -p:WindowsPackageType=MSIX `
+              -p:AppxBundle=Never `
+              -p:SelfContained=true `
+              -p:WindowsAppSDKSelfContained=true
+
+      - name: Verify identity, publisher and version
+        shell: pwsh
+        run: |
+          $msix = @(Get-ChildItem 'Larik/AppPackages' -Recurse -Filter '*.msix')
+          if ($msix.Count -eq 0) {
+              throw 'No MSIX was produced.'
+          }
+
+          foreach ($package in $msix) {
+              ./scripts/verify-store-package.ps1 `
+                  -Package $package.FullName `
+                  -IdentityName "${{ steps.identity.outputs.identity }}" `
+                  -Publisher "${{ steps.identity.outputs.publisher }}" `
+                  -Version "${{ steps.identity.outputs.package_version }}"
+          }
+
+          $lines = $msix | ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+          }
+          ($lines -join "`n") + "`n" | Set-Content 'Larik/AppPackages/SHA256SUMS.txt' -Encoding ascii -NoNewline
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: larik-store-msix
+          path: |
+            Larik/AppPackages/**/*.msix
+            Larik/AppPackages/SHA256SUMS.txt
