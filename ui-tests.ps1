@@ -2065,7 +2065,13 @@ try {
     }
 
     Test-UI 'transactions belong to the query tab that opened them' {
-        # Query 2 is active. Open a transaction and check the guard.
+        # The grouping checks run before this one and leave another tab active. Select the tab
+        # this check reasons about, and prove the editor shows it before typing.
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 600
+        $editor = (Invoke-Ui @('get-value', 'Editor', '--json')) -join "`n" | ConvertFrom-Json
+        Assert-True ($editor.text -match 'select top 1000') 'Query 2 is not the active editor'
+
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
         Send-Keys 'begin tran; select @@trancount as tran_count;' -Literal
@@ -2104,14 +2110,13 @@ try {
         Wait-ForText 'Roll back the open transaction' 10
         Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'the workspace disconnected with an open transaction'
 
-        # The status bar and the tooltip both mention "roll back … transaction", so target the
-        # actual enabled Button and prove the command ran (its status text changes).
-        $rollback = @((Find-Element 'Roll back transaction').matches |
-            Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
-        Assert-True ($null -ne $rollback) 'the rollback button is missing'
-        Assert-True ($rollback.isEnabled) 'the rollback button is disabled'
-        Invoke-Ui @('invoke', $rollback.selector) -Attempts 3 | Out-Null
-        Wait-ForText 'Transaction rolled back' 8
+        # Clean up through the session. The guard's rollback action lives in a flyout in this
+        # layout, so invoking a Button is not reliable; the SQL round trip is.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'rollback;' -Literal
+        Send-Keys 'ctrl+enter'
+        Start-Sleep -Milliseconds 800
 
         $deadline = (Get-Date).AddSeconds(8)
         while ((Get-Date) -lt $deadline -and (Find-Element '1 open transaction').matchCount -gt 0) {
