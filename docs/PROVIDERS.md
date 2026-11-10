@@ -377,24 +377,22 @@ also uses the filtered lookup.
 
 ## 7. Plugin discovery today
 
-`DatabaseProviderCatalog.Initialize` scans:
-
-- every assembly passed by the app's composition root (`Larik/App.xaml.cs`), currently Demo and SQL
-  Server;
-- `<app dir>\Plugins`;
-- `%LOCALAPPDATA%\Larik WinUI\Plugins`.
+`DatabaseProviderCatalog.Initialize` receives `ProviderSource` records: every built-in assembly
+passed by the composition root (`Larik/App.xaml.cs`), plus every add-on `AddonLocator` loaded from
+`%LOCALAPPDATA%\Larik WinUI\Plugins\<id>\<version>\`. It still scans flat `*.dll` files in
+`<app dir>\Plugins` and `%LOCALAPPDATA%\Larik WinUI\Plugins` for the pre-add-on layout.
 
 It instantiates every public, non-abstract type implementing `IDatabaseProvider` with a
-parameterless constructor, dedupes by `Id` (first wins), and surfaces load errors in the connection
-dialog.
+parameterless constructor, dedupes by `Id` (first wins), and surfaces load errors with the origin
+(built-in name or `id version`) in the connection dialog.
 
 Current limitations, by design for now:
 
 | Limitation | Consequence |
 |---|---|
-| `Assembly.LoadFrom`, no `AssemblyLoadContext` | Plugin dependencies share the app's load context. Version conflicts are possible; assemblies can never be unloaded. A flat folder often works by accident because every DLL is loaded. |
-| Every `*.dll` in the folder is loaded | Native or unrelated DLLs are touched; failures are reported as provider load problems. |
-| No manifest or contract-version check | Compatibility relies on the add-only rule in §2. |
+| Installed add-ons use `AddonLoadContext`; legacy flat DLLs use `Assembly.LoadFrom` | Add-on dependencies are isolated with `AssemblyDependencyResolver`. Flat DLLs still share the app's context. No context is collectible, so an update needs a restart. |
+| No index client or signature check yet | A versioned add-on folder must be installed by hand. The curated index, hash pinning and channels are specified in [`ADDONS.md`](ADDONS.md) but not implemented. |
+| Every `*.dll` in a flat Plugins folder is loaded | Native or unrelated DLLs are touched; failures are reported as provider load problems. Versioned add-on folders are not scanned this way. |
 | `%LOCALAPPDATA%` is user-writable | A dropped DLL is trusted code running in-process. Only install plugins you trust. |
 | The folder is not auto-created | Create `%LOCALAPPDATA%\Larik WinUI\Plugins` before dropping a DLL. |
 | Release builds are self-contained | Trimming is off (`PublishTrimmed=false`) so XAML/x:Bind and reflection-based provider discovery survive. Revisit a trimmer root only if trimming is turned on later; validate plugins against a published build when that happens. |
@@ -402,8 +400,13 @@ Current limitations, by design for now:
 **Recommendation:** first-party engines ship as built-in project references in
 `Larik/App.xaml.cs` + `Larik.csproj`, using the same contracts a plugin would. That gives dependency
 safety, trimming coverage and a test target. SQL Server, PostgreSQL and MongoDB already follow this rule.
-Harden the loader (`AssemblyDependencyResolver`, manifest, unload) only when third-party plugins are
-actually expected.
+The loader is hardened once third-party plugins are actually expected; that design, including the
+add-on folder layout and the ALC, is in [`ADDONS.md`](ADDONS.md).
+
+The distribution design that follows from this — curated index, package layout, `AssemblyLoadContext`
+isolation, Store vs portable channels and the certification notes — is in
+[`ADDONS.md`](ADDONS.md). It keeps the same contract and only changes how the assembly reaches the
+machine.
 
 ---
 

@@ -4,8 +4,8 @@ namespace Larik.Data;
 
 /// <summary>
 /// Discovers <see cref="IDatabaseProvider"/> implementations from the app's referenced provider
-/// assemblies plus any DLL dropped into a Plugins folder. Adding a database means adding a
-/// provider assembly, not editing the app.
+/// assemblies, installed add-ons, and any DLL dropped into a Plugins folder. Adding a database means
+/// adding a provider assembly, not editing the app.
 /// </summary>
 public static class DatabaseProviderCatalog
 {
@@ -24,24 +24,39 @@ public static class DatabaseProviderCatalog
             ? null
             : Providers.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
 
-    public static void Initialize(IEnumerable<Assembly> builtInAssemblies, params string[] pluginDirectories)
+    /// <summary>
+    /// The preferred entry point. <paramref name="sources"/> are assemblies the caller already
+    /// loaded — built-ins and add-ons alike — so the catalogue never has to guess how to load them.
+    /// <paramref name="errors"/> carries failures from the add-on scan; legacy flat DLLs in
+    /// <paramref name="legacyPluginDirectories"/> are still supported for compatibility.
+    /// </summary>
+    public static void Initialize(
+        IEnumerable<ProviderSource> sources,
+        IEnumerable<string>? errors = null,
+        params string[] legacyPluginDirectories)
     {
         Errors.Clear();
-
-        var providers = new List<IDatabaseProvider>();
-
-        foreach (var assembly in builtInAssemblies.Distinct())
+        if (errors is not null)
         {
-            AddFromAssembly(assembly, providers);
+            Errors.AddRange(errors);
         }
 
-        foreach (var directory in pluginDirectories.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+        List<IDatabaseProvider> providers = [];
+
+        foreach (var source in sources.DistinctBy(source => source.Assembly))
+        {
+            AddFromAssembly(source, providers);
+        }
+
+        foreach (var directory in legacyPluginDirectories.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             foreach (var file in Directory.EnumerateFiles(directory, "*.dll"))
             {
                 try
                 {
-                    AddFromAssembly(Assembly.LoadFrom(file), providers);
+                    AddFromAssembly(
+                        new ProviderSource(Path.GetFileName(file), Assembly.LoadFrom(file)),
+                        providers);
                 }
                 catch (Exception ex) when (ex is BadImageFormatException or FileLoadException)
                 {
@@ -61,17 +76,29 @@ public static class DatabaseProviderCatalog
             .ToList();
     }
 
-    private static void AddFromAssembly(Assembly assembly, List<IDatabaseProvider> providers)
+    /// <summary>Compatibility overload for callers that only have assemblies.</summary>
+    public static void Initialize(IEnumerable<Assembly> builtInAssemblies, params string[] pluginDirectories) =>
+        Initialize(
+            builtInAssemblies.Select(assembly => new ProviderSource(assembly.GetName().Name ?? "built-in", assembly)),
+            errors: null,
+            pluginDirectories);
+
+    private static void AddFromAssembly(ProviderSource source, List<IDatabaseProvider> providers)
     {
         Type[] types;
         try
         {
-            types = assembly.GetTypes();
+            types = source.Assembly.GetTypes();
         }
         catch (ReflectionTypeLoadException ex)
         {
-            types = ex.Types.Where(t => t is not null).Cast<Type>().ToArray();
-            Errors.Add($"{assembly.GetName().Name}: {ex.Message}");
+            types = ex.Types.Where(type => type is not null).Cast<Type>().ToArray();
+            Errors.Add($"{source.Origin}: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            Errors.Add($"{source.Origin}: {ex.GetBaseException().Message}");
+            return;
         }
 
         foreach (var type in types)
@@ -92,7 +119,7 @@ public static class DatabaseProviderCatalog
             }
             catch (Exception ex)
             {
-                Errors.Add($"{type.FullName}: {ex.GetBaseException().Message}");
+                Errors.Add($"{source.Origin} ({type.FullName}): {ex.GetBaseException().Message}");
             }
         }
     }

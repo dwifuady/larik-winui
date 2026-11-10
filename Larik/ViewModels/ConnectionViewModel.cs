@@ -83,7 +83,8 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     {
         if (Provider is null)
         {
-            throw new InvalidOperationException($"No database provider is loaded for '{ProviderId}'.");
+            throw new InvalidOperationException(
+                $"The '{ProviderId}' provider isn't installed. Install its add-on in Settings > Add-ons.");
         }
 
         State = ConnectionState.Connecting;
@@ -127,7 +128,8 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     {
         if (Provider is null)
         {
-            throw new InvalidOperationException($"No database provider is loaded for '{ProviderId}'.");
+            throw new InvalidOperationException(
+                $"The '{ProviderId}' provider isn't installed. Install its add-on in Settings > Add-ons.");
         }
 
         return Provider.CreateConnection(Profile);

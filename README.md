@@ -165,6 +165,10 @@ provider assemblies plus every DLL dropped into:
 - `<app dir>\Plugins`
 - `%LOCALAPPDATA%\Larik WinUI\Plugins` (where user-installed plugins belong; the MSIX install folder is read-only)
 
+How a provider becomes a downloadable add-on — the curated GitHub index, package format, loader
+isolation, Store channels and certification notes — is specified in
+[`docs/ADDONS.md`](docs/ADDONS.md).
+
 The connection dialog builds its form from `ProviderSetting` (text/password/number/boolean), so a
 new provider gets a working configuration UI with no app changes. Providers are trusted code:
 only drop DLLs you have built or reviewed. Load failures are reported in the dialog instead of

@@ -63,6 +63,7 @@ foreach ($root in $LegacyStateRoots) {
     $StateFiles += Join-Path $root 'studio.json'
 }
 $StateMoved = @()
+$FixtureRoots = @()
 if ($LaunchedHere) {
     foreach ($path in $StateFiles) {
         if (Test-Path $path) {
@@ -75,11 +76,54 @@ if ($LaunchedHere) {
 function Restore-StudioState {
     if (-not $LaunchedHere) { return }
 
+    foreach ($root in $FixtureRoots) {
+        Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     foreach ($path in $StateFiles) {
         Remove-Item $path -ErrorAction SilentlyContinue
     }
     foreach ($path in $StateMoved) {
         if (Test-Path "$path.ui-tests") { Move-Item "$path.ui-tests" $path -Force }
+    }
+}
+
+# The add-on check needs a real provider assembly outside the app. Build the fixture, then install
+# it as a versioned add-on next to the parked state. It is removed again in Restore-StudioState.
+if ($LaunchedHere) {
+    try {
+        $fixtureProject = Join-Path $RepoRoot 'Larik.Data.Tests.Fixture\Larik.Data.Tests.Fixture.csproj'
+        $fixtureDll = Join-Path $RepoRoot 'Larik.Data.Tests.Fixture\bin\Debug\net10.0\Larik.Data.Tests.Fixture.dll'
+
+        & dotnet build $fixtureProject -c Debug --nologo -v quiet | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $fixtureDll)) {
+            throw 'the add-on fixture did not build'
+        }
+
+        $fixtureManifest = '{"manifestVersion":1,"id":"larik.fixture","version":"1.0.0","publisher":"Larik","contract":">=1.0 <2.0","providerIds":["fixture"],"entryAssembly":"Larik.Data.Tests.Fixture.dll","platforms":["win-x64"],"license":"MIT"}'
+
+        foreach ($root in $StateRoots) {
+            $addonRoot = Join-Path $root 'Plugins\larik.fixture'
+            if (Test-Path $addonRoot) { continue }
+
+            $versionRoot = Join-Path $addonRoot '1.0.0'
+            New-Item -ItemType Directory -Force -Path $versionRoot | Out-Null
+            Copy-Item $fixtureDll (Join-Path $versionRoot 'Larik.Data.Tests.Fixture.dll') -Force
+            [System.IO.File]::WriteAllText(
+                (Join-Path $versionRoot 'larik-addon.json'),
+                $fixtureManifest,
+                [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText(
+                (Join-Path $addonRoot 'current.json'),
+                '{"version":"1.0.0"}',
+                [System.Text.UTF8Encoding]::new($false))
+            $FixtureRoots += $addonRoot
+        }
+    }
+    catch {
+        # The tester's database files are already parked; hand them back before failing.
+        Restore-StudioState
+        throw
     }
 }
 
@@ -387,6 +431,14 @@ try {
         Assert-True ($null -ne $provider) 'the provider picker is missing'
         Invoke-Ui @('click', $provider.selector) | Out-Null
         Start-Sleep -Milliseconds 400
+
+        # Installed add-ons are discovered before the dialog is built, so the fixture must appear
+        # beside the built-ins. Skipped when attaching to an app the harness did not prepare.
+        if ($LaunchedHere) {
+            $fixture = @((Find-Element 'Fixture (add-on)').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+            Assert-True ($null -ne $fixture) 'the add-on provider was not listed'
+        }
+
         $demo = @((Find-Element 'Demo (in-memory)').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
         Assert-True ($null -ne $demo) 'the Demo provider was not offered'
         Invoke-Ui @('click', $demo.selector) | Out-Null

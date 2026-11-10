@@ -1,4 +1,5 @@
 using Larik.Data;
+using Larik.Data.Addons;
 using Larik.Data.Demo;
 using Larik.Data.MongoDB;
 using Larik.Data.Postgres;
@@ -43,6 +44,12 @@ public partial class App : Application
         WinRT.Interop.WindowNative.GetWindowHandle(Window);
 
     /// <summary>
+    /// Keeps the add-on load contexts and their assemblies alive for the process lifetime. They are
+    /// non-collectible, so an update is a new versioned folder plus a restart.
+    /// </summary>
+    private static AddonScan? Addons { get; set; }
+
+    /// <summary>
     /// Initializes the singleton application object.
     /// </summary>
     public App()
@@ -53,10 +60,19 @@ public partial class App : Application
         // beside the Tauri app's, and carries over only its own pre-separation file.
         LarikPaths.MigrateLegacyState();
 
-        // Providers are discovered, not hard-coded: built-in assemblies plus any plugin DLL
-        // dropped in the app's or the user's Plugins folder.
+        // Installed add-ons load first, each in its own context. Built-ins are passed explicitly;
+        // flat DLLs in either Plugins folder stay supported for the pre-add-on layout.
+        Addons = AddonLocator.Scan(LarikPaths.PluginsDirectory);
+
         DatabaseProviderCatalog.Initialize(
-            [typeof(DemoProvider).Assembly, typeof(SqlServerProvider).Assembly, typeof(PostgresProvider).Assembly, typeof(MongoProvider).Assembly],
+            [
+                new ProviderSource("built-in: Demo", typeof(DemoProvider).Assembly),
+                new ProviderSource("built-in: SQL Server", typeof(SqlServerProvider).Assembly),
+                new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
+                new ProviderSource("built-in: MongoDB", typeof(MongoProvider).Assembly),
+                .. Addons.Sources,
+            ],
+            Addons.Errors,
             Path.Combine(AppContext.BaseDirectory, "Plugins"),
             LarikPaths.PluginsDirectory);
     }

@@ -4,6 +4,33 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!--
+      Add-ons bind to this assembly by identity. Keep AssemblyVersion pinned: bumping it breaks
+      every plugin compiled against an older contract. The semantic contract version lives in
+      LarikDataContract.Version instead.
+    -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.0</Version>
+
+    <PackageId>Larik.Data</PackageId>
+    <Description>Provider contracts, the SQL language seam, and the add-on loader for Larik SQL Studio.</Description>
+    <Authors>Larik SQL Studio Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/dwifuady/larik-winui</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/dwifuady/larik-winui</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>larik;database;provider;contracts;addon</PackageTags>
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="PACKAGE.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>
