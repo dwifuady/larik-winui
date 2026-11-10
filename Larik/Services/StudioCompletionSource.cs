@@ -21,9 +21,28 @@ public sealed class StudioCompletionSource(
         var text = query.DocumentText;
         var caret = query.CaretOffset;
         var dialect = query.Language as ISqlDialect;
+        var schema = tables();
+
+        // A provider can complete a document the SQL model does not understand (mongosh's db.…).
+        // SQL providers return null here and fall through to the shared engine unchanged.
+        var hints = query.Language?.GetCompletionHints(
+            new CompletionHintQuery(text, caret, schema.Select(table => table.Name).ToList()));
+        if (hints is { Count: > 0 })
+        {
+            return hints
+                .Select(hint => new CompletionItem
+                {
+                    Label = hint.Label,
+                    Detail = hint.Detail,
+                    Kind = hint.Kind == CompletionHintKind.Method ? CompletionKind.Function : CompletionKind.Table,
+                    InsertText = hint.InsertText,
+                    CaretOffset = hint.Kind == CompletionHintKind.Method ? hint.InsertText.Length - 1 : -1,
+                })
+                .ToList();
+        }
+
         var (_, word, qualifier) = CompletionEngine.ExtractContext(text, caret);
         var (scope, keyword) = CompletionEngine.DetectScope(text, caret, dialect);
-        var schema = tables();
         var ctes = CompletionEngine.FindCtes(text, caret, schema);
 
         return CompletionEngine.Suggest(new CompletionRequest(
@@ -42,6 +61,7 @@ public sealed class StudioCompletionSource(
         {
             Dialect = dialect,
             Routines = routines(),
+            InSelectList = CompletionEngine.IsInSelectList(text, caret),
         });
     }
 }

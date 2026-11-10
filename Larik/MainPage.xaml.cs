@@ -121,6 +121,7 @@ public sealed partial class MainPage : Page
             SqlEditor.CommandRequested += SqlEditor_CommandRequested;
 
             ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
+            ViewModel.FormatRequested += (_, _) => FormatActiveTab();
             ViewModel.ResultChanged += (_, _) => RenderResults();
             ViewModel.NewTabRequested += ViewModel_NewTabRequested;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
@@ -495,6 +496,21 @@ public sealed partial class MainPage : Page
         // Language first: the first highlight after a tab/space switch must use the right one.
         SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
         SqlEditor.Text = ViewModel.ActiveTab?.Content ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Formats the active tab's SQL through the editor surface, as one undoable edit. The surface
+    /// raises TextChanged, which writes the new content back to the tab.
+    /// </summary>
+    private void FormatActiveTab()
+    {
+        if (ViewModel.ActiveTab is not { } tab)
+        {
+            return;
+        }
+
+        SqlEditor.ReplaceAll(SqlFormatter.Format(tab.Content));
+        ViewModel.StatusText = "Formatted";
     }
 
     private void SqlEditor_TextChanged(object? sender, EventArgs e)
@@ -1822,7 +1838,16 @@ public sealed partial class MainPage : Page
             root.Children.Add(deleteSection);
         }
 
-        content = root;
+        // ContentDialog does not reliably scroll a tall body; keep the destructive action
+        // reachable by scrolling it inside our own viewport.
+        content = new ScrollViewer
+        {
+            Content = root,
+            MaxHeight = 540,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Auto,
+        };
 
         var deleteRequested = false;
         var dialog = new ContentDialog

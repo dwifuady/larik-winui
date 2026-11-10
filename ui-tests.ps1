@@ -292,6 +292,15 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
+# Buttons inside a dialog body can sit below the scroll fold; the Invoke pattern reaches them
+# without depending on screen coordinates.
+function Invoke-Element {
+    param([string]$Name)
+    Focus-App
+    $match = @((Find-Element $Name).matches | Where-Object { $_.type -eq 'Button' -and $_.isEnabled } | Select-Object -First 1)
+    if ($null -eq $match) { throw "No enabled button matches '$Name'." }
+    Invoke-Ui @('invoke', $match.selector) -Attempts 4 | Out-Null
+}
 # Result tabs with the same title can hold different sessions (a USE message vs PRINT), so select
 # them in turn until the expected content is on screen.
 function Click-ResultTabWithText {
@@ -664,7 +673,7 @@ try {
         Start-Sleep -Milliseconds 400
 
         Open-WorkspaceSettings 'Space 3'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
@@ -711,11 +720,13 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Get-EditorText) -eq 'SELECT * FROM ') "editor text was '$((Get-EditorText))', expected 'SELECT * FROM '"
 
+        # "SELECT * FROM " ends at the FROM clause, so table suggestions reopen immediately.
         $deadline = (Get-Date).AddSeconds(3)
-        while ((Get-Date) -lt $deadline -and (Find-Element 'SQL suggestions').matchCount -gt 0) {
+        while ((Get-Date) -lt $deadline -and (Find-Element 'SQL suggestions').matchCount -eq 0) {
             Start-Sleep -Milliseconds 200
         }
-        Assert-True ((Find-Element 'SQL suggestions').matchCount -eq 0) 'popup stayed open after accepting'
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'accepting the snippet did not reopen table suggestions'
+        Assert-True ((Find-Element 'customers').matchCount -gt 0) 'the reopened list does not suggest tables'
     }
 
     Test-UI 'Ctrl+Enter runs the query through the provider' {
@@ -725,6 +736,47 @@ try {
         Send-Keys 'ctrl+enter'
         Wait-ForText 'FULL NAME'
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
+    }
+
+    Test-UI 'Space ticks columns only in the SELECT list' {
+        # In the projection, Space multi-selects the highlighted column: the text does not change.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'column suggestions did not open'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-EditorText) -eq 'select ') "Space did not tick in the SELECT list: '$((Get-EditorText))'"
+
+        # In a WHERE condition the checkbox makes no sense, so Space is an ordinary space.
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers where ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'WHERE column suggestions did not open'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-EditorText) -eq 'select * from customers where  ') "Space was swallowed in WHERE: '$((Get-EditorText))'"
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 200
+    }
+
+    Test-UI 'Format preserves string literals and is undoable' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select * from customers where country = 'ID';" -Literal
+        Start-Sleep -Milliseconds 400
+        Click-Element 'Format query'
+        Start-Sleep -Milliseconds 500
+        $formatted = Get-EditorText
+        Assert-True ($formatted -match 'SELECT') "keywords were not uppercased: '$formatted'"
+        Assert-True ($formatted -match 'FROM') "FROM is missing after format: '$formatted'"
+        Assert-True ($formatted.Contains("'ID'")) "the string literal was lost: '$formatted'"
+
+        # Formatting is one undo step; Ctrl+Z must bring the original text back.
+        Send-Keys 'ctrl+z'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -eq "select * from customers where country = 'ID';") "Ctrl+Z did not revert the format: '$((Get-EditorText))'"
     }
 
     Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {
@@ -1005,6 +1057,18 @@ try {
             Start-Sleep -Milliseconds 700
             Assert-True ((Find-Element 'Host').matchCount -gt 0) 'PostgreSQL settings did not render'
             Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the PostgreSQL password field is missing'
+
+            # The MongoDB provider is loaded too; its own declared settings drive the form, so the
+            # dialog proves the assembly registered without the shell knowing anything about Mongo.
+            Click-Element 'Provider'
+            Start-Sleep -Milliseconds 600
+            Assert-True ((Find-Element 'MongoDB').matchCount -gt 0) 'the MongoDB provider was not listed'
+            $mongo = @((Find-Element 'MongoDB').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+            Assert-True ($null -ne $mongo) 'the MongoDB provider item is missing'
+            Invoke-Ui @('click', $mongo.selector) | Out-Null
+            Start-Sleep -Milliseconds 700
+            Assert-True ((Find-Element 'Host').matchCount -gt 0) 'MongoDB settings did not render'
+            Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the MongoDB password field is missing'
 
             # The SQL Server form is the tall one: Test must keep its result on screen, not
             # just in the automation tree below the visible part of the dialog. Pick it by name so
@@ -1656,7 +1720,15 @@ try {
         Wait-ForText 'Roll back the open transaction' 10
         Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'the workspace disconnected with an open transaction'
 
-        Click-Element 'Roll back transaction'
+        # The status bar and the tooltip both mention "roll back … transaction", so target the
+        # actual enabled Button and prove the command ran (its status text changes).
+        $rollback = @((Find-Element 'Roll back transaction').matches |
+            Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+        Assert-True ($null -ne $rollback) 'the rollback button is missing'
+        Assert-True ($rollback.isEnabled) 'the rollback button is disabled'
+        Invoke-Ui @('invoke', $rollback.selector) -Attempts 3 | Out-Null
+        Wait-ForText 'Transaction rolled back' 8
+
         $deadline = (Get-Date).AddSeconds(8)
         while ((Get-Date) -lt $deadline -and (Find-Element '1 open transaction').matchCount -gt 0) {
             Start-Sleep -Milliseconds 200
@@ -1777,7 +1849,7 @@ try {
 
     Test-UI 'deleting the last workspace returns to onboarding' {
         Open-WorkspaceSettings 'Staging'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
@@ -1785,7 +1857,7 @@ try {
         Close-WorkspaceManager
 
         Open-WorkspaceSettings 'Local SQL Server'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1500

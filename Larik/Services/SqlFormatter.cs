@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -56,15 +57,16 @@ public static partial class SqlFormatter
         }
 
         var formatted = builder.ToString().TrimEnd();
-        return LiteralRegex().Replace(formatted, match =>
-        {
-            var index = int.Parse(match.Value.Trim('\u0000'));
-            return literals[index];
-        });
+        return PlaceholderRegex().Replace(
+            formatted,
+            match => literals[int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)]);
     }
 
     [GeneratedRegex(@"'(?:[^']|'')*'|""(?:[^""]|"""")*""")]
     private static partial Regex LiteralRegex();
+
+    [GeneratedRegex("\u0000(\\d+)\u0000")]
+    private static partial Regex PlaceholderRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();

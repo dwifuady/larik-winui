@@ -45,6 +45,7 @@
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -70,10 +71,95 @@
             VerticalAlignment="Bottom"
             Opacity="0.7" />
 
+        <!--  The native command a provider actually ran, for engines that translate the editor text.  -->
+        <Border
+            x:Name="GeneratedQueryBar"
+            Grid.Row="1"
+            Padding="12,2"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,0,0,1"
+            Visibility="Collapsed">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button
+                        x:Name="GeneratedQueryToggle"
+                        Padding="0,4"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.Name="Generated query"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="GeneratedQueryToggle_Click"
+                        ToolTipService.ToolTip="The native command sent to the database">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon
+                                x:Name="GeneratedQueryChevron"
+                                VerticalAlignment="Center"
+                                FontSize="9"
+                                Glyph="&#xE70D;" />
+                            <TextBlock
+                                FontSize="11.5"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="Generated query" />
+                        </StackPanel>
+                    </Button>
+
+                    <TextBlock
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="native command" />
+
+                    <Button
+                        x:Name="GeneratedQueryCopy"
+                        Grid.Column="2"
+                        Width="28"
+                        Height="24"
+                        AutomationProperties.Name="Copy generated query"
+                        Click="CopyGeneratedQuery_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Copy the generated query">
+                        <FontIcon FontSize="11" Glyph="&#xE8C8;" />
+                    </Button>
+                </Grid>
+
+                <ScrollViewer
+                    x:Name="GeneratedQueryScroll"
+                    Grid.Row="1"
+                    MaxHeight="180"
+                    Padding="0,2,0,6"
+                    HorizontalScrollBarVisibility="Auto"
+                    HorizontalScrollMode="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    VerticalScrollMode="Auto"
+                    Visibility="Collapsed">
+                    <TextBlock
+                        x:Name="GeneratedQueryText"
+                        FontFamily="{StaticResource StudioMonoFont}"
+                        FontSize="12"
+                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                        IsTextSelectionEnabled="True"
+                        TextWrapping="Wrap" />
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
         <!--  Virtualized rows: only visible rows have TextBlocks.  -->
         <ListView
             x:Name="RowsList"
-            Grid.Row="1"
+            Grid.Row="2"
             Padding="0"
             AutomationProperties.HelpText="Use the arrow keys to move between cells, Ctrl+C to copy, Ctrl+Shift+C to copy with headers."
             AutomationProperties.Name="Query results"
@@ -117,7 +203,7 @@
 
         <TextBlock
             x:Name="EmptyText"
-            Grid.Row="1"
+            Grid.Row="2"
             Margin="14,12,14,12"
             FontSize="12"
             Foreground="{ThemeResource StudioTextMutedBrush}"
@@ -127,7 +213,7 @@
         <!--  Server messages (PRINT, statistics, warnings) as selectable monospace text.  -->
         <ScrollViewer
             x:Name="MessagesScroll"
-            Grid.Row="1"
+            Grid.Row="2"
             Padding="14,12"
             HorizontalScrollBarVisibility="Auto"
             HorizontalScrollMode="Auto"
@@ -146,7 +232,7 @@
         <!--  Cell preview: Space on a cell, or the context menu, shows the full value.  -->
         <Grid
             x:Name="PreviewHost"
-            Grid.RowSpan="2"
+            Grid.RowSpan="3"
             Grid.Column="1"
             Visibility="Collapsed">
             <Grid.ColumnDefinitions>

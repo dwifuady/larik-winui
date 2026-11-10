@@ -312,6 +312,9 @@ public partial class StudioViewModel : ObservableObject
 
     public event EventHandler? ActiveTabChanged;
 
+    /// <summary>Raised when the user asks to format the active tab's SQL; the shell applies it.</summary>
+    public event EventHandler? FormatRequested;
+
     /// <summary>The shell shows the database picker before creating a tab; the view owns dialogs.</summary>
     public event EventHandler? NewTabRequested;
 
@@ -1208,15 +1211,7 @@ public partial class StudioViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void Format()
-    {
-        if (ActiveTab is not null)
-        {
-            ActiveTab.Content = SqlFormatter.Format(ActiveTab.Content);
-            ActiveTabChanged?.Invoke(this, EventArgs.Empty);
-            StatusText = "Formatted";
-        }
-    }
+    private void Format() => FormatRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>Stores new result tabs on their query tab and mirrors the active one to the shell.</summary>
     private void ApplyResults(

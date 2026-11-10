@@ -40,6 +40,7 @@ public static class SnippetDialects
     [
         ("mssql", "SQL Server"),
         ("postgres", "PostgreSQL"),
+        ("mongodb", "MongoDB"),
     ];
 
     public static string Label(string id)
@@ -150,15 +151,15 @@ public sealed partial class CompletionItem : ObservableObject
 
     /// <summary>
     /// Tick state for multi-select in the completion popup: Space toggles a column, Tab/Enter
-    /// inserts every ticked column. Only columns can be ticked; tables, keywords and joins keep
-    /// the single-accept behaviour.
+    /// inserts every ticked column. Only columns in a SELECT list are checkable; WHERE/JOIN
+    /// conditions and other column positions keep the single-accept behaviour.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CheckGlyph))]
     [NotifyPropertyChangedFor(nameof(CheckOpacity))]
     public partial bool IsChecked { get; set; }
 
-    public bool CanCheck => Kind == CompletionKind.Column;
+    public bool CanCheck { get; set; }
 
     public string CheckGlyph => IsChecked ? "\uE73E" : "\uE739";
 

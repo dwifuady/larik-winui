@@ -33,6 +33,32 @@ public readonly record struct StatementSpan(int Start, int Length, string? Langu
     public bool IsEmpty => Length <= 0;
 }
 
+/// <summary>What a <see cref="CompletionHint"/> represents, so the host can label the row.</summary>
+public enum CompletionHintKind
+{
+    Object,
+    Method,
+}
+
+/// <summary>
+/// One provider-contributed completion row for a document the SQL model does not understand
+/// (for example MongoDB's <c>db.collection.method</c> shell syntax).
+/// </summary>
+public readonly record struct CompletionHint(
+    string Label,
+    string Detail,
+    string InsertText,
+    CompletionHintKind Kind = CompletionHintKind.Object);
+
+/// <summary>
+/// The document and the schema objects a language may complete. Objects are the active schema's
+/// table names, which for MongoDB are collection names.
+/// </summary>
+public sealed record CompletionHintQuery(
+    string Text,
+    int CaretOffset,
+    IReadOnlyList<string> Objects);
+
 /// <summary>
 /// The editor language a provider owns: highlighting tokens and statement boundaries.
 /// <para>
@@ -75,6 +101,13 @@ public interface IEditorLanguage
     /// </summary>
     StatementSpan StatementAt(string? text, int caretOffset) =>
         EditorLanguageHelpers.StatementAt(this, text, caretOffset);
+
+    /// <summary>
+    /// Provider-owned completions for a document the SQL model does not understand, for example
+    /// MongoDB's <c>db.collection</c> shell syntax. Null means "no contribution"; the host then runs
+    /// its normal SQL completion. Additive: a language written before this member returns null.
+    /// </summary>
+    IReadOnlyList<CompletionHint>? GetCompletionHints(CompletionHintQuery query) => null;
 }
 
 /// <summary>

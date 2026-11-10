@@ -231,7 +231,7 @@ public abstract class SqlLanguage : IEditorLanguage
         return tokens;
     }
 
-    public IReadOnlyList<StatementSpan> Split(string? text)
+    public virtual IReadOnlyList<StatementSpan> Split(string? text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -335,7 +335,7 @@ public abstract class SqlLanguage : IEditorLanguage
     /// understand <c>GO</c> (it is an SSMS/sqlcmd separator). A language with no batch separator
     /// sends the trimmed document as one batch.
     /// </summary>
-    public IReadOnlyList<StatementSpan> SplitBatches(string? text)
+    public virtual IReadOnlyList<StatementSpan> SplitBatches(string? text)
     {
         if (string.IsNullOrEmpty(text))
         {
