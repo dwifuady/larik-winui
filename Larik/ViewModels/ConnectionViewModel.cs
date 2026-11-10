@@ -55,11 +55,11 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     public bool IsConnected => State == ConnectionState.Connected;
 
     public string ConnectionActionLabel => Provider is null
-        ? "Install driver"
+        ? (AddonPolicy.AddonsEnabled ? "Install driver" : "Unavailable")
         : IsConnected ? "Disconnect" : "Connect";
 
     public string StatusText => Provider is null
-        ? "Driver not installed"
+        ? (AddonPolicy.AddonsEnabled ? "Driver not installed" : "Not included in this edition")
         : State switch
         {
             ConnectionState.Connected => "Connected",
@@ -82,7 +82,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
 
     /// <summary>Status is colour AND text — never colour alone.</summary>
     public string StatusLine => Provider is null
-        ? "Driver not installed"
+        ? StatusText
         : $"{Endpoint} · {StatusText}";
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)

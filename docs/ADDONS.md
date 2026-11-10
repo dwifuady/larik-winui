@@ -1,11 +1,11 @@
 # Add-ons: provider distribution design
 
 Status: the contract package, add-on loader, index client, runtime install without a restart,
-install/remove, and the Drivers page are implemented. MongoDB now ships only as an add-on. Not yet:
-Store channel selection, a signed index, and arm64 index entries. This is the companion to [`PROVIDERS.md`](PROVIDERS.md),
-which covers the provider contract. This file covers how a provider assembly leaves the app
-package, how it is discovered, verified, installed, loaded and distributed through the Store and
-winget.
+install/remove, the Drivers page and the Store-edition gate are implemented. MongoDB ships only as
+an add-on. Not yet: a signed index and arm64 index entries. This is the companion to
+[`PROVIDERS.md`](PROVIDERS.md), which covers the provider contract. This file covers how a provider
+assembly leaves the app package, how it is discovered, verified, installed, loaded and distributed
+through the Store and winget.
 
 The short version: a curated JSON index in a GitHub repository, provider zips in their own
 repositories, SHA-256 pinned in the index, install into `%LOCALAPPDATA%`, load in a per-add-on
@@ -21,6 +21,14 @@ User-facing copy says **driver** (the DBeaver/DataGrip word for the same thing).
 folder names still say **add-on** (`larik-addon.json`, `Plugins`, `addons` in the index), and the
 contract says **provider** (`IDatabaseProvider`). They are three names for the same object at
 different layers: driver for the person connecting, add-on for the package, provider for the code.
+
+### Store edition
+
+`-c Store` compiles `LARIK_STORE`. `AddonPolicy.AddonsEnabled` is false, so `DriverRuntime` scans
+only the built-ins, Settings → Drivers and the install entry point are hidden, and a missing driver
+reads “Not included in this edition”. The Store build never downloads or loads a driver.
+`official.json` is reserved for a future signed first-party channel; the Store package is
+built-ins only today. See [`STORE.md`](STORE.md).
 
 | Decision | Choice | Why |
 |---|---|---|
