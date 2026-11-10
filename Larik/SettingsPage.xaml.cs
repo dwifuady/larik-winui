@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Reflection;
+using Larik.Data.Addons;
 using Larik.Models;
 using Larik.Services;
 using Larik.ViewModels;
@@ -7,14 +8,17 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Text;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.Storage.Pickers;
 
 namespace Larik;
 
 /// <summary>
-/// Application settings. The only section today is the snippet manager: every built-in and custom
-/// snippet, with the trigger, scope and expansion that completion uses. Edits go through
-/// <see cref="SnippetLibrary"/>, so the next keystroke in the editor sees them.
+/// Application settings: appearance, the snippet manager, add-ons and About. Snippet edits go
+/// through <see cref="SnippetLibrary"/> so the next keystroke sees them; add-on installs go through
+/// <see cref="Larik.Data.Addons.AddonInstaller"/> and take effect after a restart.
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -22,6 +26,8 @@ public sealed partial class SettingsPage : Page
     private readonly ObservableCollection<SnippetRecord> _visible = [];
     private readonly HashSet<string> _editorDialects = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ToggleButton> _dialectButtons = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AddonIndexClient _addonIndex = AddonCatalog.CreateIndexClient();
+    private readonly AddonInstaller _addonInstaller = AddonCatalog.CreateInstaller();
 
     private ToggleButton? _allDialectsButton;
     private string? _editingId;
@@ -30,6 +36,7 @@ public sealed partial class SettingsPage : Page
     private bool _suppressSelection;
     private bool _suppressCategory;
     private bool _syncingTheme;
+    private bool _addonsBusy;
     private StudioViewModel? _studio;
     private string _search = string.Empty;
     private string? _category;
@@ -81,6 +88,11 @@ public sealed partial class SettingsPage : Page
         SyncThemeChoice();
         RefreshCategories();
         RefreshList();
+
+        if (ReferenceEquals(SettingsNav.SelectedItem, AddonsNavItem))
+        {
+            _ = RefreshAddonsAsync();
+        }
     }
 
     private void SettingsTitleBar_BackRequested(TitleBar sender, object args)
@@ -97,7 +109,7 @@ public sealed partial class SettingsPage : Page
 
     private void SettingsNav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        if (SnippetsSection is null || AboutSection is null || AppearanceSection is null)
+        if (SnippetsSection is null || AboutSection is null || AppearanceSection is null || AddonsSection is null)
         {
             return;
         }
@@ -105,14 +117,21 @@ public sealed partial class SettingsPage : Page
         var tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag as string;
         var about = string.Equals(tag, "about", StringComparison.Ordinal);
         var appearance = string.Equals(tag, "appearance", StringComparison.Ordinal);
+        var addons = string.Equals(tag, "addons", StringComparison.Ordinal);
 
         AppearanceSection.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
-        SnippetsSection.Visibility = about || appearance ? Visibility.Collapsed : Visibility.Visible;
+        SnippetsSection.Visibility = about || appearance || addons ? Visibility.Collapsed : Visibility.Visible;
         AboutSection.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
+        AddonsSection.Visibility = addons ? Visibility.Visible : Visibility.Collapsed;
 
         if (appearance)
         {
             SyncThemeChoice();
+        }
+
+        if (addons)
+        {
+            _ = RefreshAddonsAsync();
         }
     }
 
@@ -156,6 +175,344 @@ public sealed partial class SettingsPage : Page
         {
             ThemeService.Apply(theme);
         }
+    }
+
+    // ---------------------------------------------------------------- add-ons
+
+    private void RefreshAddons_Click(object sender, RoutedEventArgs e) => _ = RefreshAddonsAsync();
+
+    private async Task RefreshAddonsAsync()
+    {
+        if (_addonsBusy)
+        {
+            return;
+        }
+
+        SetAddonBusy(true);
+        SetAddonStatus("Checking for add-ons…");
+
+        try
+        {
+            var installed = _addonInstaller.ListInstalled(LarikPaths.PluginsDirectory);
+
+            AddonIndex? index = null;
+            string? indexError = null;
+            try
+            {
+                index = await _addonIndex.FetchAsync(AddonCatalog.IndexLocation);
+            }
+            catch (Exception ex)
+            {
+                indexError = ex.Message;
+            }
+
+            IReadOnlyList<AddonIndexEntry> entries = index is null
+                ? []
+                : index.Addons
+                    .Where(entry => entry.Matches(AddonCatalog.AppVersion, AddonCatalog.CurrentPlatform))
+                    .ToList();
+
+            var entriesById = entries.ToDictionary(
+                entry => entry.Id,
+                StringComparer.OrdinalIgnoreCase);
+
+            var installedRows = installed
+                .Select(addon => BuildInstalledRow(addon, entriesById.GetValueOrDefault(addon.Id)))
+                .ToList();
+            RenderAddonRows(InstalledAddonPanel, installedRows);
+            InstalledEmptyText.Visibility = installedRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            var available = new List<AddonRow>();
+            foreach (var entry in entries)
+            {
+                var existing = installed.FirstOrDefault(addon =>
+                    string.Equals(addon.Id, entry.Id, StringComparison.OrdinalIgnoreCase));
+
+                if (existing is not null && !AddonVersions.IsNewer(entry.Version, existing.Version))
+                {
+                    continue;
+                }
+
+                available.Add(BuildAvailableRow(entry, update: existing is not null));
+            }
+
+            RenderAddonRows(AvailableAddonPanel, available);
+            AvailableEmptyText.Visibility = available.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            SetAddonStatus(indexError is null
+                ? $"{installed.Count} installed · {available.Count} available"
+                : $"Catalogue unavailable: {indexError}");
+        }
+        catch (Exception ex)
+        {
+            SetAddonStatus($"Could not read add-ons: {ex.Message}", error: true);
+        }
+        finally
+        {
+            SetAddonBusy(false);
+        }
+    }
+
+    private static AddonRow BuildInstalledRow(InstalledAddon addon, AddonIndexEntry? entry) => new()
+    {
+        Id = addon.Id,
+        Name = entry?.Name ?? addon.Id,
+        VersionText = $"v{addon.Version}",
+        Detail = entry?.Summary ?? $"Provides {string.Join(", ", addon.ProviderIds)}.",
+        Status = addon.Enabled ? "Installed" : "Disabled — restart to apply",
+        ActionText = "Remove",
+        ToggleText = addon.Enabled ? "Disable" : "Enable",
+        IsInstalled = true,
+        Entry = entry,
+        Installed = addon,
+    };
+
+    private static AddonRow BuildAvailableRow(AddonIndexEntry entry, bool update) => new()
+    {
+        Id = entry.Id,
+        Name = entry.Name,
+        VersionText = $"v{entry.Version}",
+        Detail = entry.Summary,
+        Status = update ? "Update available" : "Not installed",
+        ActionText = update ? "Update" : "Install",
+        Entry = entry,
+    };
+
+    private void RenderAddonRows(StackPanel panel, IReadOnlyList<AddonRow> rows)
+    {
+        panel.Children.Clear();
+        foreach (var row in rows)
+        {
+            panel.Children.Add(BuildAddonRowElement(row));
+        }
+    }
+
+    private FrameworkElement BuildAddonRowElement(AddonRow row)
+    {
+        var grid = new Grid
+        {
+            Padding = new Thickness(8, 10, 8, 10),
+            ColumnSpacing = 12,
+        };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var text = new StackPanel { Spacing = 3 };
+        var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        title.Children.Add(new TextBlock
+        {
+            Text = row.Name,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Resource("StudioTextPrimaryBrush"),
+        });
+        title.Children.Add(new TextBlock
+        {
+            Text = row.VersionText,
+            FontSize = 10,
+            Foreground = Resource("StudioTextMutedBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        text.Children.Add(title);
+        text.Children.Add(new TextBlock
+        {
+            Text = row.Detail,
+            FontSize = 11,
+            Foreground = Resource("StudioTextMutedBrush"),
+            MaxLines = 2,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        text.Children.Add(new TextBlock
+        {
+            Text = row.Status,
+            FontSize = 10,
+            Foreground = Resource("StudioAccentBrush"),
+        });
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        if (row.ToggleText is { } toggleText)
+        {
+            var toggle = new Button { Content = toggleText, Tag = row };
+            toggle.Click += AddonToggle_Click;
+            actions.Children.Add(toggle);
+        }
+
+        var action = new Button
+        {
+            Content = row.ActionText,
+            Tag = row,
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+        };
+        action.Click += AddonAction_Click;
+        actions.Children.Add(action);
+
+        Grid.SetColumn(actions, 1);
+        grid.Children.Add(text);
+        grid.Children.Add(actions);
+        return grid;
+    }
+
+    private static Brush Resource(string key) => (Brush)Application.Current.Resources[key];
+
+    private async void AddonAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: AddonRow row })
+        {
+            return;
+        }
+
+        if (row.IsInstalled)
+        {
+            await RemoveAddonAsync(row);
+            return;
+        }
+
+        if (row.Entry is { } entry)
+        {
+            await InstallAddonAsync(entry);
+        }
+    }
+
+    private async void AddonToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: AddonRow { Installed: { } installed } })
+        {
+            return;
+        }
+
+        var enable = !installed.Enabled;
+        if (!await ConfirmAsync(
+                enable ? "Enable add-on" : "Disable add-on",
+                $"{(enable ? "Enable" : "Disable")} {installed.Id}? Larik must restart for the change to take effect.",
+                enable ? "Enable" : "Disable"))
+        {
+            return;
+        }
+
+        try
+        {
+            _addonInstaller.SetEnabled(LarikPaths.PluginsDirectory, installed.Id, enable);
+        }
+        catch (Exception ex)
+        {
+            SetAddonStatus($"Could not change the add-on: {ex.Message}", error: true);
+            return;
+        }
+
+        await RefreshAddonsAsync();
+        SetAddonStatus($"Restart Larik to {(enable ? "enable" : "disable")} {installed.Id}.");
+    }
+
+    private async Task InstallAddonAsync(AddonIndexEntry entry)
+    {
+        SetAddonBusy(true);
+        SetAddonStatus($"Installing {entry.Name} {entry.Version}…");
+
+        try
+        {
+            await _addonInstaller.InstallAsync(entry, LarikPaths.PluginsDirectory);
+        }
+        catch (Exception ex)
+        {
+            SetAddonBusy(false);
+            SetAddonStatus($"Install failed: {ex.Message}", error: true);
+            return;
+        }
+
+        SetAddonBusy(false);
+        await RefreshAddonsAsync();
+        SetAddonStatus($"{entry.Name} {entry.Version} installed. Restart Larik to use it.");
+    }
+
+    private async Task RemoveAddonAsync(AddonRow row)
+    {
+        if (row.Installed is not { } installed)
+        {
+            return;
+        }
+
+        if (!await ConfirmAsync(
+                "Remove add-on",
+                $"Remove {installed.Id} {installed.Version}? Workspaces keep their saved connection profiles; the provider is unavailable until it is installed again.",
+                "Remove"))
+        {
+            return;
+        }
+
+        try
+        {
+            _addonInstaller.Remove(LarikPaths.PluginsDirectory, installed.Id);
+        }
+        catch (Exception ex)
+        {
+            SetAddonStatus($"Could not remove it: {ex.Message} Restart Larik and try again.", error: true);
+            return;
+        }
+
+        await RefreshAddonsAsync();
+        SetAddonStatus($"{installed.Id} removed. Restart Larik to unload it.");
+    }
+
+    private async void InstallZip_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker
+        {
+            SuggestedStartLocation = PickerLocationId.Downloads,
+        };
+        picker.FileTypeFilter.Add(".zip");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, App.WindowHandle);
+
+        var file = await picker.PickSingleFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(file.Path))
+        {
+            SetAddonStatus("That file has no local path. Copy it to disk and try again.", error: true);
+            return;
+        }
+
+        SetAddonBusy(true);
+        SetAddonStatus($"Installing {file.Name}…");
+
+        try
+        {
+            await _addonInstaller.InstallZipAsync(file.Path, LarikPaths.PluginsDirectory);
+        }
+        catch (Exception ex)
+        {
+            SetAddonBusy(false);
+            SetAddonStatus($"Install failed: {ex.Message}", error: true);
+            return;
+        }
+
+        SetAddonBusy(false);
+        await RefreshAddonsAsync();
+        SetAddonStatus($"{file.Name} installed. Restart Larik to use it.");
+    }
+
+    private void SetAddonBusy(bool busy)
+    {
+        _addonsBusy = busy;
+        AddonProgress.IsActive = busy;
+        AddonProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        RefreshAddonsButton.IsEnabled = !busy;
+        InstallZipButton.IsEnabled = !busy;
+    }
+
+    private void SetAddonStatus(string text, bool error = false)
+    {
+        AddonStatusText.Text = text;
+        AddonStatusText.Foreground = Resource(error ? "StudioDangerBrush" : "StudioTextMutedBrush");
     }
 
     // ---------------------------------------------------------------- filtering

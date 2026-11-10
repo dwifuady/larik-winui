@@ -1,6 +1,8 @@
 # Add-ons: provider distribution design
 
-Status: **design, not implemented.** This is the companion to [`PROVIDERS.md`](PROVIDERS.md),
+Status: the contract package, add-on loader, index client, install/remove and the Add-ons page are
+implemented. Not yet: Store channel selection, a signed index, arm64 index entries, and removing
+MongoDB from the core. This is the companion to [`PROVIDERS.md`](PROVIDERS.md),
 which covers the provider contract. This file covers how a provider assembly leaves the app
 package, how it is discovered, verified, installed, loaded and distributed through the Store and
 winget.
@@ -97,7 +99,8 @@ acceptable, but it means:
 
 ### 4.1 URL and caching
 
-- Primary: `https://raw.githubusercontent.com/<owner>/larik-addons/main/index.json`
+- Primary: `https://raw.githubusercontent.com/dwifuady/larik-addons/main/index.json` for the open
+  channel and `.../official.json` for the Store channel.
 - Fallback: GitHub Pages mirror of the same file.
 - Override for tests and self-hosted mirrors: `LARIK_ADDON_INDEX`.
 - Fetch with `If-None-Match`; cache the body and ETag in `Addons\`. Refresh at most once per

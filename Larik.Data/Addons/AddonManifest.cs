@@ -53,10 +53,24 @@ public sealed record AddonManifest
     {
         try
         {
-            using var stream = File.OpenRead(path);
-            manifest = JsonSerializer.Deserialize<AddonManifest>(stream, JsonOptions);
+            return TryParse(File.ReadAllText(path), out manifest, out error);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            manifest = null;
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>Parses manifest JSON, used by the zip installer before anything is extracted.</summary>
+    public static bool TryParse(string json, out AddonManifest? manifest, out string? error)
+    {
+        try
+        {
+            manifest = JsonSerializer.Deserialize<AddonManifest>(json, JsonOptions);
+        }
+        catch (JsonException ex)
         {
             manifest = null;
             error = ex.Message;
