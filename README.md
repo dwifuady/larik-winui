@@ -16,11 +16,19 @@ Published for `win-x64` and `win-arm64` from
   and it uninstalls from **Apps & Features**. It installs and runs beside the
   Tauri app, which keeps the name *Larik SQL Studio*.
 - **Portable** — `Larik-<version>-win-<arch>.zip`. Unpack anywhere and run
-  `Larik.exe`. Both builds keep their data in `%LOCALAPPDATA%\Larik WinUI`.
+  `Larik.exe`. Both GitHub builds keep their data in `%LOCALAPPDATA%\Larik WinUI`.
 
-Requires Windows 10 1809+ and does not need a separate .NET install. Neither
-build is code-signed, so Windows SmartScreen may warn on the first run:
-**More info → Run anyway**.
+### Editions
+
+- **GitHub** — the installer and portable ZIP above, with Settings → Drivers and the curated
+  index (MongoDB today). These binaries are unsigned.
+- **Microsoft Store** — SQL Server + PostgreSQL built in, signed by Microsoft, and no add-on
+  surface. The Store build keeps its data in the package's local store; the listing is being
+  prepared. See [`docs/STORE.md`](docs/STORE.md).
+
+Requires Windows 10 1809+ and does not need a separate .NET install. The GitHub
+installer and portable ZIP are unsigned, so Windows SmartScreen may warn on the first run:
+**More info → Run anyway**. The Microsoft Store edition is signed by Microsoft.
 
 ## What it does
 
@@ -52,8 +60,9 @@ The detailed behaviour of every surface — and the honest list of deliberate ga
 - To build from source: .NET 10 SDK, [WinApp CLI](https://github.com/microsoft/winappCli)
   0.7+, and Developer Mode. Published builds are self-contained and need no
   separate .NET install.
-- SQL Server, PostgreSQL or MongoDB only where you use that provider. SQL Server LocalDB is
-  enough, and the in-memory Demo provider works offline with no server at all.
+- SQL Server and PostgreSQL wherever you use them; MongoDB is an add-on in the GitHub edition.
+  SQL Server LocalDB is enough, and the in-memory Demo provider works offline with no server at
+  all.
 
 ## Build from source
 
@@ -100,6 +109,7 @@ in [`docs/ADDONS.md`](docs/ADDONS.md).
 | [`docs/DEVELOPING.md`](docs/DEVELOPING.md) | Layout, build, verification, WinUI quirks, releasing |
 | [`docs/PROVIDERS.md`](docs/PROVIDERS.md) | Provider contract, editor-language seam, blueprints |
 | [`docs/ADDONS.md`](docs/ADDONS.md) | Add-on index, packaging, loading, Store channels |
+| [`docs/STORE.md`](docs/STORE.md) | Store edition, manifest identity and submission checklist |
 | [`AGENTS.md`](AGENTS.md) | Architecture invariants and repository rules |
 | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) | Bundled components and licenses |
 
