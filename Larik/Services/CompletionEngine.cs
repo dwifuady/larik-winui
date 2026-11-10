@@ -54,6 +54,12 @@ public sealed record CompletionRequest(
 
     /// <summary>Procedures the active database exposes; empty when the provider has none.</summary>
     public IReadOnlyList<RoutineSchema> Routines { get; init; } = [];
+
+    /// <summary>
+    /// True when the caret is in a SELECT projection (after SELECT, before FROM). Only then do
+    /// columns offer the multi-select checkbox; WHERE/JOIN conditions do not.
+    /// </summary>
+    public bool InSelectList { get; init; }
 }
 
 /// <summary>
@@ -113,6 +119,17 @@ public static partial class CompletionEngine
         "WHERE", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "JOIN", "ON", "GROUP",
         "ORDER", "HAVING", "SET", "UNION", "EXCEPT", "INTERSECT", "AS", "WITH", "SELECT",
         "FROM", "AND", "OR", "APPLY", "TABLESAMPLE", "PIVOT", "UNPIVOT", "FOR", "OPTION",
+    };
+
+    /// <summary>
+    /// Words that end a SELECT projection. Anything after SELECT and before the first of these is
+    /// the projection: the only place the multi-select checkbox belongs.
+    /// </summary>
+    private static readonly HashSet<string> SelectClauseStarters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SELECT", "FROM", "WHERE", "ON", "GROUP", "ORDER", "HAVING", "JOIN", "APPLY",
+        "UNION", "EXCEPT", "INTERSECT", "SET", "INTO", "VALUES", "UPDATE", "INSERT",
+        "DELETE", "USE", "EXEC", "EXECUTE", "DECLARE", "WITH", "RETURNING",
     };
 
     /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
@@ -302,6 +319,107 @@ public static partial class CompletionEngine
         }
 
         return (CompletionScope.Keyword, null);
+    }
+
+    /// <summary>
+    /// True when the caret sits in a SELECT projection: after SELECT and before its FROM. Strings,
+    /// comments, bracketed identifiers and nested parentheses are skipped, so a WHERE subquery or a
+    /// function argument is not mistaken for the outer projection.
+    /// </summary>
+    public static bool IsInSelectList(string text, int caret)
+    {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var start = StatementStart(text, caret);
+        var before = text[start..caret];
+
+        var depth = 0;
+        string? clause = null;
+        var index = 0;
+        while (index < before.Length)
+        {
+            var c = before[index];
+            if (c == '\'')
+            {
+                index = SkipQuoted(before, index, '\'');
+            }
+            else if (c == '-' && index + 1 < before.Length && before[index + 1] == '-')
+            {
+                while (index < before.Length && before[index] is not ('\n' or '\r'))
+                {
+                    index++;
+                }
+            }
+            else if (c == '/' && index + 1 < before.Length && before[index + 1] == '*')
+            {
+                var close = before.IndexOf("*/", index + 2, StringComparison.Ordinal);
+                index = close < 0 ? before.Length : close + 2;
+            }
+            else if (c == '[')
+            {
+                var close = before.IndexOf(']', index + 1);
+                index = close < 0 ? before.Length : close + 1;
+            }
+            else if (c is '"' or '`')
+            {
+                index = SkipQuoted(before, index, c);
+            }
+            else if (c == '(')
+            {
+                depth++;
+                index++;
+            }
+            else if (c == ')')
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                }
+
+                index++;
+            }
+            else if (char.IsLetter(c) || c == '_')
+            {
+                var wordStart = index;
+                while (index < before.Length && (char.IsLetterOrDigit(before[index]) || before[index] == '_'))
+                {
+                    index++;
+                }
+
+                if (depth == 0 && SelectClauseStarters.Contains(before[wordStart..index]))
+                {
+                    clause = before[wordStart..index].ToUpperInvariant();
+                }
+            }
+            else
+            {
+                index++;
+            }
+        }
+
+        return depth == 0 && string.Equals(clause, "SELECT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int SkipQuoted(string text, int index, char quote)
+    {
+        index++;
+        while (index < text.Length)
+        {
+            if (text[index] != quote)
+            {
+                index++;
+                continue;
+            }
+
+            if (index + 1 < text.Length && text[index + 1] == quote)
+            {
+                index += 2;
+                continue;
+            }
+
+            return index + 1;
+        }
+
+        return text.Length;
     }
 
     /// <summary>FROM/JOIN table references in the statement under the caret, in query order.</summary>
@@ -569,7 +687,7 @@ public static partial class CompletionEngine
             if (request.Scope == CompletionScope.Routine)
             {
                 AddRoutines(results, request, needle);
-                return Finish(results, int.MaxValue);
+                return Finish(request, results, int.MaxValue);
             }
 
             // dbo. in a table position lists that schema's tables; the qualifier is already typed,
@@ -577,7 +695,7 @@ public static partial class CompletionEngine
             if (request.Scope == CompletionScope.Table && MatchedSchema(request) is not null)
             {
                 AddTables(results, request, needle);
-                return Finish(results, int.MaxValue);
+                return Finish(request, results, int.MaxValue);
             }
 
             // alias. or table. -> that table's columns, whatever the clause.
@@ -599,7 +717,7 @@ public static partial class CompletionEngine
             }
 
             AddColumns(results, sources, needle);
-            return Finish(results, SchemaLimit);
+            return Finish(request, results, SchemaLimit);
         }
 
         switch (request.Scope)
@@ -665,7 +783,25 @@ public static partial class CompletionEngine
             _ => SchemaLimit,
         };
 
-        return Finish(results, max);
+        return Finish(request, results, max);
+    }
+
+    /// <summary>Order, cap, and mark columns checkable only when the caret is in a SELECT list.</summary>
+    private static IReadOnlyList<CompletionItem> Finish(CompletionRequest request, List<CompletionItem> results, int max)
+    {
+        var ordered = Finish(results, max);
+        if (request.InSelectList)
+        {
+            foreach (var item in ordered)
+            {
+                if (item.Kind == CompletionKind.Column)
+                {
+                    item.CanCheck = true;
+                }
+            }
+        }
+
+        return ordered;
     }
 
     /// <summary>

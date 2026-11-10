@@ -42,6 +42,7 @@ public sealed class StudioCompletionSource(
         {
             Dialect = dialect,
             Routines = routines(),
+            InSelectList = CompletionEngine.IsInSelectList(text, caret),
         });
     }
 }

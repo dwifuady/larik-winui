@@ -711,11 +711,13 @@ try {
         Start-Sleep -Milliseconds 900
         Assert-True ((Get-EditorText) -eq 'SELECT * FROM ') "editor text was '$((Get-EditorText))', expected 'SELECT * FROM '"
 
+        # "SELECT * FROM " ends at the FROM clause, so table suggestions reopen immediately.
         $deadline = (Get-Date).AddSeconds(3)
-        while ((Get-Date) -lt $deadline -and (Find-Element 'SQL suggestions').matchCount -gt 0) {
+        while ((Get-Date) -lt $deadline -and (Find-Element 'SQL suggestions').matchCount -eq 0) {
             Start-Sleep -Milliseconds 200
         }
-        Assert-True ((Find-Element 'SQL suggestions').matchCount -eq 0) 'popup stayed open after accepting'
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'accepting the snippet did not reopen table suggestions'
+        Assert-True ((Find-Element 'customers').matchCount -gt 0) 'the reopened list does not suggest tables'
     }
 
     Test-UI 'Ctrl+Enter runs the query through the provider' {
@@ -725,6 +727,29 @@ try {
         Send-Keys 'ctrl+enter'
         Wait-ForText 'FULL NAME'
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
+    }
+
+    Test-UI 'Space ticks columns only in the SELECT list' {
+        # In the projection, Space multi-selects the highlighted column: the text does not change.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'column suggestions did not open'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-EditorText) -eq 'select ') "Space did not tick in the SELECT list: '$((Get-EditorText))'"
+
+        # In a WHERE condition the checkbox makes no sense, so Space is an ordinary space.
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers where ' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'WHERE column suggestions did not open'
+        Send-Keys 'space'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-EditorText) -eq 'select * from customers where  ') "Space was swallowed in WHERE: '$((Get-EditorText))'"
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 200
     }
 
     Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {

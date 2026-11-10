@@ -619,7 +619,18 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         RaiseTextChanged();
         RaiseCaretChanged();
         FocusEditor();
+
+        // A snippet often ends at a clause boundary ("SELECT * FROM "). Reopen the popup so the
+        // next suggestion (tables after FROM) appears without nudging the keyboard. Placeholders
+        // and snippets that end mid-token keep the current behaviour.
+        if (item.Kind == CompletionKind.Snippet && item.Selection is null && EndsAtClauseBoundary(item.InsertText))
+        {
+            UpdateCompletions();
+        }
     }
+
+    private static bool EndsAtClauseBoundary(string text) =>
+        text.Length > 0 && (char.IsWhiteSpace(text[^1]) || text[^1] == '.');
 
     /// <summary>
     /// Space-ticked columns become one comma-separated list. After a dot (<c>o.</c> + Space) the
@@ -700,7 +711,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             return false;
         }
 
-        if (_completions[_selectedIndex].Kind != CompletionKind.Column)
+        if (!_completions[_selectedIndex].CanCheck)
         {
             return false;
         }
@@ -717,7 +728,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         var item = _completions[index];
-        if (item.Kind != CompletionKind.Column)
+        if (!item.CanCheck)
         {
             return;
         }
