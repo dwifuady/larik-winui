@@ -411,7 +411,21 @@ machine.
 
 ---
 
-## 8. PostgreSQL (built in)
+## 8. Shipped providers in the core
+
+Two engines ship as project references, the in-memory Demo provider lives in `Larik.Data/Demo`,
+and MongoDB is the add-on in section 9.
+
+### SQL Server
+
+`Larik.Data.SqlServer` on Microsoft.Data.SqlClient: integrated or SQL authentication,
+`sys.databases` for the picker, `sys.objects`/`sys.schemas`/`sys.columns` for schema-qualified
+completion plus views and column types, `sys.procedures`/`sys.parameters` for routine completion,
+`sys.partitions` for reference-preview row estimates, `InfoMessage` for messages,
+`@@TRANCOUNT`/`XACT_STATE()` for transaction state, and `DB_NAME()` so a `USE` reaches the shell.
+`TSqlDialect` is the reference editor language.
+
+### PostgreSQL
 
 Shipped as `Larik.Data.Postgres` on Npgsql, registered in `Larik/App.xaml.cs`, covered by
 `PostgresDialectTests` and the UI suite's provider-schema check. What it implements:
@@ -507,7 +521,7 @@ as written. Keep the `IEditorLanguage`-only rule for a future genuinely non-SQL 
    argument is extended JSON; anything else is a clear "use the SQL surface" error. `ObjectId('…')`
    inside a document argument is not parsed here — the SQL surface supports it as a value.
 
-Known, deliberate limits (mirrored in `README.md`): single-column `JOIN … ON`; an `INSERT` column list
+Known, deliberate limits (mirrored in `docs/FEATURES.md`): single-column `JOIN … ON`; an `INSERT` column list
 is recommended (bare `VALUES` store under generated `c1…cN` keys); no multi-document transactions yet
 (`SupportsTransactions` stays false, the shell hides the guard, and `BEGIN TRAN` reports an error); a
 small mongosh subset; sampled (not enforced) schema; multi-field joins and `INSERT ... SELECT` are
