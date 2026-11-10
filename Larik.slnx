@@ -4,5 +4,6 @@
   <Project Path="Larik.Data.MongoDB/Larik.Data.MongoDB.csproj" />
   <Project Path="Larik.Data/Larik.Data.csproj" />
   <Project Path="Larik.Data.Tests/Larik.Data.Tests.csproj" />
+  <Project Path="Larik.Data.Tests.Fixture/Larik.Data.Tests.Fixture.csproj" />
   <Project Path="Larik/Larik.csproj" />
 </Solution>

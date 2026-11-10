@@ -19,6 +19,7 @@
     <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.MongoDB\Larik.Data.MongoDB.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
+    <ProjectReference Include="..\Larik.Data.Tests.Fixture\Larik.Data.Tests.Fixture.csproj" />
   </ItemGroup>
 
 </Project>
