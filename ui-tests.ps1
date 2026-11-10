@@ -8,11 +8,19 @@
 # results, transactions, settings). Run the whole suite before committing a behaviour change.
 #   -Through 'editing another workspace'   # rail + workspace settings only (~2 min)
 #   -Through 'SQL Server provider connects' # everything through the live SQL Server round trip
+#
+# Every run writes last-run.json (status, seconds, commit, fingerprint) and verified.json (the best
+# known PASS per check for that exact tree) to ui-test-artifacts. The prefix saves a rail checkpoint
+# at the end of the drag-reorder check; -From '<check>' resumes there, marks the skipped prefix
+# CACHED (same fingerprint) or SKIP, and reconnects the workspace. Use it to re-check the tab/group
+# area without replaying onboarding and the editor checks.
 param(
     [Parameter(Mandatory)][ValidateSet('sandbox', 'local')][string]$Target,
     [int]$AppPid = 0,
     [string]$Through = '',
-    [string]$ArtifactDirectory = ''
+    [string]$ArtifactDirectory = '',
+    # Resume from a saved state checkpoint instead of replaying the scenario from onboarding.
+    [string]$From = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +32,104 @@ $results = [Collections.Generic.List[object]]::new()
 $screenshots = [Collections.Generic.List[string]]::new()
 $script:MainWindow = $null
 $script:ThroughReached = $false
+$script:RunStartedAt = Get-Date
+$script:Commit = (& git -C $RepoRoot rev-parse --short HEAD 2>$null) -join ''
+
+# The fingerprint answers "did the code change since the last run?". It covers the commit, the
+# working-tree diff and the content of untracked files, so a results file can be trusted for a
+# tree it was produced from (artifacts are excluded; they are output, not code).
+function Get-CodeFingerprint {
+    $parts = [Collections.Generic.List[string]]::new()
+    $parts.Add('head:' + ((& git -C $RepoRoot rev-parse HEAD 2>$null) -join ''))
+    $parts.Add('diff:' + (((& git -C $RepoRoot diff --binary HEAD 2>$null) -join "`n")))
+    foreach ($file in @(& git -C $RepoRoot ls-files --others --exclude-standard 2>$null)) {
+        $path = Join-Path $RepoRoot $file
+        if (Test-Path $path -PathType Leaf) {
+            $parts.Add("untracked:${file}:" + (Get-FileHash $path -Algorithm SHA256).Hash)
+        }
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($parts -join "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '') }
+    finally { $sha.Dispose() }
+}
+
+function Save-TestResults {
+    New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
+    $report = [ordered]@{
+        schemaVersion = 1
+        fingerprint = $script:Fingerprint
+        commit = $script:Commit
+        target = $Target
+        through = $Through
+        from = $From
+        startedAt = $script:RunStartedAt.ToString('o')
+        updatedAt = (Get-Date).ToString('o')
+        checks = @($results | ForEach-Object {
+            [ordered]@{
+                name = $_.Name
+                status = $_.Status
+                detail = $_.Detail
+                seconds = $_.Seconds
+            }
+        })
+    }
+    $path = Join-Path $ArtifactDirectory 'last-run.json'
+    $report | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
+
+    # Keep the best-known PASS per check for exactly this tree. A later flaky run must not erase a
+    # green result, otherwise the cache punishes the tester for the harness being temperamental.
+    $baselinePath = Join-Path $ArtifactDirectory 'verified.json'
+    $known = @{}
+    if (Test-Path $baselinePath) {
+        try {
+            $previous = Get-Content $baselinePath -Raw | ConvertFrom-Json
+            if ($previous.fingerprint -eq $script:Fingerprint) {
+                foreach ($check in $previous.checks) {
+                    if ($check.status -eq 'PASS') { $known[$check.name] = $check.verifiedAt }
+                }
+            }
+        }
+        catch { }
+    }
+
+    foreach ($check in $results) {
+        if ($check.Status -eq 'PASS') { $known[$check.Name] = (Get-Date).ToString('o') }
+    }
+
+    [ordered]@{
+        schemaVersion = 1
+        fingerprint = $script:Fingerprint
+        commit = $script:Commit
+        updatedAt = (Get-Date).ToString('o')
+        checks = @($known.GetEnumerator() | ForEach-Object {
+            [ordered]@{ name = $_.Key; status = 'PASS'; verifiedAt = $_.Value }
+        })
+    } | ConvertTo-Json -Depth 4 | Set-Content -Path $baselinePath -Encoding UTF8
+
+    return $path
+}
+
+$script:Fingerprint = Get-CodeFingerprint
+$script:CheckpointRoot = Join-Path $ArtifactDirectory 'checkpoints'
+$script:RailCheckpoint = Join-Path $script:CheckpointRoot 'tab-organization'
+$script:FromReached = -not $From
+
+# A resumed run can mark the prefix it skipped as CACHED, but only when the tree is the one that
+# produced the previous results. Otherwise the checks are reported SKIP: they were not verified.
+function Get-CachedPasses {
+    $map = @{}
+    $path = Join-Path $ArtifactDirectory 'verified.json'
+    if (-not (Test-Path $path)) { return $map }
+    try { $previous = Get-Content $path -Raw | ConvertFrom-Json } catch { return $map }
+    if ($previous.fingerprint -ne $script:Fingerprint) { return $map }
+    foreach ($check in $previous.checks) {
+        if ($check.status -eq 'PASS') { $map[$check.name] = $true }
+    }
+    return $map
+}
+
+$script:CachedPasses = Get-CachedPasses
 
 # Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik WinUI (larik-winui-dev.db in
 # Debug builds). A direct/exe run writes there; the packaged app (winapp run or the installed MSIX)
@@ -146,6 +252,76 @@ function Get-StateDatabasePath {
     return $null
 }
 
+# A checkpoint is the test database at a section boundary. Resuming from it replays only the checks
+# after that boundary; the earlier ones are reported CACHED (same tree) or SKIP (not verified).
+# VACUUM INTO gives a consistent copy while the app still has the database open. Best effort:
+# a machine without sqlite3 still runs the suite, it just cannot resume.
+function Save-RailCheckpoint {
+    try {
+        $db = Get-StateDatabasePath
+        if (-not $db) { throw 'the test database was not found' }
+        if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) {
+            throw 'sqlite3 is not on PATH'
+        }
+
+        New-Item -ItemType Directory -Force -Path $script:RailCheckpoint | Out-Null
+        $destination = Join-Path $script:RailCheckpoint 'state.db'
+        Remove-Item $destination -ErrorAction SilentlyContinue
+        $sqlPath = $destination.Replace('\', '/') -replace "'", "''"
+        $output = @(& sqlite3 -cmd '.timeout 5000' $db "VACUUM INTO '$sqlPath';" 2>&1)
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $destination)) {
+            throw ($output -join ' ')
+        }
+
+        [ordered]@{
+            dbRoot = Split-Path -Parent $db
+            dbName = Split-Path -Leaf $db
+            nextCheck = 'a tab can be grouped, collapsed and joined by a new tab'
+            createdAt = (Get-Date).ToString('o')
+            fingerprint = $script:Fingerprint
+        } | ConvertTo-Json | Set-Content (Join-Path $script:RailCheckpoint 'meta.json') -Encoding UTF8
+    }
+    catch {
+        Write-Host "checkpoint skipped: $($_.Exception.Message)"
+    }
+}
+
+function Restore-RailCheckpoint {
+    $database = Join-Path $script:RailCheckpoint 'state.db'
+    $metaPath = Join-Path $script:RailCheckpoint 'meta.json'
+    if (-not (Test-Path $database) -or -not (Test-Path $metaPath)) {
+        throw "no checkpoint at $($script:RailCheckpoint); run the prefix once with -Through 'new tabs open on top and query tabs can be reordered by dragging' to create it"
+    }
+
+    $meta = Get-Content $metaPath -Raw | ConvertFrom-Json
+    $root = if ($meta.dbRoot) { $meta.dbRoot } else { $StateRoots[0] }
+    $name = if ($meta.dbName) { $meta.dbName } else { $NewStateNames[0] }
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    foreach ($suffix in '', '-wal', '-shm') {
+        Remove-Item (Join-Path $root "$name$suffix") -ErrorAction SilentlyContinue
+    }
+    Copy-Item $database (Join-Path $root $name) -Force
+    return $meta
+}
+
+function Ensure-ActiveWorkspaceConnected {
+    $disconnect = @((Find-Element 'Disconnect').matches) | Where-Object {
+        $_.type -eq 'Button' -and $_.name -eq 'Disconnect'
+    }
+    if ($disconnect.Count -gt 0) { return }
+
+    Click-Element 'ConnectionToggleButton'
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        $ready = @((Find-Element 'Disconnect').matches) | Where-Object {
+            $_.type -eq 'Button' -and $_.name -eq 'Disconnect'
+        }
+        if ($ready.Count -gt 0) { return }
+        Start-Sleep -Milliseconds 300
+    }
+    throw 'the resumed workspace did not connect'
+}
+
 # The app keeps the SQLite files open and recent writes may sit in the WAL; read both with shared access.
 function Get-StudioStateText {
     $statePath = Get-StateDatabasePath
@@ -218,13 +394,36 @@ function Get-PickerJson {
 function Test-UI {
     param([string]$Name, [scriptblock]$Script)
 
+    # -From resumes from a state checkpoint: the prefix was already verified (CACHED when the tree
+    # is unchanged, SKIP otherwise) and its interactions are not replayed.
+    if ($From -and -not $script:FromReached) {
+        if ($Name -like "*$From*") {
+            $script:FromReached = $true
+        }
+        else {
+            $status = if ($script:CachedPasses.ContainsKey($Name)) { 'CACHED' } else { 'SKIP' }
+            $results.Add([pscustomobject]@{ Name = $Name; Status = $status; Seconds = 0 })
+            Save-TestResults | Out-Null
+            return
+        }
+    }
+
     # -Through runs an ordered prefix; blocks after the match are reported as skipped, not run.
     if ($script:ThroughReached) {
-        $results.Add([pscustomobject]@{ Name = $Name; Status = 'SKIP' })
+        $results.Add([pscustomobject]@{ Name = $Name; Status = 'SKIP'; Seconds = 0 })
+        Save-TestResults | Out-Null
         return
     }
 
-    try { & $Script | Out-Null; $results.Add([pscustomobject]@{ Name = $Name; Status = 'PASS' }) }
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $Script | Out-Null
+        $results.Add([pscustomobject]@{
+            Name = $Name
+            Status = 'PASS'
+            Seconds = [Math]::Round($watch.Elapsed.TotalSeconds, 1)
+        })
+    }
     catch {
         $slug = ($Name -replace '[^A-Za-z0-9]+', '-').Trim('-')
         $shot = Join-Path $ArtifactDirectory "fail-$slug.png"
@@ -234,8 +433,15 @@ function Test-UI {
         }
         catch { }
 
-        $results.Add([pscustomobject]@{ Name = $Name; Status = 'FAIL'; Detail = "$_" })
+        $results.Add([pscustomobject]@{
+            Name = $Name
+            Status = 'FAIL'
+            Detail = "$_"
+            Seconds = [Math]::Round($watch.Elapsed.TotalSeconds, 1)
+        })
     }
+
+    Save-TestResults | Out-Null
 
     if ($Through -and $Name -like "*$Through*") { $script:ThroughReached = $true }
 }
@@ -388,6 +594,36 @@ function Wait-ForText {
     throw "Timed out waiting for '$Text'"
 }
 
+if ($From) {
+    $resumeChecks = @(
+        'a tab can be grouped',
+        'Group by database is one action with undo',
+        'a group can be pinned and survives a workspace switch',
+        'transactions belong to the query tab that opened them',
+        'F5 splits GO batches',
+        'a running query can be stopped',
+        'workspace state is saved to disk',
+        'window size and position are remembered',
+        'refuses a mutating statement without WHERE',
+        'settings lives at the bottom of the rail',
+        'deleting the last workspace returns to onboarding'
+    )
+
+    if (-not ($resumeChecks | Where-Object { $From -like "*$_*" })) {
+        Restore-StudioState
+        throw "-From '$From' is before the tab checkpoint. Resumable checks: $($resumeChecks -join '; ')"
+    }
+
+    try {
+        $resume = Restore-RailCheckpoint
+        Write-Host "Resuming from checkpoint taken $($resume.createdAt); next check: $($resume.nextCheck)"
+    }
+    catch {
+        Restore-StudioState
+        throw
+    }
+}
+
 if ($AppPid -le 0) {
     try {
         $launch = (Invoke-WinAppChecked (@('run', '.', '--detach', '--json') + $ScopeArgs)) -join "`n" | ConvertFrom-Json
@@ -403,8 +639,11 @@ New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
 Start-Sleep -Seconds 3
 
 # Wait for the shell, then focus it so synthetic input does not land in the console.
-try { Invoke-Ui @('wait-for', 'Welcome to Larik SQL Studio') -Attempts 20 | Out-Null } catch { }
+if (-not $From) {
+    try { Invoke-Ui @('wait-for', 'Welcome to Larik SQL Studio') -Attempts 20 | Out-Null } catch { }
+}
 Focus-App
+if ($From) { Ensure-ActiveWorkspaceConnected }
 
 try {
     Test-UI 'window shows the studio title' {
@@ -1730,6 +1969,105 @@ try {
         $persistedSecond = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 300 -and $_.width -gt 0 } | Select-Object -First 1
         Assert-True ($null -ne $persistedFirst -and $null -ne $persistedSecond) 'the query tabs disappeared after switching workspaces'
         Assert-True ($persistedFirst.y -lt $persistedSecond.y) 'the dragged tab order was not saved to the workspace'
+
+        # The rail checks are a clean resumable boundary: no transaction or temp table is live.
+        # Future runs can start here with -From 'a tab can be grouped'.
+        Save-RailCheckpoint
+    }
+
+    Test-UI 'a tab can be grouped, collapsed and joined by a new tab' {
+        # Query 2 is on tempdb, so the group takes the database name without asking for one.
+        Right-Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'New group from tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'tempdb, 1 tab, expanded').matchCount -gt 0) 'the group header did not appear'
+
+        # Collapsing hides the row but keeps the group; expanding brings the same tab back.
+        Click-Element 'tempdb, 1 tab, expanded'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'tempdb, 1 tab, collapsed').matchCount -gt 0) 'the group did not collapse'
+        $hidden = @((Find-Element 'Query 2').matches) | Where-Object { $_.x -lt 252 -and $_.type -eq 'ListItem' }
+        Assert-True ($hidden.Count -eq 0) 'a collapsed group still shows its tab'
+
+        Click-Element 'tempdb, 1 tab, collapsed'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'tempdb, 1 tab, expanded').matchCount -gt 0) 'the group did not expand'
+
+        # A new tab opened on the group's database joins it instead of landing loose.
+        Click-Element 'New query tab'
+        Wait-ForText 'New query database' 10
+        Focus-Element 'New tab database search'
+        Send-Keys 'tempdb' -Literal
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'Query 3').matchCount -gt 0) 'the new tab did not appear'
+        Assert-True ((Find-Element 'tempdb, 2 tabs, expanded').matchCount -gt 0) 'the new tab did not join its database group'
+    }
+
+    Test-UI 'Group by database is one action with undo' {
+        # Two tabs on a database the suite does not otherwise use, so the action has something to do.
+        foreach ($ignored in 1..2) {
+            Click-Element 'New query tab'
+            Wait-ForText 'New query database' 10
+            Focus-Element 'New tab database search'
+            Send-Keys 'model' -Literal
+            Start-Sleep -Milliseconds 400
+            Send-Keys 'enter'
+            Start-Sleep -Milliseconds 800
+        }
+
+        Click-Element 'Group tabs by database'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'tabs by database').matchCount -gt 0) 'the grouping action did not report its result'
+        Assert-True ((Find-Element 'model, 2 tabs, expanded').matchCount -gt 0) 'grouping did not create the model group'
+
+        # The status bar is a small target at the window edge; invoke it directly.
+        Invoke-Element 'Undo grouping'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Grouping undone').matchCount -gt 0) 'undo did not run'
+        Assert-True ((Find-Element 'model, 2 tabs').matchCount -eq 0) 'undo left the created group behind'
+    }
+
+    Test-UI 'a group can be pinned and survives a workspace switch' {
+        $tabsLabel = @((Find-Element 'TABS').matches) | Where-Object {
+            $_.x -lt 252 -and $_.type -eq 'Text' -and $_.name -eq 'TABS'
+        } | Select-Object -First 1
+        Assert-True ($null -ne $tabsLabel) 'the TABS header was not found'
+
+        Right-Click-Element 'tempdb, 2 tabs, expanded'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Pin group'
+        Wait-ForText 'Pinned group tempdb' 10
+
+        # Let the list finish moving the row before reading its bounds; both rows move together.
+        $pinnedGroup = $null
+        $tabsNow = $null
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline) {
+            $pinnedGroup = @((Find-Element 'tempdb, 2 tabs, expanded').matches) | Where-Object { $_.x -lt 252 } | Select-Object -First 1
+            $tabsNow = @((Find-Element 'TABS').matches) | Where-Object {
+                $_.x -lt 252 -and $_.type -eq 'Text' -and $_.name -eq 'TABS'
+            } | Select-Object -First 1
+            if ($null -ne $pinnedGroup -and $null -ne $tabsNow -and $pinnedGroup.y -lt $tabsNow.y) { break }
+            Start-Sleep -Milliseconds 250
+        }
+
+        Assert-True ($null -ne $pinnedGroup) 'the pinned group disappeared'
+        Assert-True ($null -ne $tabsNow) 'the TABS header disappeared'
+        Assert-True ($pinnedGroup.y -lt $tabsNow.y) 'a pinned group stayed below the TABS header'
+
+        Right-Click-Element 'tempdb, 2 tabs, expanded'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Unpin group'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Unpinned group tempdb').matchCount -gt 0) 'the group did not unpin'
+
+        # Groups live in the space, so switching away and back must restore them.
+        Switch-Workspace 'Staging'
+        Switch-Workspace 'Local SQL Server'
+        Assert-True ((Find-Element 'tempdb, 2 tabs, expanded').matchCount -gt 0) 'the group was not restored with the workspace'
     }
 
     Test-UI 'transactions belong to the query tab that opened them' {
@@ -1926,11 +2264,15 @@ try {
     $screenshots.Add($shot)
 }
 finally {
-    $ran = @($results | Where-Object Status -ne 'SKIP').Count
+    $ran = @($results | Where-Object { $_.Status -in @('PASS', 'FAIL') }).Count
     $passed = @($results | Where-Object Status -eq 'PASS').Count
     $failed = @($results | Where-Object Status -eq 'FAIL').Count
+    $cached = @($results | Where-Object Status -eq 'CACHED').Count
     if ($Through) {
-        Write-Host "Ran $ran of $($results.Count) checks through '$Through' (-Through): $passed passed, $failed failed."
+        Write-Host "Ran $ran of $($results.Count) checks through '$Through' (-Through): $passed passed, $failed failed, $cached cached."
+    }
+    elseif ($From) {
+        Write-Host "Ran $ran checks from '$From': $passed passed, $failed failed, $cached cached."
     }
 
     $results | Format-Table -AutoSize | Out-String | Write-Host
@@ -1938,6 +2280,8 @@ finally {
         $results | Where-Object Status -eq 'FAIL' | ForEach-Object { Write-Host ("FAIL: " + $_.Name + " :: " + $_.Detail) }
     }
     $screenshots | ForEach-Object { Write-Host "screenshot: $_" }
+    $resultsPath = Save-TestResults
+    Write-Host "results: $resultsPath (fingerprint $script:Fingerprint)"
 
     # The state written during this run is test data: stop the app, drop it, restore the tester's.
     if ($LaunchedHere -and $AppPid -gt 0) {
@@ -1947,9 +2291,14 @@ finally {
     Restore-StudioState
 }
 
-# Explicit exit codes so a targeted run can be used in a script: 0 green, 1 failed, 2 -Through typo.
+# Explicit exit codes so a targeted run can be used in a script: 0 green, 1 failed, 2 a typo.
 if ($Through -and -not $script:ThroughReached) {
     Write-Host "No check name matched -Through '$Through'; nothing was verified."
+    exit 2
+}
+
+if ($From -and -not $script:FromReached) {
+    Write-Host "No check name matched -From '$From'; nothing was verified."
     exit 2
 }
 

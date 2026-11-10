@@ -19,7 +19,8 @@ public sealed class ArchivedTabViewModel
         string database,
         string content,
         bool pinned,
-        DateTimeOffset archivedAt)
+        DateTimeOffset archivedAt,
+        string? groupName = null)
     {
         Id = id;
         SpaceId = spaceId;
@@ -30,6 +31,7 @@ public sealed class ArchivedTabViewModel
         Content = content;
         IsPinned = pinned;
         ArchivedAt = archivedAt;
+        GroupName = groupName;
     }
 
     public string Id { get; }
@@ -49,6 +51,9 @@ public sealed class ArchivedTabViewModel
     public bool IsPinned { get; }
 
     public DateTimeOffset ArchivedAt { get; }
+
+    /// <summary>The group this tab belonged to, so restoring it returns it to the same place.</summary>
+    public string? GroupName { get; }
 
     /// <summary>Workspace and database context, matching the tab subtitle style.</summary>
     public string ContextLine => string.IsNullOrWhiteSpace(Database)

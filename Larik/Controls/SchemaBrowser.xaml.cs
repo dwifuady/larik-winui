@@ -31,6 +31,9 @@ public sealed partial class SchemaBrowser : UserControl
     {
         InitializeComponent();
         RowList.ItemsSource = _rows;
+
+        // Row label brushes are CLR values, so rebuild them when Light/Dark changes.
+        ActualThemeChanged += (_, _) => RebuildRows();
     }
 
     /// <summary>A table/view, one of its columns, or a routine was chosen for insertion.</summary>

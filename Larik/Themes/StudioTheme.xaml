@@ -15,6 +15,7 @@
             <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="#232326" />
             <SolidColorBrush x:Key="HairlineBrush" Color="#14FFFFFF" />
             <SolidColorBrush x:Key="HairlineSubtleBrush" Color="#0AFFFFFF" />
+            <SolidColorBrush x:Key="StudioRowAlternateBrush" Color="#08FFFFFF" />
             <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="#F5F5F7" />
             <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="#B8FFFFFF" />
             <SolidColorBrush x:Key="StudioTextMutedBrush" Color="#66FFFFFF" />
@@ -40,6 +41,7 @@
             <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="#F0F0F0" />
             <SolidColorBrush x:Key="HairlineBrush" Color="#1F000000" />
             <SolidColorBrush x:Key="HairlineSubtleBrush" Color="#0F000000" />
+            <SolidColorBrush x:Key="StudioRowAlternateBrush" Color="#07000000" />
             <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="#1A1A1A" />
             <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="#B3000000" />
             <SolidColorBrush x:Key="StudioTextMutedBrush" Color="#73000000" />
@@ -65,6 +67,7 @@
             <SolidColorBrush x:Key="ElevatedSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="HairlineBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="HairlineSubtleBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="StudioRowAlternateBrush" Color="Transparent" />
             <SolidColorBrush x:Key="StudioTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
             <SolidColorBrush x:Key="StudioTextMutedBrush" Color="{ThemeResource SystemColorWindowTextColor}" />

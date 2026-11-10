@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Reflection;
 using Larik.Models;
 using Larik.Services;
+using Larik.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -28,6 +29,8 @@ public sealed partial class SettingsPage : Page
     private bool _loadingEditor;
     private bool _suppressSelection;
     private bool _suppressCategory;
+    private bool _syncingTheme;
+    private StudioViewModel? _studio;
     private string _search = string.Empty;
     private string? _category;
 
@@ -41,6 +44,20 @@ public sealed partial class SettingsPage : Page
     }
 
     // ---------------------------------------------------------------- page lifecycle
+
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+
+        // The shell owns the theme preference and its save timer, so Settings borrows the live
+        // view model instead of opening a second store against the same SQLite file.
+        if (e.Parameter is StudioViewModel studio)
+        {
+            _studio = studio;
+        }
+
+        SyncThemeChoice();
+    }
 
     private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
@@ -61,6 +78,7 @@ public sealed partial class SettingsPage : Page
             SettingsNav.SelectedItem = SnippetsNavItem;
         }
 
+        SyncThemeChoice();
         RefreshCategories();
         RefreshList();
     }
@@ -79,18 +97,65 @@ public sealed partial class SettingsPage : Page
 
     private void SettingsNav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        if (SnippetsSection is null || AboutSection is null)
+        if (SnippetsSection is null || AboutSection is null || AppearanceSection is null)
         {
             return;
         }
 
-        var about = string.Equals(
-            (args.SelectedItemContainer as NavigationViewItem)?.Tag as string,
-            "about",
-            StringComparison.Ordinal);
+        var tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag as string;
+        var about = string.Equals(tag, "about", StringComparison.Ordinal);
+        var appearance = string.Equals(tag, "appearance", StringComparison.Ordinal);
 
-        SnippetsSection.Visibility = about ? Visibility.Collapsed : Visibility.Visible;
+        AppearanceSection.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
+        SnippetsSection.Visibility = about || appearance ? Visibility.Collapsed : Visibility.Visible;
         AboutSection.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
+
+        if (appearance)
+        {
+            SyncThemeChoice();
+        }
+    }
+
+    private void SyncThemeChoice()
+    {
+        if (ThemeChoice is null)
+        {
+            return;
+        }
+
+        _syncingTheme = true;
+        try
+        {
+            ThemeChoice.SelectedIndex = (int)(_studio?.Theme ?? ThemeService.Preference);
+        }
+        finally
+        {
+            _syncingTheme = false;
+        }
+    }
+
+    private void ThemeChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingTheme || ThemeChoice.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        var theme = ThemeChoice.SelectedIndex switch
+        {
+            1 => AppTheme.Light,
+            2 => AppTheme.Dark,
+            _ => AppTheme.System,
+        };
+
+        if (_studio is not null)
+        {
+            _studio.SetTheme(theme);
+        }
+        else
+        {
+            ThemeService.Apply(theme);
+        }
     }
 
     // ---------------------------------------------------------------- filtering

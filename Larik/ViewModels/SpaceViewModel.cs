@@ -103,6 +103,9 @@ public partial class SpaceViewModel : ObservableObject
 
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
+    /// <summary>Groups in display order. Pinned and unpinned groups share the list; the band is a filter.</summary>
+    public ObservableCollection<TabGroupViewModel> Groups { get; } = [];
+
     public DatabaseViewModel? LastActiveDatabase { get; set; }
 
     public TabViewModel? LastActiveTab { get; set; }

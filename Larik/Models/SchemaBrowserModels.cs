@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using Larik.Data;
+using Larik.Services;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
@@ -74,8 +75,8 @@ public sealed partial class SchemaRow : ObservableObject
     public FontWeight LabelWeight => Kind == SchemaRowKind.Group ? FontWeights.SemiBold : FontWeights.Normal;
 
     public Brush LabelBrush => Kind == SchemaRowKind.Group
-        ? (Brush)Application.Current.Resources["StudioTextMutedBrush"]
-        : (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        ? ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted)
+        : ThemeService.GetBrush("StudioTextPrimaryBrush", StudioColors.Muted);
 
     public Visibility TableGlyphVisibility =>
         Kind == SchemaRowKind.Table && Table?.Kind != TableKind.View

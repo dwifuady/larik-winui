@@ -60,7 +60,11 @@ public partial class App : Application
         // beside the Tauri app's, and carries over only its own pre-separation file.
         LarikPaths.MigrateLegacyState();
 
-        // Installed add-ons load first, each in its own context. Built-ins are passed explicitly;
+        // Application.RequestedTheme is startup-only. Read the saved appearance now so the first
+        // frame, the caption buttons and Mica all open in the user's chosen theme.
+        ThemeService.Initialize(new StudioStore().LoadThemePreference());
+
+        // Installed add-ons load next, each in its own context. Built-ins are passed explicitly;
         // flat DLLs in either Plugins folder stay supported for the pre-add-on layout.
         Addons = AddonLocator.Scan(LarikPaths.PluginsDirectory);
 

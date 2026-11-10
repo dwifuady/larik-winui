@@ -16,7 +16,7 @@
         <DataTemplate x:Key="TabItemTemplate" x:DataType="vm:TabViewModel">
             <Grid
                 Height="{x:Bind RowHeight, Mode=OneWay}"
-                Padding="0,0,4,0"
+                Padding="{x:Bind RowPadding, Mode=OneWay}"
                 AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
                 Background="{x:Bind ActiveTintBrush, Mode=OneWay}"
                 ContextRequested="TabItem_ContextRequested"
@@ -64,7 +64,7 @@
                             VerticalAlignment="Center"
                             FontSize="12"
                             FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
-                            Foreground="{x:Bind local:MainPage.TabTitleBrush(IsActive), Mode=OneWay}"
+                            Foreground="{x:Bind TitleBrush, Mode=OneWay}"
                             Text="{x:Bind Title, Mode=OneWay}"
                             TextTrimming="CharacterEllipsis"
                             Visibility="{x:Bind TitleVisibility, Mode=OneWay}" />
@@ -126,6 +126,76 @@
                 </Button>
             </Grid>
         </DataTemplate>
+        <!--  A group header in either band. Pinned headers are the folder rows.  -->
+        <DataTemplate x:Key="TabGroupItemTemplate" x:DataType="vm:TabGroupViewModel">
+            <Grid
+                Height="{x:Bind RowHeight, Mode=OneWay}"
+                Padding="4,0,4,0"
+                ContextRequested="GroupHeader_ContextRequested">
+                <Button
+                    Padding="0,0,8,0"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}"
+                    Click="GroupHeader_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="{x:Bind CollapseLabel, Mode=OneWay}">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <FontIcon
+                            VerticalAlignment="Center"
+                            FontSize="8"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Glyph="{x:Bind ChevronGlyph, Mode=OneWay}" />
+
+                        <Rectangle
+                            Grid.Column="1"
+                            Width="2"
+                            Height="16"
+                            VerticalAlignment="Center"
+                            Fill="{x:Bind AccentBrush, Mode=OneWay}"
+                            RadiusX="1"
+                            RadiusY="1" />
+
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontSize="11.5"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                            Text="{x:Bind Name, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
+
+                        <FontIcon
+                            Grid.Column="3"
+                            VerticalAlignment="Center"
+                            FontSize="9"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Glyph="&#xE840;"
+                            ToolTipService.ToolTip="Pinned group"
+                            Visibility="{x:Bind PinVisibility, Mode=OneWay}" />
+
+                        <TextBlock
+                            Grid.Column="4"
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="{x:Bind CountLabel, Mode=OneWay}" />
+                    </Grid>
+                </Button>
+            </Grid>
+        </DataTemplate>
+        <controls:TabRailTemplateSelector
+            x:Key="TabRailSelector"
+            GroupTemplate="{StaticResource TabGroupItemTemplate}"
+            TabTemplate="{StaticResource TabItemTemplate}" />
         <!--  Workspace identity: the chosen icon, or the first letter until one is picked.  -->
         <DataTemplate x:Key="SpaceIconTemplate" x:DataType="vm:SpaceViewModel">
             <Grid Width="16" Height="16">
@@ -422,7 +492,7 @@
                 </Grid>
                 </Grid>
 
-                <!--  Pinned tabs: their own section above the TABS header, like Arc.  -->
+                <!--  Pinned tabs and pinned folders share one band, above the TABS header.  -->
                 <ListView
                     x:Name="PinnedTabsList"
                     Grid.Row="3"
@@ -433,11 +503,12 @@
                     CanDragItems="True"
                     CanReorderItems="True"
                     DragItemsCompleted="PinnedTabsList_DragItemsCompleted"
+                    DragItemsStarting="RailList_DragItemsStarting"
                     IsItemClickEnabled="True"
                     ItemClick="TabsList_ItemClick"
                     ItemContainerStyle="{StaticResource StudioTabItemStyle}"
-                    ItemTemplate="{StaticResource TabItemTemplate}"
-                    ItemsSource="{x:Bind ViewModel.PinnedTabs}"
+                    ItemTemplateSelector="{StaticResource TabRailSelector}"
+                    ItemsSource="{x:Bind ViewModel.PinnedRail}"
                     ReorderMode="Enabled"
                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                     SelectionMode="None"
@@ -455,14 +526,26 @@
                         FontWeight="SemiBold"
                         Foreground="{ThemeResource StudioTextMutedBrush}"
                         Text="TABS" />
-                    <Button
+                    <StackPanel
                         HorizontalAlignment="Right"
-                        AutomationProperties.Name="Archive"
-                        Command="{x:Bind ViewModel.OpenArchiveCommand}"
-                        Style="{StaticResource StudioIconButtonStyle}"
-                        ToolTipService.ToolTip="Archive">
-                        <FontIcon FontSize="12" Glyph="&#xE81C;" />
-                    </Button>
+                        Orientation="Horizontal"
+                        Spacing="2">
+                        <Button
+                            AutomationProperties.Name="Group tabs by database"
+                            Click="GroupByDatabase_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Group tabs by database"
+                            Visibility="{x:Bind ViewModel.CanGroupByDatabaseVisibility, Mode=OneWay}">
+                            <FontIcon FontSize="12" Glyph="&#xE81E;" />
+                        </Button>
+                        <Button
+                            AutomationProperties.Name="Archive"
+                            Command="{x:Bind ViewModel.OpenArchiveCommand}"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Archive">
+                            <FontIcon FontSize="12" Glyph="&#xE81C;" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!--  New tab is a row, not a small + in the header (Arc's rail).  -->
@@ -506,7 +589,7 @@
                     </Grid>
                 </Button>
 
-                <!--  Unpinned vertical tab list  -->
+                <!--  Tabs and groups share one band: a flat list keeps drag-reorder native.  -->
                 <ListView
                     x:Name="TabsList"
                     Grid.Row="6"
@@ -516,11 +599,12 @@
                     CanDragItems="True"
                     CanReorderItems="True"
                     DragItemsCompleted="TabsList_DragItemsCompleted"
+                    DragItemsStarting="RailList_DragItemsStarting"
                     IsItemClickEnabled="True"
                     ItemClick="TabsList_ItemClick"
                     ItemContainerStyle="{StaticResource StudioTabItemStyle}"
-                    ItemTemplate="{StaticResource TabItemTemplate}"
-                    ItemsSource="{x:Bind ViewModel.UnpinnedTabs}"
+                    ItemTemplateSelector="{StaticResource TabRailSelector}"
+                    ItemsSource="{x:Bind ViewModel.UnpinnedRail}"
                     ReorderMode="Enabled"
                     SelectionMode="None" />
 
@@ -992,15 +1076,39 @@
                 Grid.Row="5"
                 Padding="16,6,16,6"
                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                BorderThickness="0,1,0,0">
-                <TextBlock
-                    VerticalAlignment="Center"
-                    FontSize="10"
-                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
-                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-                    TextTrimming="CharacterEllipsis" />
+                BorderThickness="0,1,0,0"
+                ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
                 <StackPanel
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    VerticalAlignment="Center">
+                    <TextBlock
+                        MaxWidth="620"
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+
+                    <!--  Grouping is one action with a visible way back; no confirmation dialog.  -->
+                    <Button
+                        Padding="8,1"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Undo grouping"
+                        Command="{x:Bind ViewModel.UndoGroupingCommand}"
+                        Content="Undo"
+                        FontSize="10"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        Visibility="{x:Bind ViewModel.UndoGroupingVisibility, Mode=OneWay}" />
+                </StackPanel>
+
+                <StackPanel
+                    Grid.Column="1"
                     HorizontalAlignment="Right"
                     Orientation="Horizontal"
                     Spacing="14"
@@ -1402,8 +1510,8 @@
                 Padding="12"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Background="{ThemeResource PanelBackgroundBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
                 BorderThickness="1"
                 CornerRadius="10">
                 <Grid RowSpacing="8">

@@ -1,4 +1,5 @@
 using Larik.Models;
+using Larik.Services;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -20,11 +21,12 @@ public sealed class ResultRowView : Grid
     private readonly List<Border> _cellBorders = [];
     private readonly List<TextBlock> _cells = [];
     private readonly FontFamily _monoFont;
-    private readonly Brush _mutedBrush;
-    private readonly Brush _secondaryBrush;
-    private readonly Brush _primaryBrush;
-    private readonly Brush _dividerBrush;
-    private readonly Brush _hoverBrush;
+    private Brush _mutedBrush;
+    private Brush _secondaryBrush;
+    private Brush _primaryBrush;
+    private Brush _dividerBrush;
+    private Brush _hoverBrush;
+    private Brush _alternateBrush;
 
     private int _selectionAnchorRow = -1;
     private int _selectionAnchorColumn = -1;
@@ -39,18 +41,12 @@ public sealed class ResultRowView : Grid
         HorizontalAlignment = HorizontalAlignment.Left;
 
         _monoFont = (FontFamily)Application.Current.Resources["StudioMonoFont"];
-        _mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-        _secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
-        _primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
-
-        _dividerBrush = Application.Current.Resources.TryGetValue("DividerStrokeColorDefaultBrush", out var value)
-            && value is Brush dividerBrush
-                ? dividerBrush
-                : _mutedBrush;
-        _hoverBrush = Application.Current.Resources.TryGetValue("HairlineSubtleBrush", out value)
-            && value is Brush hoverBrush
-                ? hoverBrush
-                : _mutedBrush;
+        _mutedBrush = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
+        _secondaryBrush = ThemeService.GetBrush("StudioTextSecondaryBrush", ActualTheme, StudioColors.Muted);
+        _primaryBrush = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, StudioColors.Muted);
+        _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
+        _hoverBrush = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
+        _alternateBrush = ThemeService.GetBrush("StudioRowAlternateBrush", ActualTheme, Transparent);
 
         _cellsPanel = new StackPanel { Orientation = Orientation.Horizontal };
         Children.Add(_cellsPanel);
@@ -77,6 +73,26 @@ public sealed class ResultRowView : Grid
         Loaded += (_, _) => FindAncestor(this)?.AttachRow(this);
         PointerEntered += (_, _) => Background = _hoverBrush;
         PointerExited += (_, _) => RestoreBackground();
+        ActualThemeChanged += (_, _) => ApplyTheme();
+    }
+
+    /// <summary>Re-resolves cached token brushes and repaints after a light/dark switch.</summary>
+    public void ApplyTheme()
+    {
+        _mutedBrush = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
+        _secondaryBrush = ThemeService.GetBrush("StudioTextSecondaryBrush", ActualTheme, StudioColors.Muted);
+        _primaryBrush = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, StudioColors.Muted);
+        _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
+        _hoverBrush = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
+        _alternateBrush = ThemeService.GetBrush("StudioRowAlternateBrush", ActualTheme, Transparent);
+
+        _bottomLine.Background = _dividerBrush;
+        foreach (var cell in _cellBorders)
+        {
+            cell.BorderBrush = _dividerBrush;
+        }
+
+        UpdateCells();
     }
 
     /// <summary>Re-applies the visible cell backgrounds for the grid's current selection.</summary>
@@ -122,7 +138,7 @@ public sealed class ResultRowView : Grid
         }
 
         Width = row.Layout.TotalWidth;
-        Background = row.HighlightBrush ?? Transparent;
+        Background = RowBackground(row);
         _matchBar.Background = row.HighlightBorderBrush;
         _matchBar.Visibility = row.HighlightBorderBrush is null
             ? Visibility.Collapsed
@@ -182,7 +198,11 @@ public sealed class ResultRowView : Grid
     }
 
     private void RestoreBackground() =>
-        Background = DataContext is ResultRow row ? row.HighlightBrush ?? Transparent : Transparent;
+        Background = DataContext is ResultRow row ? RowBackground(row) : Transparent;
+
+    /// <summary>Match tint wins; otherwise even rows are plain and odd rows carry a quiet stripe.</summary>
+    private Brush RowBackground(ResultRow row) =>
+        row.HighlightBrush ?? (row.Index % 2 == 0 ? Transparent : _alternateBrush);
 
     private void UpdateSelection()
     {

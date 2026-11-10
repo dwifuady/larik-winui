@@ -1,3 +1,4 @@
+using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 
@@ -31,6 +32,6 @@ public sealed class ReferenceCellItem
     public required bool IsNull { get; init; }
 
     public Brush ValueBrush => IsNull
-        ? (Brush)Application.Current.Resources["StudioTextMutedBrush"]
-        : (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        ? ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted)
+        : ThemeService.GetBrush("StudioTextPrimaryBrush", StudioColors.Muted);
 }

@@ -1,5 +1,6 @@
 using Larik.Data;
 using Larik.Models;
+using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -12,12 +13,36 @@ namespace Larik.Controls;
 /// </summary>
 public sealed partial class ReferenceRecordsView : UserControl
 {
-    public ReferenceRecordsView() => InitializeComponent();
+    private QueryResult? _result;
+    private IReadOnlyList<int>? _matchedRows;
+    private Brush? _matchBackground;
+    private Brush? _matchBorder;
+
+    public ReferenceRecordsView()
+    {
+        InitializeComponent();
+        ActualThemeChanged += (_, _) => Render();
+    }
 
     public void Show(QueryResult result, IReadOnlyList<int> matchedRows, Brush matchBackground, Brush matchBorder)
     {
+        _result = result;
+        _matchedRows = matchedRows;
+        _matchBackground = matchBackground;
+        _matchBorder = matchBorder;
+        Render();
+    }
+
+    private void Render()
+    {
+        if (_result is not { } result || _matchedRows is not { } matchedRows)
+        {
+            return;
+        }
+
         var matches = new HashSet<int>(matchedRows);
         var transparent = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        var divider = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
         var records = new List<ReferenceRowItem>(result.Rows.Count);
 
         for (var rowIndex = 0; rowIndex < result.Rows.Count; rowIndex++)
@@ -39,8 +64,8 @@ public sealed partial class ReferenceRecordsView : UserControl
                     })
                     .ToList(),
                 IsMatch = isMatch,
-                Background = isMatch ? matchBackground : transparent,
-                BorderBrush = isMatch ? matchBorder : (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+                Background = isMatch ? _matchBackground ?? transparent : transparent,
+                BorderBrush = isMatch ? _matchBorder ?? divider : divider,
             });
         }
 
@@ -56,5 +81,10 @@ public sealed partial class ReferenceRecordsView : UserControl
         }
     }
 
-    public void Clear() => RowsList.ItemsSource = null;
+    public void Clear()
+    {
+        _result = null;
+        _matchedRows = null;
+        RowsList.ItemsSource = null;
+    }
 }

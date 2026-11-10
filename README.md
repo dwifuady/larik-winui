@@ -2,7 +2,7 @@
 
 A native WinUI 3 / Windows App SDK shell for Larik SQL Studio, ported from the Tauri + React app,
 now talking to **real databases through pluggable providers**:
-**Arc-style vertical tabs, workspaces that group databases, live SQL syntax highlighting, and
+**Arc-style vertical tabs, tab groups and pinned folders, workspaces that group databases, live SQL syntax highlighting, and
 snippet completion that expands on Tab.**
 
 ![WinUI 3](https://img.shields.io/badge/WinUI-3-0E7A0D) ![.NET](https://img.shields.io/badge/.NET-10-512BD4) ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -66,7 +66,7 @@ C:\dev\larik-winui\
 │   │   ├── StudioStore.cs        # SQLite session store: spaces, tabs, archive, app_state (no passwords)
 │   │   ├── SecretStore.cs        # Windows Credential Manager for provider password fields
 │   │   └── StudioColors.cs       # space palette + active-tab tint
-│   ├── ViewModels/               # Studio / Space / Connection / Database / Tab / ArchivedTab
+│   ├── ViewModels/               # Studio / Space / Connection / Database / Tab / TabGroup / ArchivedTab
 │   ├── Editor/IEditorSurface.cs  # the editor seam: text, caret, language, completion, commands
 │   ├── Controls/SqlEditorView.*  # IEditorSurface impl #1: RichEditBox + caret-anchored popup
 │   ├── Controls/DragHandle.cs    # splitter with a resize cursor
@@ -113,6 +113,9 @@ Tab accepts the expansion and lands the caret after `FROM `, Ctrl+Enter runs onl
 under the caret and F5 runs the selection or the whole document (with `Result 2` for a batch),
 syntax highlighting is applied without breaking Ctrl+Z, Ctrl+F counts matches and Enter walks them,
 replace all rewrites every match as one undo step, query and result tabs drag-reorder,
+a tab groups under a header, collapses and expands, a new tab on its database joins it, the
+"Group by database" action creates groups and undoes them, a group pins as a folder above TABS and
+returns after a workspace switch,
 `FROM ` lists every table and inserts a schema-qualified, quoted name with its alias
 (`[dbo].[backupset] AS [b]`), a `USE msdb` switches the tab, picker and completion schema, `Ctrl+K`
 finds a table in the schema peek and inserts its quoted name, views complete like tables, `EXEC`
@@ -247,13 +250,22 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 
 ## What works in this slice
 
-- **Vertical tabs** per workspace, active tab tinted with the workspace colour (2 px strip + 26 % tint),
-  database subtitle revealed on hover/active, close button. **Pinned tabs live in their own section
-  above the TABS header** and are more compact (36 px); unpinning returns the tab to the normal rail.
-  **Drag a tab to reorder it** within its section; the new order is written back to the workspace
-  (and survives a restart). **Double-click a tab title** (or right-click → Rename) to rename it
-  **inline**; Enter commits, Esc cancels, clicking away commits. Right-click also pins/unpins and
-  closes. Closing is non-destructive: the tab **moves to the archive** and can be restored.
+- **Vertical tabs, groups and pinned folders** per workspace, active tab tinted with the workspace
+  colour (2 px strip + 26 % tint), database subtitle revealed on hover/active, close button.
+  **Groups** are collapsible headers with a colour edge and a count; their tabs indent underneath,
+  and a group lives in the same band as its members. **A pinned group is a folder** in the section
+  above the TABS header (stacked colour mark, name, count; expands in place at the compact 36 px
+  pinned height). **Group by database** is a one-shot action in the TABS header, shown only when two
+  loose tabs share a database; it reports *Grouped n tabs* with an **Undo** in the status bar, and a
+  new tab opened on that database then joins its group. Right-click a tab for **Move to group**,
+  **New group from tab**, pin/unpin (a grouped tab pins its group) and close; right-click a header
+  to rename, collapse, pin (the folder form) or ungroup. **Drag a tab to reorder it** within its
+  band; dragging it across a header moves it into that group. Unpinning a group returns its tabs to
+  the TABS band as loose tabs. Pinned tabs themselves are more compact (36 px); unpinning returns the
+  tab to the normal rail. The order and group membership survive a restart and a workspace switch.
+  **Double-click a tab title** (or right-click → Rename) to rename it
+  **inline**; Enter commits, Esc cancels, clicking away commits. Closing is non-destructive: the tab
+  **moves to the archive** and can be restored into its group.
   **New tabs open at the top of the unpinned section**, and the **New tab row** is a full-width
   tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too.
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
@@ -272,7 +284,8 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   databases available, Enter opens an unbound tab.
 - **Archive & history**: the TABS header's archive button opens a page listing
   archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
-  back in its workspace (pin state and section included); Delete or **Clear all** removes history.
+  back in its workspace (pin state, and its group when that group still exists); Delete or
+  **Clear all** removes history.
   Inactivity is tracked per tab (last selected or edited). **Auto-archive** is configurable on that
   page — a toggle plus *n* days (default 30) and **Run now** — and an hourly sweep archives tabs
   untouched for *n* days. Pinned tabs, the tab currently in view, and the last tab of a workspace
@@ -512,10 +525,13 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with the transient message + `Ln/Col` (connection state lives in the rail),
-  splitter between editor and results. **Settings** (snippets, about) and the **Workspaces**
-  manager are app destinations: Workspaces opens from the switcher, while Settings sits on its
-  gear in the rail footer beside the workspace dots — the query toolbar only carries editor
-  actions (Format, Run, Stop).
+  splitter between editor and results. **Settings** (appearance, snippets, about) and the
+  **Workspaces** manager are app destinations: Workspaces opens from the switcher, while Settings
+  sits on its gear in the rail footer beside the workspace dots - the query toolbar only carries
+  editor actions (Format, Run, Stop). Appearance offers **Use Windows setting / Light / Dark**;
+  the choice is saved in `app_state` (`theme`), applied before the first frame, and runtime
+  switches move the content, result rows, editor syntax colours, caption buttons and Mica together
+  without a restart.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
   (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
   `FocusEditor`), so the editor can be swapped for a WebView2/Monaco island without changing the
@@ -524,7 +540,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 - **Native chrome**: the window uses a `MicaBackdrop`; the rail, toolbar and status bar are
   transparent so they read as one chrome surface with the title bar, and only real content sits on
   Fluent card brushes (`CardBackgroundFillColorDefaultBrush`). Falls back to the design's solid
-  background when `MicaController.IsSupported()` is false.
+  background when `MicaController.IsSupported()` is false. A forced Light/Dark choice recreates the
+  backdrop so Mica matches the content instead of the OS, and `AppWindowTitleBar.PreferredTheme`
+  keeps the caption buttons in the same mode.
 
 ## Deliberate gaps (next iterations)
 
@@ -543,7 +561,7 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |
 | No autocommit / manual-commit switch, no isolation dropdown | Deliberately mirrors SSMS for SQL Server: each statement autocommits, `BEGIN TRAN`/`COMMIT` are explicit, and isolation is the server default (`SET TRANSACTION ISOLATION LEVEL` remains available per tab). A DBeaver/DataGrip-style manual-commit mode is a product decision, not a SQL-standard requirement. |
 | App exit has no transaction prompt | Closing one tab or disconnecting is guarded and rolls back; closing the whole app relies on SQL Server rolling back when the process's sessions end. |
-| Folders, command palette, MCP | Ported later; tab reordering, inline rename, pinning and the archive are in place, the remaining organisation features are not. |
+| Tab organisation is one level | Groups and pinned folders ship; nested groups, drag-one-pinned-tab-onto-another stacking, dragging a group header to reorder groups, a manual group colour picker and groups that span workspaces are not. Command palette and MCP remain future work. |
 | No snippet import | The manager handles built-ins and custom snippets; DBeaver template XML import from the web app is not ported yet. |
 
 ## WinUI notes worth remembering
@@ -551,6 +569,11 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 - WinUI has no `DataGrid` and no Monaco; the editor surface is the real porting cost.
 - `ListView` with `SelectionMode="None"` gives no `Invoke` pattern, so tabs are activated with
   `ItemClick` — keyboard activation via Enter still needs an explicit handler.
+- The tab rail is **one flat `ListView` per band** (pinned, tabs) whose items are either a
+  `TabGroupViewModel` header or a `TabViewModel`, chosen by `TabRailTemplateSelector`. Nesting a
+  `ListView` per group would lose native drag-reorder and give every group its own scroll surface.
+  `DragItemsStarting` cancels header drags; `SyncRailOrder` rebuilds membership from where a tab
+  lands relative to the nearest header.
 - `KeyboardAccelerator` on the page does **not** win over `RichEditBox` shortcuts (Ctrl+B is bold),
   so shell shortcuts are handled in `Editor_PreviewKeyDown` and
   `DisabledFormattingAccelerators="All"` keeps rich formatting off.
@@ -565,6 +588,11 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 - `ListView.CanReorderItems` reorders the bound `ObservableCollection` but not the model behind a
   mirror. Both tab strips write the new order back on `DragItemsCompleted` (query tabs to the space,
   result tabs to the query tab) and reindex the result titles.
+- `Application.RequestedTheme` can only be assigned during startup, so the saved appearance is read
+  before the first window and a runtime switch moves the root `FrameworkElement.RequestedTheme`
+  instead. `Application.Current.Resources[key]` still resolves against the startup app theme, so
+  code that caches brushes (result rows, headers) uses `ThemeService.GetBrush` with the control's
+  `ActualTheme`; XAML `ThemeResource` values update on their own.
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - MVVM Toolkit `[ObservableProperty]` on fields warns (MVVMTK0045) under WinRT/AOT; partial
   properties keep the build warning-free and AOT-ready.
