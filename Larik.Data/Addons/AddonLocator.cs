@@ -36,57 +36,75 @@ public static class AddonLocator
 
         foreach (var addonDirectory in directories)
         {
-            var folderName = Path.GetFileName(addonDirectory);
-            if (File.Exists(Path.Combine(addonDirectory, "disabled")))
-            {
-                continue;
-            }
+            var scan = ScanAddon(addonDirectory);
+            sources.AddRange(scan.Sources);
+            errors.AddRange(scan.Errors);
+            contexts.AddRange(scan.Contexts);
+        }
 
-            var version = ReadCurrentVersion(addonDirectory);
-            if (version is null)
-            {
-                // Not an add-on folder. Flat DLLs in the root are the legacy layout, which the
-                // catalogue still scans separately.
-                continue;
-            }
+        return new AddonScan(sources, errors, contexts);
+    }
 
-            var versionDirectory = Path.Combine(addonDirectory, version);
-            if (!Directory.Exists(versionDirectory))
-            {
-                errors.Add($"{folderName} {version}: the active version folder is missing.");
-                continue;
-            }
+    /// <summary>
+    /// Scans one installed add-on. Used both at startup and when a driver is installed while the
+    /// app is running.
+    /// </summary>
+    public static AddonScan ScanAddon(string addonDirectory)
+    {
+        List<ProviderSource> sources = [];
+        List<string> errors = [];
+        List<AddonLoadContext> contexts = [];
 
-            if (!AddonManifest.TryLoad(
-                    Path.Combine(versionDirectory, "larik-addon.json"),
-                    out var manifest,
-                    out var manifestError))
-            {
-                errors.Add($"{folderName} {version}: {manifestError ?? "the manifest is invalid."}");
-                continue;
-            }
+        var folderName = Path.GetFileName(addonDirectory);
+        if (File.Exists(Path.Combine(addonDirectory, "disabled")))
+        {
+            return new AddonScan(sources, errors, contexts);
+        }
 
-            var entryPath = Path.Combine(versionDirectory, manifest!.EntryAssembly);
-            if (!File.Exists(entryPath))
-            {
-                errors.Add($"{folderName} {version}: {manifest.EntryAssembly} is missing.");
-                continue;
-            }
+        var version = ReadCurrentVersion(addonDirectory);
+        if (version is null)
+        {
+            // Not an add-on folder. Flat DLLs in the root are the legacy layout, which the
+            // catalogue still scans separately.
+            return new AddonScan(sources, errors, contexts);
+        }
 
-            try
-            {
-                var context = new AddonLoadContext(versionDirectory, manifest.EntryAssembly);
-                var assembly = context.LoadFromAssemblyPath(entryPath);
+        var versionDirectory = Path.Combine(addonDirectory, version);
+        if (!Directory.Exists(versionDirectory))
+        {
+            errors.Add($"{folderName} {version}: the active version folder is missing.");
+            return new AddonScan(sources, errors, contexts);
+        }
 
-                // Held for the process lifetime: non-collectible contexts must not be dropped, and
-                // the catalogue needs the assembly to stay discoverable.
-                contexts.Add(context);
-                sources.Add(new ProviderSource($"{manifest.Id} {manifest.Version}", assembly));
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"{folderName} {version}: {ex.GetBaseException().Message}");
-            }
+        if (!AddonManifest.TryLoad(
+                Path.Combine(versionDirectory, "larik-addon.json"),
+                out var manifest,
+                out var manifestError))
+        {
+            errors.Add($"{folderName} {version}: {manifestError ?? "the manifest is invalid."}");
+            return new AddonScan(sources, errors, contexts);
+        }
+
+        var entryPath = Path.Combine(versionDirectory, manifest!.EntryAssembly);
+        if (!File.Exists(entryPath))
+        {
+            errors.Add($"{folderName} {version}: {manifest.EntryAssembly} is missing.");
+            return new AddonScan(sources, errors, contexts);
+        }
+
+        try
+        {
+            var context = new AddonLoadContext(versionDirectory, manifest.EntryAssembly);
+            var assembly = context.LoadFromAssemblyPath(entryPath);
+
+            // Held for the process lifetime: non-collectible contexts must not be dropped, and
+            // the catalogue needs the assembly to stay discoverable.
+            contexts.Add(context);
+            sources.Add(new ProviderSource($"{manifest.Id} {manifest.Version}", assembly));
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"{folderName} {version}: {ex.GetBaseException().Message}");
         }
 
         return new AddonScan(sources, errors, contexts);

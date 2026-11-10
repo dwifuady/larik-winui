@@ -1,8 +1,8 @@
 # Add-ons: provider distribution design
 
-Status: the contract package, add-on loader, index client, install/remove and the Add-ons page are
-implemented. Not yet: Store channel selection, a signed index, arm64 index entries, and removing
-MongoDB from the core. This is the companion to [`PROVIDERS.md`](PROVIDERS.md),
+Status: the contract package, add-on loader, index client, runtime install without a restart,
+install/remove, and the Drivers page are implemented. MongoDB now ships only as an add-on. Not yet:
+Store channel selection, a signed index, and arm64 index entries. This is the companion to [`PROVIDERS.md`](PROVIDERS.md),
 which covers the provider contract. This file covers how a provider assembly leaves the app
 package, how it is discovered, verified, installed, loaded and distributed through the Store and
 winget.

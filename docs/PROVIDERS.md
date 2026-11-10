@@ -399,7 +399,8 @@ Current limitations, by design for now:
 
 **Recommendation:** first-party engines ship as built-in project references in
 `Larik/App.xaml.cs` + `Larik.csproj`, using the same contracts a plugin would. That gives dependency
-safety, trimming coverage and a test target. SQL Server, PostgreSQL and MongoDB already follow this rule.
+safety, trimming coverage and a test target. SQL Server and PostgreSQL are built-in project references;
+MongoDB follows the same contract from its own add-on repository (`dwifuady/larik-mongodb`).
 The loader is hardened once third-party plugins are actually expected; that design, including the
 add-on folder layout and the ALC, is in [`ADDONS.md`](ADDONS.md).
 
@@ -460,9 +461,10 @@ normal UI path.
 
 ---
 
-## 9. MongoDB (built-in)
+## 9. MongoDB (add-on)
 
-MongoDB ships as `Larik.Data.MongoDB` on MongoDB.Driver, registered in `App.xaml.cs`, covered by
+MongoDB ships as the `dwifuady/larik-mongodb` add-on on MongoDB.Driver, built against the
+`Larik.Data` package and installed from the curated index. The add-on's tests cover
 `TSqlMongoCompilerTests` (translation goldens), `MongoDialectTests` (editor language) and
 `MongoIntegrationTests` (a real round-trip that is a no-op unless a `mongod` answers on
 `localhost:27017`, so CI stays green offline).
@@ -550,7 +552,7 @@ rejected with a message.
 
 | Area | State |
 |---|---|
-| MongoDB | Implemented (`Larik.Data.MongoDB`): a T-SQL surface translated to aggregation pipelines/write commands, sampled schema, mongosh passthrough. Deliberate limits: single-column `JOIN … ON`, `INSERT` column list recommended, no multi-document transactions yet (`BEGIN TRAN` errors), small mongosh method subset, sampled (not enforced) schema. See §9. |
+| MongoDB | Implemented as the `dwifuady/larik-mongodb` add-on: a T-SQL surface translated to aggregation pipelines/write commands, sampled schema, mongosh passthrough. Deliberate limits: single-column `JOIN … ON`, `INSERT` column list recommended, no multi-document transactions yet (`BEGIN TRAN` errors), small mongosh method subset, sampled (not enforced) schema. See §9. |
 | Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. PostgreSQL reuses them; a MySQL provider should promote them into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
 | Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `"public"."users" AS u`). SQL Server reads `sys.schemas`; PostgreSQL reads `pg_namespace`. Views complete like tables. Overloaded PostgreSQL routines collapse to the first signature because the contract has no overload identity. |
 | Statement splitting | Dollar quotes, `E'...'`, quoted identifiers and nested block comments are in `SqlLanguageOptions`; `::` casts and `$1` parameters need no splitting. Parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and T-SQL `GO n` repeat expansion are still open. |
@@ -564,3 +566,4 @@ rejected with a message.
 | App exit | Closing a tab or disconnecting rolls back; closing the whole app relies on the server rolling back when its sessions end. There is no app-exit prompt. |
 | A failing statement stops the rest of its `GO` batch | SQL Server executes a `GO` batch natively, so the first server error ends the remaining statements in that batch. The shell already sends each `GO` batch separately; split-and-execute per statement as well if every statement must report independently. |
 | `GeneratedQuery` UI | Implemented: a collapsible **Generated query** strip on the result tab shows the native command when a provider reports one; hidden otherwise. |
+
