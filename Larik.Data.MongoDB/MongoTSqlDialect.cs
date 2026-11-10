@@ -49,6 +49,13 @@ public sealed class MongoTSqlDialect : SqlLanguage, ISqlDialect
         "FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "INTO", "UPDATE", "DELETE FROM",
     ];
 
+    /// <summary>Methods the mongosh passthrough runner understands.</summary>
+    private static readonly string[] ShellMethods =
+    [
+        "find", "findOne", "count", "countDocuments", "insertOne", "insertMany",
+        "updateOne", "updateMany", "deleteOne", "deleteMany",
+    ];
+
     public static MongoTSqlDialect Instance { get; } = new();
 
     private MongoTSqlDialect()
@@ -116,6 +123,93 @@ public sealed class MongoTSqlDialect : SqlLanguage, ISqlDialect
         value is null ? "NULL" : $"'{value.Replace("'", "''")}'";
 
     public string QuoteIdentifier(string name) => $"[{name.Replace("]", "]]")}]";
+
+    /// <summary>
+    /// Completes mongosh itself: <c>db.</c> suggests collections (the schema's table names) and
+    /// <c>db.collection.</c> suggests the methods the passthrough runner understands. Everything else
+    /// falls through to the SQL completion path, so the T-SQL surface keeps working unchanged.
+    /// </summary>
+    public IReadOnlyList<CompletionHint>? GetCompletionHints(CompletionHintQuery query)
+    {
+        var text = query.Text;
+        var caret = Math.Clamp(query.CaretOffset, 0, text.Length);
+
+        var wordStart = caret;
+        while (wordStart > 0 && IsIdentifierChar(text[wordStart - 1]))
+        {
+            wordStart--;
+        }
+
+        var before = text[..wordStart];
+        var word = text[wordStart..caret];
+
+        if (IsDbToken(before))
+        {
+            var collections = query.Objects
+                .Where(name => name.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+                .Select(name => new CompletionHint(name, "collection", name))
+                .ToList();
+            return collections.Count > 0 ? collections : null;
+        }
+
+        if (IsCollectionMethodToken(before, query.Objects))
+        {
+            var methods = ShellMethods
+                .Where(name => name.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+                .Select(name => new CompletionHint(
+                    $"{name}()",
+                    "mongosh method",
+                    $"{name}()",
+                    CompletionHintKind.Method))
+                .ToList();
+            return methods.Count > 0 ? methods : null;
+        }
+
+        return null;
+    }
+
+    private static bool IsDbToken(string before)
+    {
+        if (!before.EndsWith("db.", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var start = before.Length - 3;
+        return start == 0 || (!IsIdentifierChar(before[start - 1]) && before[start - 1] != '.');
+    }
+
+    private static bool IsCollectionMethodToken(string before, IReadOnlyList<string> collections)
+    {
+        if (!before.EndsWith('.'))
+        {
+            return false;
+        }
+
+        var dot = before.Length - 1;
+        var start = dot;
+        while (start > 0 && IsIdentifierChar(before[start - 1]))
+        {
+            start--;
+        }
+
+        var name = before[start..dot];
+        if (name.Length == 0 || !collections.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var prefix = before[..start];
+        if (!prefix.EndsWith("db.", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var dbStart = prefix.Length - 3;
+        return dbStart == 0 || (!IsIdentifierChar(prefix[dbStart - 1]) && prefix[dbStart - 1] != '.');
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c is '_' or '$';
 
     /// <summary>
     /// Reuses the SQL <see cref="SqlLanguage.Split"/> for statement boundaries and then tags each

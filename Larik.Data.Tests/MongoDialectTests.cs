@@ -183,4 +183,45 @@ public sealed class MongoDialectTests
     {
         Assert.Same(MongoTSqlDialect.Instance, EditorLanguageHelpers.Resolve(new MongoProvider()));
     }
+
+    // ------------------------------------------------------------------ mongosh completion
+
+    private static IReadOnlyList<CompletionHint> Hints(string text, params string[] objects) =>
+        MongoTSqlDialect.Instance.GetCompletionHints(
+            new CompletionHintQuery(text, text.Length, objects)) ?? [];
+
+    [Fact]
+    public void Db_dot_suggests_the_collections()
+    {
+        var hints = Hints("db.", "journeys", "users");
+
+        Assert.Equal(["journeys", "users"], hints.Select(h => h.Label).OrderBy(l => l).ToList());
+        Assert.All(hints, hint => Assert.Equal(CompletionHintKind.Object, hint.Kind));
+    }
+
+    [Fact]
+    public void A_typed_collection_prefix_filters_the_collections()
+    {
+        var hints = Hints("db.jo", "journeys", "users");
+
+        Assert.Equal(["journeys"], hints.Select(h => h.Label).ToList());
+    }
+
+    [Fact]
+    public void Db_collection_dot_suggests_the_supported_methods()
+    {
+        var hints = Hints("db.journeys.", "journeys");
+
+        Assert.Contains(hints, hint => hint.Label == "find()" && hint.Kind == CompletionHintKind.Method);
+        Assert.Contains(hints, hint => hint.Label == "countDocuments()");
+    }
+
+    [Theory]
+    [InlineData("mydb.")]
+    [InlineData("select * from ")]
+    [InlineData("db.journeys.find({ a: 1 })")]
+    public void Non_shell_positions_contribute_nothing(string text)
+    {
+        Assert.Empty(Hints(text, "journeys"));
+    }
 }

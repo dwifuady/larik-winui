@@ -486,7 +486,9 @@ as written. Keep the `IEditorLanguage`-only rule for a future genuinely non-SQL 
 3. `MongoTSqlDialect : SqlLanguage, ISqlDialect` — reuses `GenericSqlLanguage.TokenKeywords` (the
    T-SQL token set), `[x]`/`N'...'`/`@`, `//` comments, splits on `;` with no `GO`, and overrides
    `Split` to tag mongosh spans `shell`. Completion lists carry the T-SQL surface plus Mongo helpers
-   (`ObjectId`, `ISODate`, `NumberInt`, …).
+   (`ObjectId`, `ISODate`, `NumberInt`, …). It also implements `GetCompletionHints` (the language-owned
+   non-SQL completion seam): `db.` suggests the schema's collections and `db.collection.` suggests the
+   methods the passthrough runner understands.
 4. `TSqlMongoCompiler` — the pure, golden-tested translator: a lexer + recursive-descent parser +
    compiler that turns a statement into an `MSelect` (aggregation pipeline), `MInsert`/`MUpdate`/
    `MDelete` (write command) or `MUse`. SELECT covers projection, WHERE (comparison, `IN`, `BETWEEN`,
@@ -552,7 +554,7 @@ rejected with a message.
 | Formatter | `SqlFormatter` is app-owned and keyword-based; not dialect-aware. |
 | Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. PostgreSQL SSL mode is a documented text field until `Choice` exists. |
 | Snippet dialects | `SnippetDialects.Known` is a fixed list (`mssql`, `postgres`). |
-| Non-SQL completion | No contributor seam yet (see §9). MongoDB's T-SQL surface reuses the SQL path; a genuinely non-SQL surface still needs one. |
+| Non-SQL completion | `IEditorLanguage.GetCompletionHints` is the seam: a language contributes completions for a document the SQL model does not understand (MongoDB uses it for `db.` and `db.collection.`). SQL providers return null and are unchanged. |
 | Plugin isolation | `Assembly.LoadFrom` in the default context; no unload, no dependency resolver, no manifest. |
 | Trimming | Off: `Larik.csproj` sets `PublishTrimmed=false` for Debug and Release, so WinUI/XAML and reflection-based plugin discovery survive. A `TrimmerRootAssembly` becomes relevant only if trimming is enabled. |
 | Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it from `@@TRANCOUNT`/`XACT_STATE()`; PostgreSQL tracks the transaction commands it sent because the backend cannot introspect its own in-transaction state while answering. Other providers keep the defaults. |

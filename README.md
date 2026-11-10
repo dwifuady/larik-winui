@@ -374,8 +374,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   field type is known, a plain `WHERE _id = '…'` is coerced to the UUID/ObjectId binary it compares against.
   Collections are tables whose fields are sampled from a few documents (`_id` is the primary key),
   `USE [db]` switches the tab's database, and mongosh passes through — `db.users.find({...})` runs as
-  written. `BEGIN TRAN` reports a clear "not supported yet"; multi-document transactions are the next
-  iteration.
+  written, with `db.` completing collections and `db.collection.` completing the supported methods
+  (contributed by the language, not the shell). `BEGIN TRAN` reports a clear "not supported yet";
+  multi-document transactions are the next iteration.
 - **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
   warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
   open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
