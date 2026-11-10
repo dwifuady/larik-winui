@@ -50,7 +50,7 @@
                         <FontIcon Glyph="&#xE943;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem x:Name="AddonsNavItem" Content="Add-ons" Tag="addons">
+                <NavigationViewItem x:Name="AddonsNavItem" Content="Drivers" Tag="drivers">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE71D;" />
                     </NavigationViewItem.Icon>
@@ -125,7 +125,7 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!--  ============ ADD-ONS ============  -->
+                <!--  ============ DRIVERS ============  -->
                 <ScrollViewer
                     x:Name="AddonsSection"
                     Visibility="Collapsed"
@@ -145,12 +145,12 @@
                                     FontSize="20"
                                     FontWeight="SemiBold"
                                     Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                    Text="Add-ons" />
+                                    Text="Database drivers" />
                                 <TextBlock
                                     x:Name="AddonStatusText"
                                     FontSize="12"
                                     Foreground="{ThemeResource StudioTextMutedBrush}"
-                                    Text="Checking for add-ons…"
+                                    Text="Checking for drivers…"
                                     TextWrapping="Wrap" />
                             </StackPanel>
 
@@ -161,14 +161,14 @@
                                 Spacing="8">
                                 <Button
                                     x:Name="RefreshAddonsButton"
-                                    AutomationProperties.Name="Refresh add-ons"
+                                    AutomationProperties.Name="Refresh drivers"
                                     Click="RefreshAddons_Click"
                                     Content="Refresh" />
                                 <Button
                                     x:Name="InstallZipButton"
-                                    AutomationProperties.Name="Install add-on from zip"
+                                    AutomationProperties.Name="Install driver from file"
                                     Click="InstallZip_Click"
-                                    Content="Install from zip" />
+                                    Content="Install from file" />
                             </StackPanel>
                         </Grid>
 
@@ -185,7 +185,7 @@
                                 FontSize="12"
                                 FontWeight="SemiBold"
                                 Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                Text="Installed" />
+                                Text="Installed drivers" />
                             <StackPanel
                                 x:Name="InstalledAddonPanel"
                                 Spacing="4" />
@@ -193,7 +193,7 @@
                                 x:Name="InstalledEmptyText"
                                 FontSize="11"
                                 Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Text="No add-ons installed."
+                                Text="No other drivers are installed."
                                 Visibility="Collapsed" />
                         </StackPanel>
 
@@ -202,7 +202,7 @@
                                 FontSize="12"
                                 FontWeight="SemiBold"
                                 Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                                Text="Available" />
+                                Text="Available drivers" />
                             <StackPanel
                                 x:Name="AvailableAddonPanel"
                                 Spacing="4" />
@@ -210,14 +210,14 @@
                                 x:Name="AvailableEmptyText"
                                 FontSize="11"
                                 Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Text="No add-ons are available for this version of Larik."
+                                Text="No drivers are available for this version of Larik."
                                 Visibility="Collapsed" />
                         </StackPanel>
 
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource StudioTextMutedBrush}"
-                            Text="Add-ons are trusted code that runs inside Larik. Install only add-ons you trust. Installing, updating or disabling an add-on takes effect after a restart."
+                            Text="Drivers are trusted code that runs inside Larik. Install only drivers you trust. Installing, updating or disabling a driver takes effect after a restart."
                             TextWrapping="Wrap" />
                     </StackPanel>
                 </ScrollViewer>

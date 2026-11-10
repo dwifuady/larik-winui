@@ -15,6 +15,13 @@ repositories, SHA-256 pinned in the index, install into `%LOCALAPPDATA%`, load i
 
 ## 1. Decision summary
 
+### Terminology
+
+User-facing copy says **driver** (the DBeaver/DataGrip word for the same thing). The index, zip and
+folder names still say **add-on** (`larik-addon.json`, `Plugins`, `addons` in the index), and the
+contract says **provider** (`IDatabaseProvider`). They are three names for the same object at
+different layers: driver for the person connecting, add-on for the package, provider for the code.
+
 | Decision | Choice | Why |
 |---|---|---|
 | Catalogue hosting | Static `index.json` in a repo we own | No server to run, reviewable by PR, works offline with "Install from zip" |

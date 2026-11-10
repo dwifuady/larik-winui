@@ -56,13 +56,15 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
 
     public string ConnectionActionLabel => IsConnected ? "Disconnect" : "Connect";
 
-    public string StatusText => State switch
-    {
-        ConnectionState.Connected => "Connected",
-        ConnectionState.Connecting => "Connecting…",
-        ConnectionState.Faulted => "Connection failed",
-        _ => "Disconnected",
-    };
+    public string StatusText => Provider is null
+        ? "Driver not installed"
+        : State switch
+        {
+            ConnectionState.Connected => "Connected",
+            ConnectionState.Connecting => "Connecting…",
+            ConnectionState.Faulted => "Connection failed",
+            _ => "Disconnected",
+        };
 
     public SolidColorBrush StatusBrush => State switch
     {
@@ -84,7 +86,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         if (Provider is null)
         {
             throw new InvalidOperationException(
-                $"The '{ProviderId}' provider isn't installed. Install its add-on in Settings > Add-ons.");
+                $"The '{ProviderId}' driver isn't installed. Install it in Settings > Drivers.");
         }
 
         State = ConnectionState.Connecting;
@@ -129,7 +131,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         if (Provider is null)
         {
             throw new InvalidOperationException(
-                $"The '{ProviderId}' provider isn't installed. Install its add-on in Settings > Add-ons.");
+                $"The '{ProviderId}' driver isn't installed. Install it in Settings > Drivers.");
         }
 
         return Provider.CreateConnection(Profile);

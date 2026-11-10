@@ -666,7 +666,7 @@ try {
         Invoke-Ui @('set-value', $name.selector, 'Staging') | Out-Null
 
         # The Demo provider is the offline fixture: no server is needed for the editor checks.
-        $provider = @((Find-Element 'Provider').matches | Where-Object { $_.type -eq 'ComboBox' } | Select-Object -First 1)
+        $provider = @((Find-Element 'Database').matches | Where-Object { $_.type -eq 'ComboBox' } | Select-Object -First 1)
         Assert-True ($null -ne $provider) 'the provider picker is missing'
         Invoke-Ui @('click', $provider.selector) | Out-Null
         Start-Sleep -Milliseconds 400
@@ -1333,10 +1333,10 @@ try {
         Start-Sleep -Milliseconds 1000
         try {
             Assert-True ((Find-Element 'Workspace settings').matchCount -gt 0) 'the workspace editor did not open'
-            Assert-True ((Find-Element 'Provider').matchCount -gt 0) 'provider picker missing'
+            Assert-True ((Find-Element 'Database').matchCount -gt 0) 'database picker missing'
             Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'provider settings not rendered'
             # Opening the picker proves the catalog listed every loaded provider.
-            Click-Element 'Provider'
+            Click-Element 'Database'
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
             Assert-True ((Find-Element 'PostgreSQL').matchCount -gt 0) 'the PostgreSQL provider was not listed'
@@ -1351,7 +1351,7 @@ try {
 
             # The MongoDB provider is loaded too; its own declared settings drive the form, so the
             # dialog proves the assembly registered without the shell knowing anything about Mongo.
-            Click-Element 'Provider'
+            Click-Element 'Database'
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'MongoDB').matchCount -gt 0) 'the MongoDB provider was not listed'
             $mongo = @((Find-Element 'MongoDB').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
@@ -1364,7 +1364,7 @@ try {
             # The SQL Server form is the tall one: Test must keep its result on screen, not
             # just in the automation tree below the visible part of the dialog. Pick it by name so
             # adding a provider never depends on the picker's order.
-            Click-Element 'Provider'
+            Click-Element 'Database'
             Start-Sleep -Milliseconds 600
             $sqlServer = @((Find-Element 'SQL Server').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
             Assert-True ($null -ne $sqlServer) 'the SQL Server provider item is missing'
@@ -2237,13 +2237,13 @@ try {
         Wait-ForText 'Switch workspace' 10
     }
 
-    Test-UI 'settings offers the add-ons page' {
+    Test-UI 'settings offers the drivers page' {
         Click-Element 'Settings'
         Wait-ForText 'Snippets' 10
 
         Focus-App
         Invoke-Ui @('click', 'AddonsNavItem') | Out-Null
-        Wait-ForText 'Install from zip' 10
+        Wait-ForText 'Install driver from file' 10
         Assert-True ((Find-Element 'Installed').matchCount -gt 0) 'the installed section is missing'
         Assert-True ((Find-Element 'Available').matchCount -gt 0) 'the available section is missing'
 

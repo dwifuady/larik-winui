@@ -23,7 +23,7 @@ public sealed class AddonInstallerTests
         """;
 
     [Fact]
-    public void Index_client_reads_a_local_index_and_filters_entries()
+    public async Task Index_client_reads_a_local_index_and_filters_entries()
     {
         var directory = NewDirectory();
         try
@@ -42,7 +42,7 @@ public sealed class AddonInstallerTests
                 """);
 
             var client = new AddonIndexClient(new HttpClient());
-            var index = client.FetchAsync(path).GetAwaiter().GetResult();
+            var index = await client.FetchAsync(path);
             var matches = index.Addons.Where(entry => entry.Matches("0.1.0", "win-x64")).ToList();
 
             Assert.Single(matches);
@@ -55,7 +55,7 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
-    public void Installer_verifies_the_hash_and_writes_the_current_pointer()
+    public async Task Installer_verifies_the_hash_and_writes_the_current_pointer()
     {
         var root = NewDirectory();
         try
@@ -70,7 +70,7 @@ public sealed class AddonInstallerTests
             var entry = Entry(hash);
             var installer = new AddonInstaller(new HttpClient(new StubHandler(zip)));
 
-            var installed = installer.InstallAsync(entry, root).GetAwaiter().GetResult();
+            var installed = await installer.InstallAsync(entry, root);
 
             Assert.Equal("larik.test", installed.Id);
             Assert.Equal("1.0.0", installed.Version);
@@ -96,7 +96,7 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
-    public void Installer_rejects_a_hash_mismatch_without_installing()
+    public async Task Installer_rejects_a_hash_mismatch_without_installing()
     {
         var root = NewDirectory();
         try
@@ -106,8 +106,8 @@ public sealed class AddonInstallerTests
                 ("Test.dll", "not a real assembly"));
             var installer = new AddonInstaller(new HttpClient(new StubHandler(zip)));
 
-            var error = Assert.Throws<InvalidDataException>(
-                () => installer.InstallAsync(Entry(new string('0', 64)), root).GetAwaiter().GetResult());
+            var error = await Assert.ThrowsAsync<InvalidDataException>(
+                () => installer.InstallAsync(Entry(new string('0', 64)), root));
 
             Assert.Contains("verification", error.Message, StringComparison.OrdinalIgnoreCase);
             Assert.False(Directory.Exists(Path.Combine(root, "larik.test")));
@@ -119,7 +119,7 @@ public sealed class AddonInstallerTests
     }
 
     [Fact]
-    public void Installer_rejects_a_zip_entry_outside_the_addon_folder()
+    public async Task Installer_rejects_a_zip_entry_outside_the_addon_folder()
     {
         var root = NewDirectory();
         try
@@ -132,8 +132,8 @@ public sealed class AddonInstallerTests
             File.WriteAllBytes(zipPath, zip);
             var installer = new AddonInstaller(new HttpClient());
 
-            Assert.Throws<InvalidDataException>(
-                () => installer.InstallZipAsync(zipPath, Path.Combine(root, "plugins")).GetAwaiter().GetResult());
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => installer.InstallZipAsync(zipPath, Path.Combine(root, "plugins")));
 
             Assert.False(File.Exists(Path.Combine(root, "evil.txt")));
             Assert.False(Directory.Exists(Path.Combine(root, "plugins", "larik.test")));
@@ -215,3 +215,4 @@ public sealed class AddonInstallerTests
             });
     }
 }
+

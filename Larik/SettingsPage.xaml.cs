@@ -16,12 +16,15 @@ using Windows.Storage.Pickers;
 namespace Larik;
 
 /// <summary>
-/// Application settings: appearance, the snippet manager, add-ons and About. Snippet edits go
-/// through <see cref="SnippetLibrary"/> so the next keystroke sees them; add-on installs go through
+/// Application settings: appearance, the snippet manager, database drivers and About. Snippet edits go
+/// through <see cref="SnippetLibrary"/> so the next keystroke sees them; driver installs go through
 /// <see cref="Larik.Data.Addons.AddonInstaller"/> and take effect after a restart.
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
+    /// <summary>Opens the page on a given section; set by callers that deep-link from the shell.</summary>
+    public static string? InitialSection { get; set; }
+
     private readonly SnippetLibrary _snippets = SnippetLibrary.Current;
     private readonly ObservableCollection<SnippetRecord> _visible = [];
     private readonly HashSet<string> _editorDialects = new(StringComparer.OrdinalIgnoreCase);
@@ -80,6 +83,12 @@ public sealed partial class SettingsPage : Page
             BuildDialectChips();
         }
 
+        if (string.Equals(InitialSection, "drivers", StringComparison.Ordinal))
+        {
+            InitialSection = null;
+            SettingsNav.SelectedItem = AddonsNavItem;
+        }
+
         if (SettingsNav.SelectedItem is null)
         {
             SettingsNav.SelectedItem = SnippetsNavItem;
@@ -117,19 +126,19 @@ public sealed partial class SettingsPage : Page
         var tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag as string;
         var about = string.Equals(tag, "about", StringComparison.Ordinal);
         var appearance = string.Equals(tag, "appearance", StringComparison.Ordinal);
-        var addons = string.Equals(tag, "addons", StringComparison.Ordinal);
+        var drivers = string.Equals(tag, "drivers", StringComparison.Ordinal);
 
         AppearanceSection.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
-        SnippetsSection.Visibility = about || appearance || addons ? Visibility.Collapsed : Visibility.Visible;
+        SnippetsSection.Visibility = about || appearance || drivers ? Visibility.Collapsed : Visibility.Visible;
         AboutSection.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
-        AddonsSection.Visibility = addons ? Visibility.Visible : Visibility.Collapsed;
+        AddonsSection.Visibility = drivers ? Visibility.Visible : Visibility.Collapsed;
 
         if (appearance)
         {
             SyncThemeChoice();
         }
 
-        if (addons)
+        if (drivers)
         {
             _ = RefreshAddonsAsync();
         }
@@ -189,7 +198,7 @@ public sealed partial class SettingsPage : Page
         }
 
         SetAddonBusy(true);
-        SetAddonStatus("Checking for add-ons…");
+        SetAddonStatus("Checking for drivers…");
 
         try
         {
@@ -241,11 +250,11 @@ public sealed partial class SettingsPage : Page
 
             SetAddonStatus(indexError is null
                 ? $"{installed.Count} installed · {available.Count} available"
-                : $"Catalogue unavailable: {indexError}");
+                : $"Driver catalogue unavailable: {indexError}");
         }
         catch (Exception ex)
         {
-            SetAddonStatus($"Could not read add-ons: {ex.Message}", error: true);
+            SetAddonStatus($"Could not read drivers: {ex.Message}", error: true);
         }
         finally
         {
@@ -389,7 +398,7 @@ public sealed partial class SettingsPage : Page
 
         var enable = !installed.Enabled;
         if (!await ConfirmAsync(
-                enable ? "Enable add-on" : "Disable add-on",
+                enable ? "Enable driver" : "Disable driver",
                 $"{(enable ? "Enable" : "Disable")} {installed.Id}? Larik must restart for the change to take effect.",
                 enable ? "Enable" : "Disable"))
         {
@@ -402,7 +411,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            SetAddonStatus($"Could not change the add-on: {ex.Message}", error: true);
+            SetAddonStatus($"Could not change the driver: {ex.Message}", error: true);
             return;
         }
 
@@ -439,8 +448,8 @@ public sealed partial class SettingsPage : Page
         }
 
         if (!await ConfirmAsync(
-                "Remove add-on",
-                $"Remove {installed.Id} {installed.Version}? Workspaces keep their saved connection profiles; the provider is unavailable until it is installed again.",
+                "Remove driver",
+                $"Remove {installed.Id} {installed.Version}? Workspaces keep their saved connection profiles; the driver is unavailable until it is installed again.",
                 "Remove"))
         {
             return;
@@ -452,7 +461,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            SetAddonStatus($"Could not remove it: {ex.Message} Restart Larik and try again.", error: true);
+            SetAddonStatus($"Could not remove the driver: {ex.Message} Restart Larik and try again.", error: true);
             return;
         }
 
@@ -1024,3 +1033,4 @@ public sealed partial class SettingsPage : Page
         ContentBox.Focus(FocusState.Programmatic);
     }
 }
+
