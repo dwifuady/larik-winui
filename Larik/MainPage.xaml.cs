@@ -1838,7 +1838,16 @@ public sealed partial class MainPage : Page
             root.Children.Add(deleteSection);
         }
 
-        content = root;
+        // ContentDialog does not reliably scroll a tall body; keep the destructive action
+        // reachable by scrolling it inside our own viewport.
+        content = new ScrollViewer
+        {
+            Content = root,
+            MaxHeight = 540,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Auto,
+        };
 
         var deleteRequested = false;
         var dialog = new ContentDialog

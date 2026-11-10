@@ -292,6 +292,15 @@ function Click-Element {
     if ($matches.Count -eq 0) { throw "No element found matching '$Selector'." }
     Invoke-Ui @('click', $matches[0].selector) -Attempts 4 | Out-Null
 }
+# Buttons inside a dialog body can sit below the scroll fold; the Invoke pattern reaches them
+# without depending on screen coordinates.
+function Invoke-Element {
+    param([string]$Name)
+    Focus-App
+    $match = @((Find-Element $Name).matches | Where-Object { $_.type -eq 'Button' -and $_.isEnabled } | Select-Object -First 1)
+    if ($null -eq $match) { throw "No enabled button matches '$Name'." }
+    Invoke-Ui @('invoke', $match.selector) -Attempts 4 | Out-Null
+}
 # Result tabs with the same title can hold different sessions (a USE message vs PRINT), so select
 # them in turn until the expected content is on screen.
 function Click-ResultTabWithText {
@@ -664,7 +673,7 @@ try {
         Start-Sleep -Milliseconds 400
 
         Open-WorkspaceSettings 'Space 3'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
@@ -1711,7 +1720,15 @@ try {
         Wait-ForText 'Roll back the open transaction' 10
         Assert-True ((Find-Element 'Connected').matchCount -gt 0) 'the workspace disconnected with an open transaction'
 
-        Click-Element 'Roll back transaction'
+        # The status bar and the tooltip both mention "roll back … transaction", so target the
+        # actual enabled Button and prove the command ran (its status text changes).
+        $rollback = @((Find-Element 'Roll back transaction').matches |
+            Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+        Assert-True ($null -ne $rollback) 'the rollback button is missing'
+        Assert-True ($rollback.isEnabled) 'the rollback button is disabled'
+        Invoke-Ui @('invoke', $rollback.selector) -Attempts 3 | Out-Null
+        Wait-ForText 'Transaction rolled back' 8
+
         $deadline = (Get-Date).AddSeconds(8)
         while ((Get-Date) -lt $deadline -and (Find-Element '1 open transaction').matchCount -gt 0) {
             Start-Sleep -Milliseconds 200
@@ -1832,7 +1849,7 @@ try {
 
     Test-UI 'deleting the last workspace returns to onboarding' {
         Open-WorkspaceSettings 'Staging'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1200
@@ -1840,7 +1857,7 @@ try {
         Close-WorkspaceManager
 
         Open-WorkspaceSettings 'Local SQL Server'
-        Click-Element 'Delete workspace'
+        Invoke-Element 'Delete workspace'
         Wait-ForText 'Delete workspace?'
         Click-Element 'Delete'
         Start-Sleep -Milliseconds 1500
