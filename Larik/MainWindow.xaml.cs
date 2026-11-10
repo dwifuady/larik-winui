@@ -39,6 +39,10 @@ public sealed partial class MainWindow : Window
         RootFrame.Navigate(typeof(MainPage));
         var mainPage = RootFrame.Content as MainPage;
 
+        // The startup theme was already assigned, but the page's saved preference is authoritative
+        // (it also covers legacy state imported during this launch). Apply it before the window shows.
+        ThemeService.Attach(this, mainPage?.ViewModel.Theme);
+
         RestoreBounds(mainPage?.ViewModel.WindowBounds);
         TrackBounds(mainPage);
 

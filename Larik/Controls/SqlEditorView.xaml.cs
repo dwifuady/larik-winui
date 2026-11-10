@@ -26,6 +26,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private const double PopupWidth = 392;
     private const double PopupMaxHeight = 268;
 
+    private static readonly Brush PrimaryFallbackBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xF5, 0xF7));
+
     private bool _suppressEvents;
     private bool _skipCompletionUpdateOnce;
     private bool _applyingHighlight;
@@ -354,7 +356,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         range.CharacterFormat = format;
     }
 
-    private static Color TokenColor(QueryTokenKind? kind) =>
+    private Color TokenColor(QueryTokenKind? kind) =>
         ColorOf(kind switch
         {
             QueryTokenKind.Comment => "StudioSyntaxCommentBrush",
@@ -366,10 +368,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             _ => "StudioTextPrimaryBrush",
         });
 
-    private static Color ColorOf(string key) =>
-        Application.Current.Resources.TryGetValue(key, out var value) && value is SolidColorBrush brush
-            ? brush.Color
-            : Color.FromArgb(0xFF, 0xF5, 0xF5, 0xF7);
+    private Color ColorOf(string key) =>
+        ((SolidColorBrush)ThemeService.GetBrush(key, ActualTheme, PrimaryFallbackBrush)).Color;
 
     // ---------------------------------------------------------------- undo / redo
 

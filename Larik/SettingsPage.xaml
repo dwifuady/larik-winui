@@ -38,6 +38,11 @@
             SelectionChanged="SettingsNav_SelectionChanged">
 
             <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="AppearanceNavItem" Content="Appearance" Tag="appearance">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE790;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem x:Name="SnippetsNavItem" Content="Snippets" Tag="snippets">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE943;" />
@@ -51,6 +56,67 @@
             </NavigationView.MenuItems>
 
             <Grid Padding="24,12,24,20">
+
+                <!--  ============ APPEARANCE ============  -->
+                <ScrollViewer
+                    x:Name="AppearanceSection"
+                    VerticalScrollBarVisibility="Auto"
+                    Visibility="Collapsed">
+                    <StackPanel
+                        MaxWidth="680"
+                        HorizontalAlignment="Left"
+                        Spacing="14">
+                        <StackPanel Spacing="3">
+                            <TextBlock
+                                FontSize="20"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                Text="Appearance" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Text="Choose the theme for the studio. The choice is remembered on this device."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <Border
+                            Padding="18"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                        Text="Theme" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="System follows the Windows light and dark setting."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <RadioButtons
+                                    x:Name="ThemeChoice"
+                                    AutomationProperties.Name="Theme"
+                                    SelectionChanged="ThemeChoice_SelectionChanged">
+                                    <x:String>Use Windows setting</x:String>
+                                    <x:String>Light</x:String>
+                                    <x:String>Dark</x:String>
+                                </RadioButtons>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock
+                            FontSize="11"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="Larik redraws open tabs and results immediately; nothing needs a restart."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </ScrollViewer>
 
                 <!--  ============ SNIPPETS ============  -->
                 <Grid x:Name="SnippetsSection" RowSpacing="14">
