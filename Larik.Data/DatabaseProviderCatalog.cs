@@ -83,6 +83,40 @@ public static class DatabaseProviderCatalog
             errors: null,
             pluginDirectories);
 
+    /// <summary>
+    /// Adds providers from add-ons installed while the app is running. Existing ids win, so an
+    /// update to a loaded provider still needs a restart; a brand-new provider becomes usable now.
+    /// Returns only the providers that were not already in the catalogue.
+    /// </summary>
+    public static IReadOnlyList<IDatabaseProvider> AddSources(IEnumerable<ProviderSource> sources)
+    {
+        var existingIds = Providers
+            .Select(provider => provider.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        List<IDatabaseProvider> discovered = [];
+        foreach (var source in sources.DistinctBy(source => source.Assembly))
+        {
+            AddFromAssembly(source, discovered);
+        }
+
+        var fresh = discovered
+            .Where(provider => !existingIds.Contains(provider.Id))
+            .ToList();
+
+        if (fresh.Count > 0)
+        {
+            Providers = Providers
+                .Concat(fresh)
+                .GroupBy(provider => provider.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderBy(provider => provider.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        return fresh;
+    }
+
     private static void AddFromAssembly(ProviderSource source, List<IDatabaseProvider> providers)
     {
         Type[] types;

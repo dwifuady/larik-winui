@@ -54,7 +54,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
 
     public bool IsConnected => State == ConnectionState.Connected;
 
-    public string ConnectionActionLabel => IsConnected ? "Disconnect" : "Connect";
+    public string ConnectionActionLabel => Provider is null
+        ? "Install driver"
+        : IsConnected ? "Disconnect" : "Connect";
 
     public string StatusText => Provider is null
         ? "Driver not installed"
@@ -79,7 +81,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     public string? Identity => Provider?.DescribeIdentity(Profile);
 
     /// <summary>Status is colour AND text — never colour alone.</summary>
-    public string StatusLine => $"{Endpoint} · {StatusText}";
+    public string StatusLine => Provider is null
+        ? "Driver not installed"
+        : $"{Endpoint} · {StatusText}";
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
@@ -162,6 +166,37 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(Endpoint));
         OnPropertyChanged(nameof(Identity));
         OnPropertyChanged(nameof(StatusLine));
+    }
+
+    /// <summary>
+    /// Re-resolves the provider after a driver is installed while the app is running. Safe to call
+    /// repeatedly; does nothing when the provider was already there.
+    /// </summary>
+    public bool RefreshProvider()
+    {
+        var provider = DatabaseProviderCatalog.Find(ProviderId);
+        if (provider is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(provider, Provider))
+        {
+            return true;
+        }
+
+        Provider = provider;
+        SecretKeys = CaptureSecretKeys(provider);
+        OnPropertyChanged(nameof(Provider));
+        OnPropertyChanged(nameof(ProviderName));
+        OnPropertyChanged(nameof(Dialect));
+        OnPropertyChanged(nameof(EditorLanguage));
+        OnPropertyChanged(nameof(Endpoint));
+        OnPropertyChanged(nameof(Identity));
+        OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(StatusLine));
+        OnPropertyChanged(nameof(ConnectionActionLabel));
+        return true;
     }
 
     public async ValueTask DisposeAsync()

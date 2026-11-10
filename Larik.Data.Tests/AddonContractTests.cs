@@ -214,6 +214,55 @@ public sealed class AddonContractTests
         }
     }
 
+    [Fact]
+    public void Catalogue_appends_a_provider_loaded_after_startup()
+    {
+        var root = NewDirectory();
+        try
+        {
+            var versionDirectory = Path.Combine(root, "larik.fixture", "1.0.0");
+            Directory.CreateDirectory(versionDirectory);
+
+            var assemblyFileName = Path.GetFileName(typeof(FixtureProvider).Assembly.Location);
+            File.Copy(
+                typeof(FixtureProvider).Assembly.Location,
+                Path.Combine(versionDirectory, assemblyFileName));
+
+            File.WriteAllText(
+                Path.Combine(versionDirectory, "larik-addon.json"),
+                $$"""
+                {
+                  "id": "larik.fixture",
+                  "version": "1.0.0",
+                  "contract": ">=1.0 <2.0",
+                  "providerIds": ["fixture"],
+                  "entryAssembly": "{{assemblyFileName}}"
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(root, "larik.fixture", "current.json"),
+                """{ "version": "1.0.0" }""");
+
+            DatabaseProviderCatalog.Initialize(Array.Empty<ProviderSource>());
+            var scan = AddonLocator.Scan(root);
+
+            var added = DatabaseProviderCatalog.AddSources(scan.Sources);
+
+            Assert.Single(added);
+            Assert.Equal(FixtureProvider.IdValue, added[0].Id);
+            Assert.Contains(
+                DatabaseProviderCatalog.Providers,
+                provider => provider.Id == FixtureProvider.IdValue);
+
+            // The id is already loaded, so a second pass must not add a duplicate.
+            Assert.Empty(DatabaseProviderCatalog.AddSources(scan.Sources));
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
     private static void TryDelete(string directory)
     {
         try

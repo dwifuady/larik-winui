@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Larik.Data;
+using Larik.Data.Addons;
 using Larik.Editor;
 using Larik.Models;
 using Larik.Services;
@@ -57,6 +58,8 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+
+        ViewModel.DriverInstallRequested += ViewModel_DriverInstallRequested;
 
         // Settings is pushed onto the same frame; keep the shell (and its live session) alive.
         NavigationCacheMode = NavigationCacheMode.Required;
@@ -1443,6 +1446,156 @@ public sealed partial class MainPage : Page
         await ShowWorkspaceDialogAsync();
 
     /// <summary>
+    /// Installs a driver for a workspace whose provider is missing. No other dialog is open here,
+    /// so a small modal is enough; the workspace refreshes in place after it closes.
+    /// </summary>
+    private async Task<string?> ShowInstallDriverDialogAsync(string? providerId)
+    {
+        AddonIndex index;
+        try
+        {
+            index = await AddonCatalog.CreateIndexClient().FetchAsync(AddonCatalog.IndexLocation);
+        }
+        catch (Exception ex)
+        {
+            await ShowDriverMessageAsync("Couldn't reach the driver catalogue", ex.Message);
+            return null;
+        }
+
+        var entries = index.Addons
+            .Where(entry => entry.Matches(AddonCatalog.AppVersion, AddonCatalog.CurrentPlatform))
+            .Where(entry => providerId is null ||
+                entry.ProviderIds.Contains(providerId, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            await ShowDriverMessageAsync(
+                providerId is null ? "No drivers available" : "Driver not found",
+                providerId is null
+                    ? "The catalogue has no drivers for this version of Larik."
+                    : $"The catalogue has no installable driver for '{providerId}'.");
+            return null;
+        }
+
+        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var danger = StudioColors.Danger;
+
+        var picker = new ComboBox
+        {
+            ItemsSource = entries.Select(entry => $"{entry.Name} {entry.Version}").ToList(),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        AutomationProperties.SetName(picker, "Driver to install");
+
+        var summary = new TextBlock
+        {
+            Text = entries[0].Summary,
+            FontSize = 11,
+            Foreground = muted,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        var status = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = muted,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        var progress = new ProgressRing
+        {
+            Width = 16,
+            Height = 16,
+            IsActive = false,
+            Visibility = Visibility.Collapsed,
+        };
+
+        picker.SelectionChanged += (_, _) =>
+        {
+            var position = Math.Clamp(picker.SelectedIndex, 0, entries.Count - 1);
+            summary.Text = entries[position].Summary;
+        };
+
+        var body = new StackPanel { Spacing = 10, MinWidth = 340 };
+        body.Children.Add(picker);
+        body.Children.Add(summary);
+        body.Children.Add(progress);
+        body.Children.Add(status);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Install database driver",
+            XamlRoot = XamlRoot,
+            Content = body,
+            PrimaryButtonText = "Install",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        string? installedId = null;
+
+        dialog.PrimaryButtonClick += async (_, args) =>
+        {
+            var deferral = args.GetDeferral();
+            try
+            {
+                var entry = entries[Math.Clamp(picker.SelectedIndex, 0, entries.Count - 1)];
+
+                progress.IsActive = true;
+                progress.Visibility = Visibility.Visible;
+                dialog.IsPrimaryButtonEnabled = false;
+                dialog.CloseButtonText = string.Empty;
+                status.Foreground = muted;
+                status.Text = $"Installing {entry.Name} {entry.Version}…";
+
+                await AddonCatalog.CreateInstaller().InstallAsync(entry, LarikPaths.PluginsDirectory);
+                DriverRuntime.LoadInstalled(entry.Id);
+                installedId = entry.Id;
+                status.Text = $"{entry.Name} {entry.Version} installed.";
+            }
+            catch (Exception ex)
+            {
+                args.Cancel = true;
+                status.Foreground = danger;
+                status.Text = $"Install failed: {ex.Message}";
+                dialog.IsPrimaryButtonEnabled = true;
+                dialog.CloseButtonText = "Cancel";
+            }
+            finally
+            {
+                progress.IsActive = false;
+                progress.Visibility = Visibility.Collapsed;
+                deferral.Complete();
+            }
+        };
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary ? installedId : null;
+    }
+
+    private async Task ShowDriverMessageAsync(string title, string message) =>
+        await new ContentDialog
+        {
+            Title = title,
+            Content = message,
+            CloseButtonText = "Close",
+            XamlRoot = XamlRoot,
+        }.ShowAsync();
+
+    private async void ViewModel_DriverInstallRequested(
+        object? sender,
+        StudioViewModel.DriverInstallRequest request)
+    {
+        var installed = await ShowInstallDriverDialogAsync(request.ProviderId);
+        if (installed is null)
+        {
+            return;
+        }
+
+        ViewModel.RefreshProviderAvailability();
+    }
+
+    /// <summary>
     /// The workspace editor. A workspace is its name, colour and single connection, so one dialog
     /// covers all three. Create mode (no <paramref name="editing"/>) starts from a ready name and
     /// colour and creates nothing until confirmed; edit mode is the same form, prefilled. It is
@@ -1453,7 +1606,7 @@ public sealed partial class MainPage : Page
     {
         var ownerXamlRoot = ownerRoot ?? XamlRoot;
         var creating = editing is null;
-        var providers = DatabaseProviderCatalog.Providers;
+        var providers = DatabaseProviderCatalog.Providers.ToList();
         if (providers.Count == 0)
         {
             return;
@@ -1472,14 +1625,24 @@ public sealed partial class MainPage : Page
 
         var providerBox = new ComboBox
         {
-            ItemsSource = providers.Select(p => p.DisplayName).ToList(),
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
         AutomationProperties.SetName(providerBox, "Database");
 
         var providerId = connection?.ProviderId ?? DatabaseProviderCatalog.Default?.Id;
-        var current = providers.FirstOrDefault(provider => provider.Id == providerId) ?? providers[0];
-        providerBox.SelectedIndex = providers.ToList().IndexOf(current);
+
+        // The picker is rebuilt after a driver is installed while this dialog is open, so the user
+        // can choose the new engine without losing the workspace draft.
+        void RefreshProviderChoices(string? selectId = null)
+        {
+            providers = DatabaseProviderCatalog.Providers.ToList();
+            providerBox.ItemsSource = providers.Select(provider => provider.DisplayName).ToList();
+            var selected = providers.FirstOrDefault(provider => provider.Id == selectId)
+                ?? providers.FirstOrDefault();
+            providerBox.SelectedIndex = selected is null ? -1 : providers.IndexOf(selected);
+        }
+
+        RefreshProviderChoices(providerId);
 
         var primaryFields = new StackPanel { Spacing = 10 };
         var advancedFields = new StackPanel { Spacing = 10 };
@@ -1640,14 +1803,12 @@ public sealed partial class MainPage : Page
             return profile;
         }
 
-        ContentDialog? dialog = null;
-
         var providerGroup = new StackPanel { Spacing = 4 };
         providerGroup.Children.Add(new TextBlock { Text = "Database", FontSize = 11 });
         providerGroup.Children.Add(providerBox);
 
-        // The picker only lists installed drivers; the rare "my engine is missing" path lives here,
-        // where the user notices it, instead of requiring them to discover Settings first.
+        // The picker only lists installed drivers; the rare "my engine is missing" path expands in
+        // place, where the user notices it, instead of sending them to Settings and losing the draft.
         var installDriverLink = new HyperlinkButton
         {
             Content = "Install another database driver…",
@@ -1655,13 +1816,160 @@ public sealed partial class MainPage : Page
             Padding = new Thickness(0),
         };
         AutomationProperties.SetName(installDriverLink, "Install another database driver");
-        installDriverLink.Click += (_, _) =>
-        {
-            dialog?.Hide();
-            SettingsPage.InitialSection = "drivers";
-            Frame.Navigate(typeof(SettingsPage), ViewModel);
-        };
         providerGroup.Children.Add(installDriverLink);
+
+        var installEntries = new List<AddonIndexEntry>();
+        var installPicker = new ComboBox
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetName(installPicker, "Driver to install");
+
+        var installSummary = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = mutedBrush,
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
+        };
+
+        var installButton = new Button
+        {
+            Content = "Install",
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Visibility = Visibility.Collapsed,
+        };
+
+        var installProgress = new ProgressRing
+        {
+            Width = 16,
+            Height = 16,
+            IsActive = false,
+            Visibility = Visibility.Collapsed,
+        };
+
+        var installStatus = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = mutedBrush,
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
+        };
+
+        var installPanel = new StackPanel { Spacing = 6, Visibility = Visibility.Collapsed };
+        installPanel.Children.Add(installPicker);
+        installPanel.Children.Add(installSummary);
+        installPanel.Children.Add(installButton);
+        installPanel.Children.Add(installProgress);
+        installPanel.Children.Add(installStatus);
+        providerGroup.Children.Add(installPanel);
+
+        void ShowInstallStatus(string text, Brush brush)
+        {
+            installStatus.Text = text;
+            installStatus.Foreground = brush;
+            installStatus.Visibility = Visibility.Visible;
+        }
+
+        async Task LoadInstallChoicesAsync()
+        {
+            try
+            {
+                var index = await AddonCatalog.CreateIndexClient().FetchAsync(AddonCatalog.IndexLocation);
+                installEntries.Clear();
+                installEntries.AddRange(index.Addons.Where(entry =>
+                    entry.Matches(AddonCatalog.AppVersion, AddonCatalog.CurrentPlatform)));
+            }
+            catch (Exception ex)
+            {
+                ShowInstallStatus($"Could not reach the driver catalogue: {ex.Message}", dangerBrush);
+                return;
+            }
+
+            if (installEntries.Count == 0)
+            {
+                ShowInstallStatus("No drivers are available for this version of Larik.", mutedBrush);
+                return;
+            }
+
+            installPicker.ItemsSource = installEntries
+                .Select(entry => $"{entry.Name} {entry.Version}")
+                .ToList();
+            installPicker.SelectedIndex = 0;
+            installSummary.Text = installEntries[0].Summary;
+            installSummary.Visibility = Visibility.Visible;
+            installStatus.Visibility = Visibility.Collapsed;
+            installPicker.Visibility = Visibility.Visible;
+            installButton.Visibility = Visibility.Visible;
+        }
+
+        installPicker.SelectionChanged += (_, _) =>
+        {
+            if (installEntries.Count == 0)
+            {
+                return;
+            }
+
+            var position = Math.Clamp(installPicker.SelectedIndex, 0, installEntries.Count - 1);
+            installSummary.Text = installEntries[position].Summary;
+        };
+
+        installDriverLink.Click += async (_, _) =>
+        {
+            if (installPanel.Visibility == Visibility.Visible)
+            {
+                installPanel.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            installPanel.Visibility = Visibility.Visible;
+            if (installEntries.Count == 0)
+            {
+                await LoadInstallChoicesAsync();
+            }
+        };
+
+        installButton.Click += async (_, _) =>
+        {
+            if (installEntries.Count == 0)
+            {
+                return;
+            }
+
+            var entry = installEntries[Math.Clamp(installPicker.SelectedIndex, 0, installEntries.Count - 1)];
+
+            installButton.IsEnabled = false;
+            installPicker.IsEnabled = false;
+            installProgress.Visibility = Visibility.Visible;
+            installProgress.IsActive = true;
+            ShowInstallStatus($"Installing {entry.Name} {entry.Version}…", mutedBrush);
+
+            try
+            {
+                await AddonCatalog.CreateInstaller().InstallAsync(entry, LarikPaths.PluginsDirectory);
+                var added = DriverRuntime.LoadInstalled(entry.Id);
+                var installedProviderId = added.FirstOrDefault()?.Id ?? entry.ProviderIds.FirstOrDefault();
+                RefreshProviderChoices(installedProviderId);
+
+                installPanel.Visibility = Visibility.Collapsed;
+                status.Foreground = successBrush;
+                status.Text = added.Count > 0
+                    ? $"{entry.Name} is ready."
+                    : $"{entry.Name} updated. Restart Larik to use it.";
+            }
+            catch (Exception ex)
+            {
+                ShowInstallStatus($"Install failed: {ex.Message}", dangerBrush);
+            }
+            finally
+            {
+                installProgress.IsActive = false;
+                installProgress.Visibility = Visibility.Collapsed;
+                installButton.IsEnabled = true;
+                installPicker.IsEnabled = true;
+            }
+        };
 
         var body = new StackPanel { Spacing = 10 };
         body.Children.Add(primaryFields);
@@ -2049,7 +2357,7 @@ public sealed partial class MainPage : Page
         };
 
         var deleteRequested = false;
-        dialog = new ContentDialog
+        var dialog = new ContentDialog
         {
             Title = creating ? "New workspace" : "Workspace settings",
             XamlRoot = ownerXamlRoot,

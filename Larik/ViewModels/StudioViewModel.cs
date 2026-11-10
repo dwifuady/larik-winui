@@ -373,11 +373,28 @@ public partial class StudioViewModel : ObservableObject
     [RelayCommand]
     private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
 
+    /// <summary>
+    /// Raised when the active workspace cannot connect because its driver is not loaded. The page
+    /// owns the install dialog, so the view model only names the missing provider.
+    /// </summary>
+    public event EventHandler<DriverInstallRequest>? DriverInstallRequested;
+
+    /// <summary>A missing driver and the workspace that needs it.</summary>
+    public sealed record DriverInstallRequest(string ProviderId, SpaceViewModel Space);
+
     [RelayCommand]
     private async Task ToggleConnectionAsync()
     {
         if (ActiveSpace is null || IsBusy)
         {
+            return;
+        }
+
+        if (ActiveSpace.Connection.Provider is null)
+        {
+            DriverInstallRequested?.Invoke(
+                this,
+                new DriverInstallRequest(ActiveSpace.Connection.ProviderId, ActiveSpace));
             return;
         }
 
@@ -404,6 +421,22 @@ public partial class StudioViewModel : ObservableObject
         {
             await ConnectSpaceAsync(ActiveSpace);
         }
+    }
+
+    /// <summary>
+    /// Re-resolves missing providers after a driver is installed while the app is running. The
+    /// editor language and snippets follow the active space's connection.
+    /// </summary>
+    public void RefreshProviderAvailability()
+    {
+        foreach (var space in Spaces)
+        {
+            space.Connection.RefreshProvider();
+        }
+
+        OnPropertyChanged(nameof(ActiveLanguage));
+        OnPropertyChanged(nameof(Snippets));
+        OnPropertyChanged(nameof(ActiveSpace));
     }
 
     /// <summary>

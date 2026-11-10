@@ -1,9 +1,3 @@
-using Larik.Data;
-using Larik.Data.Addons;
-using Larik.Data.Demo;
-using Larik.Data.MongoDB;
-using Larik.Data.Postgres;
-using Larik.Data.SqlServer;
 using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -12,7 +6,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 
-// To learn more about WinUI, the WinUI project structure,
+// To learn more about the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
 
 namespace Larik;
@@ -44,12 +38,6 @@ public partial class App : Application
         WinRT.Interop.WindowNative.GetWindowHandle(Window);
 
     /// <summary>
-    /// Keeps the add-on load contexts and their assemblies alive for the process lifetime. They are
-    /// non-collectible, so an update is a new versioned folder plus a restart.
-    /// </summary>
-    private static AddonScan? Addons { get; set; }
-
-    /// <summary>
     /// Initializes the singleton application object.
     /// </summary>
     public App()
@@ -64,21 +52,9 @@ public partial class App : Application
         // frame, the caption buttons and Mica all open in the user's chosen theme.
         ThemeService.Initialize(new StudioStore().LoadThemePreference());
 
-        // Installed add-ons load next, each in its own context. Built-ins are passed explicitly;
-        // flat DLLs in either Plugins folder stay supported for the pre-add-on layout.
-        Addons = AddonLocator.Scan(LarikPaths.PluginsDirectory);
-
-        DatabaseProviderCatalog.Initialize(
-            [
-                new ProviderSource("built-in: Demo", typeof(DemoProvider).Assembly),
-                new ProviderSource("built-in: SQL Server", typeof(SqlServerProvider).Assembly),
-                new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
-                new ProviderSource("built-in: MongoDB", typeof(MongoProvider).Assembly),
-                .. Addons.Sources,
-            ],
-            Addons.Errors,
-            Path.Combine(AppContext.BaseDirectory, "Plugins"),
-            LarikPaths.PluginsDirectory);
+        // Builds the provider catalogue: built-ins plus installed add-ons. A newly installed
+        // add-on can be appended later; this is only the startup snapshot.
+        DriverRuntime.Initialize();
     }
 
     /// <summary>

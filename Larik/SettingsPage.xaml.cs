@@ -424,9 +424,12 @@ public sealed partial class SettingsPage : Page
         SetAddonBusy(true);
         SetAddonStatus($"Installing {entry.Name} {entry.Version}…");
 
+        var added = 0;
         try
         {
             await _addonInstaller.InstallAsync(entry, LarikPaths.PluginsDirectory);
+            added = DriverRuntime.LoadInstalled(entry.Id).Count;
+            _studio?.RefreshProviderAvailability();
         }
         catch (Exception ex)
         {
@@ -437,7 +440,9 @@ public sealed partial class SettingsPage : Page
 
         SetAddonBusy(false);
         await RefreshAddonsAsync();
-        SetAddonStatus($"{entry.Name} {entry.Version} installed. Restart Larik to use it.");
+        SetAddonStatus(added > 0
+            ? $"{entry.Name} {entry.Version} installed. It is ready to use."
+            : $"{entry.Name} {entry.Version} installed. Restart Larik to use it.");
     }
 
     private async Task RemoveAddonAsync(AddonRow row)
@@ -493,9 +498,12 @@ public sealed partial class SettingsPage : Page
         SetAddonBusy(true);
         SetAddonStatus($"Installing {file.Name}…");
 
+        var ready = false;
         try
         {
-            await _addonInstaller.InstallZipAsync(file.Path, LarikPaths.PluginsDirectory);
+            var installed = await _addonInstaller.InstallZipAsync(file.Path, LarikPaths.PluginsDirectory);
+            ready = DriverRuntime.LoadInstalled(installed.Id).Count > 0;
+            _studio?.RefreshProviderAvailability();
         }
         catch (Exception ex)
         {
@@ -506,7 +514,9 @@ public sealed partial class SettingsPage : Page
 
         SetAddonBusy(false);
         await RefreshAddonsAsync();
-        SetAddonStatus($"{file.Name} installed. Restart Larik to use it.");
+        SetAddonStatus(ready
+            ? $"{file.Name} installed. It is ready to use."
+            : $"{file.Name} installed. Restart Larik to use it.");
     }
 
     private void SetAddonBusy(bool busy)

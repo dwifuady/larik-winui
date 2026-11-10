@@ -1333,10 +1333,11 @@ try {
         Start-Sleep -Milliseconds 1000
         try {
             Assert-True ((Find-Element 'Workspace settings').matchCount -gt 0) 'the workspace editor did not open'
-            Assert-True ((Find-Element 'Database').matchCount -gt 0) 'database picker missing'
+            $databasePicker = @((Find-Element 'Database').matches | Where-Object { $_.type -eq 'ComboBox' } | Select-Object -First 1)
+            Assert-True ($null -ne $databasePicker) 'database picker missing'
             Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'provider settings not rendered'
             # Opening the picker proves the catalog listed every loaded provider.
-            Click-Element 'Database'
+            Invoke-Ui @('click', $databasePicker.selector) | Out-Null
             Start-Sleep -Milliseconds 600
             Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'providers not listed'
             Assert-True ((Find-Element 'PostgreSQL').matchCount -gt 0) 'the PostgreSQL provider was not listed'
@@ -1349,22 +1350,15 @@ try {
             Assert-True ((Find-Element 'Host').matchCount -gt 0) 'PostgreSQL settings did not render'
             Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the PostgreSQL password field is missing'
 
-            # The MongoDB provider is loaded too; its own declared settings drive the form, so the
-            # dialog proves the assembly registered without the shell knowing anything about Mongo.
-            Click-Element 'Database'
-            Start-Sleep -Milliseconds 600
-            Assert-True ((Find-Element 'MongoDB').matchCount -gt 0) 'the MongoDB provider was not listed'
-            $mongo = @((Find-Element 'MongoDB').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
-            Assert-True ($null -ne $mongo) 'the MongoDB provider item is missing'
-            Invoke-Ui @('click', $mongo.selector) | Out-Null
-            Start-Sleep -Milliseconds 700
-            Assert-True ((Find-Element 'Host').matchCount -gt 0) 'MongoDB settings did not render'
-            Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the MongoDB password field is missing'
+            # MongoDB is an add-on now: the built-in picker must not advertise it, and the dialog
+            # offers the install path instead.
+            Assert-True ((Find-Element 'MongoDB').matchCount -eq 0) 'MongoDB is still built in'
+            Assert-True ((Find-Element 'Install another database driver').matchCount -gt 0) 'the install-driver entry point is missing'
 
             # The SQL Server form is the tall one: Test must keep its result on screen, not
             # just in the automation tree below the visible part of the dialog. Pick it by name so
             # adding a provider never depends on the picker's order.
-            Click-Element 'Database'
+            Invoke-Ui @('click', $databasePicker.selector) | Out-Null
             Start-Sleep -Milliseconds 600
             $sqlServer = @((Find-Element 'SQL Server').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
             Assert-True ($null -ne $sqlServer) 'the SQL Server provider item is missing'
