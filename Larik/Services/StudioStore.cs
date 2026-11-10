@@ -238,7 +238,12 @@ public sealed class StudioStore
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
+            // A packaged app that opens with ReadWriteCreate creates a private copy even when the
+            // unvirtualized AppData file exists. ReadWrite lets the OS fall back to the existing
+            // file, so packaged and unpackaged launches can share one store.
+            Mode = File.Exists(DatabasePath)
+                ? SqliteOpenMode.ReadWrite
+                : SqliteOpenMode.ReadWriteCreate,
         }.ToString());
 
         connection.Open();
@@ -447,6 +452,19 @@ public sealed class StudioStore
         }
 
         state.Spaces = spaces;
+
+        // A saved active id can outlive the space it points at (an imported or partly reset store).
+        // Without this guard the shell opens on onboarding even though the spaces are still here.
+        if (spaces.Count == 0)
+        {
+            state.ActiveSpaceId = null;
+        }
+        else if (string.IsNullOrEmpty(state.ActiveSpaceId) ||
+                 spaces.All(space => !string.Equals(space.Id, state.ActiveSpaceId, StringComparison.Ordinal)))
+        {
+            state.ActiveSpaceId = spaces[0].Id;
+        }
+
         state.ArchivedTabs = ReadArchivedTabs(connection);
         return state;
     }
