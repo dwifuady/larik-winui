@@ -690,9 +690,60 @@ public sealed partial class MainPage : Page
         rename.Click += (_, _) => BeginInlineRename(tab, target);
         flyout.Items.Add(rename);
 
+        // The existing menu gains the two group entries; grouping never needs a new toolbar.
+        if (tab.Space.Groups.Count > 0 || tab.Group is not null)
+        {
+            var move = new MenuFlyoutSubItem
+            {
+                Text = "Move to group",
+                Icon = new FontIcon { Glyph = "\uE8B7" },
+            };
+
+            foreach (var group in tab.Space.Groups.Where(candidate => !ReferenceEquals(candidate, tab.Group)))
+            {
+                var destination = new MenuFlyoutItem
+                {
+                    Text = group.Name,
+                    Icon = new FontIcon { Glyph = group.IsPinned ? "\uE840" : "\uE8B7" },
+                };
+                destination.Click += (_, _) => ViewModel.MoveTabToGroup(tab, group);
+                move.Items.Add(destination);
+            }
+
+            if (tab.Group is not null)
+            {
+                var loose = new MenuFlyoutItem
+                {
+                    Text = "Loose tabs",
+                    Icon = new FontIcon { Glyph = "\uE8A9" },
+                };
+                loose.Click += (_, _) => ViewModel.MoveTabToGroup(tab, null);
+                move.Items.Add(loose);
+            }
+
+            if (move.Items.Count > 0)
+            {
+                flyout.Items.Add(move);
+            }
+        }
+
+        var newGroup = new MenuFlyoutItem
+        {
+            Text = "New group from tab",
+            Icon = new FontIcon { Glyph = "\uE8B7" },
+        };
+        newGroup.Click += (_, _) => ViewModel.NewGroupFromTab(tab);
+
+        if (tab.Group is null)
+        {
+            flyout.Items.Add(newGroup);
+        }
+
         var pin = new MenuFlyoutItem
         {
-            Text = tab.PinLabel,
+            Text = tab.Group is { } tabGroup
+                ? (tabGroup.IsPinned ? "Unpin group" : "Pin group")
+                : tab.PinLabel,
             Icon = new FontIcon { Glyph = "\uE840" },
         };
         pin.Click += (_, _) => ViewModel.TogglePin(tab);
@@ -718,6 +769,94 @@ public sealed partial class MainPage : Page
         }
 
         args.Handled = true;
+    }
+
+    /// <summary>Right-click a group: the same verbs as a tab, scoped to the set.</summary>
+    private void GroupHeader_ContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    {
+        if (sender is not FrameworkElement target || target.DataContext is not TabGroupViewModel group)
+        {
+            return;
+        }
+
+        var flyout = new MenuFlyout();
+
+        var rename = new MenuFlyoutItem
+        {
+            Text = "Rename group",
+            Icon = new FontIcon { Glyph = "\uE8AC" },
+        };
+        rename.Click += async (_, _) => await RenameGroupAsync(group);
+        flyout.Items.Add(rename);
+
+        var collapse = new MenuFlyoutItem
+        {
+            Text = group.IsExpanded ? "Collapse group" : "Expand group",
+            Icon = new FontIcon { Glyph = group.IsExpanded ? "\uE70D" : "\uE76C" },
+        };
+        collapse.Click += (_, _) => ViewModel.ToggleGroupExpanded(group);
+        flyout.Items.Add(collapse);
+
+        var pin = new MenuFlyoutItem
+        {
+            Text = group.PinLabel,
+            Icon = new FontIcon { Glyph = "\uE840" },
+        };
+        pin.Click += (_, _) => ViewModel.ToggleGroupPin(group);
+        flyout.Items.Add(pin);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var ungroup = new MenuFlyoutItem
+        {
+            Text = "Ungroup",
+            Icon = new FontIcon { Glyph = "\uE8A9" },
+        };
+        ungroup.Click += (_, _) => ViewModel.Ungroup(group);
+        flyout.Items.Add(ungroup);
+
+        if (args.TryGetPosition(target, out var position))
+        {
+            flyout.ShowAt(target, position);
+        }
+        else
+        {
+            flyout.ShowAt(target);
+        }
+
+        args.Handled = true;
+    }
+
+    /// <summary>Group names are short; a dialog is less machinery than an inline editor in a header row.</summary>
+    private async Task RenameGroupAsync(TabGroupViewModel group)
+    {
+        var box = new TextBox
+        {
+            Text = group.Name,
+            SelectionStart = group.Name.Length,
+            MinWidth = 280,
+        };
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Rename group",
+            Content = box,
+            DefaultButton = ContentDialogButton.Primary,
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+        };
+
+        dialog.Opened += (_, _) =>
+        {
+            box.Focus(FocusState.Programmatic);
+            box.SelectAll();
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            ViewModel.RenameGroup(group, box.Text);
+        }
     }
 
     /// <summary>Double-clicking a tab title is the quick path to renaming it in place.</summary>
@@ -893,11 +1032,34 @@ public sealed partial class MainPage : Page
 
     /// <summary>The ListView already reordered the rail mirror; persist the same order on the space.</summary>
     private void TabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
-        ViewModel.SyncTabOrder();
+        ViewModel.SyncRailOrder(pinnedBand: false);
 
-    /// <summary>Pinned and normal sections share the same persisted order (pinned first).</summary>
+    /// <summary>Pinned and normal sections share the same model; only the band differs.</summary>
     private void PinnedTabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
-        ViewModel.SyncTabOrder();
+        ViewModel.SyncRailOrder(pinnedBand: true);
+
+    /// <summary>
+    /// Headers are not draggable. A tab crossing one during a reorder is how it joins that group,
+    /// but dragging the header itself would detach the rows from their names.
+    /// </summary>
+    private void RailList_DragItemsStarting(object sender, DragItemsStartingEventArgs args)
+    {
+        if (args.Items.Any(item => item is TabGroupViewModel))
+        {
+            args.Cancel = true;
+        }
+    }
+
+    private void GroupHeader_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: TabGroupViewModel group })
+        {
+            ViewModel.ToggleGroupExpanded(group);
+        }
+    }
+
+    private void GroupByDatabase_Click(object sender, RoutedEventArgs e) =>
+        ViewModel.GroupByDatabaseCommand.Execute(null);
 
     /// <summary>The icons at the bottom of the rail switch workspaces, like Arc's space indicator.</summary>
     private void WorkspaceIndicator_Click(object sender, RoutedEventArgs e)

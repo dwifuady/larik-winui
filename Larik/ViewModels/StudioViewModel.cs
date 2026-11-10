@@ -16,6 +16,7 @@ public partial class StudioViewModel : ObservableObject
     private readonly SnippetLibrary _snippets = SnippetLibrary.Current;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveTimer;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _archiveTimer;
+    private List<TabGroupViewModel> _lastGrouping = [];
     private int _queryCounter;
     private IReadOnlyList<TableSchema> _schema = [];
     private IReadOnlyList<RoutineSchema> _routines = [];
@@ -114,17 +115,37 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Tabs of the active space. Mutated in place so the ListView keeps its identity.</summary>
     public ObservableCollection<TabViewModel> Tabs { get; } = [];
 
-    /// <summary>Pinned tabs of the active space, rendered above the TABS header.</summary>
-    public ObservableCollection<TabViewModel> PinnedTabs { get; } = [];
+    /// <summary>
+    /// The pinned band: pinned group headers and their tabs, then loose pinned tabs. Items are
+    /// <see cref="TabGroupViewModel"/> or <see cref="TabViewModel"/>; the rail's template selector
+    /// draws each one.
+    /// </summary>
+    public ObservableCollection<object> PinnedRail { get; } = [];
 
-    /// <summary>Unpinned tabs of the active space, rendered below the new-tab row.</summary>
-    public ObservableCollection<TabViewModel> UnpinnedTabs { get; } = [];
+    /// <summary>The TABS band: unpinned group headers and their tabs, then loose tabs.</summary>
+    public ObservableCollection<object> UnpinnedRail { get; } = [];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PinnedTabsVisibility))]
     public partial bool HasPinnedTabs { get; set; }
 
+    /// <summary>Shown only when at least two tabs share a database and are not grouped yet.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanGroupByDatabaseVisibility))]
+    public partial bool CanGroupByDatabase { get; set; }
+
+    /// <summary>Undo stays available until the next rail action, not on a timer.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UndoGroupingVisibility))]
+    public partial bool CanUndoGrouping { get; set; }
+
     public Visibility PinnedTabsVisibility => HasPinnedTabs ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility CanGroupByDatabaseVisibility =>
+        CanGroupByDatabase ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility UndoGroupingVisibility =>
+        CanUndoGrouping ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Result tabs of the active query tab.</summary>
     public ObservableCollection<ResultSetViewModel> Results { get; } = [];
@@ -410,37 +431,329 @@ public partial class StudioViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// Pinning acts on what the user right-clicked: a loose tab, or the group a tab belongs to.
+    /// A pinned group is the folder form, so the whole set moves band together.
+    /// </summary>
     public void TogglePin(TabViewModel tab)
     {
+        if (tab.Group is { } grouped)
+        {
+            ToggleGroupPin(grouped);
+            return;
+        }
+
         var space = tab.Space;
-        var current = space.Tabs.IndexOf(tab);
-        if (current < 0)
+        if (space.Tabs.IndexOf(tab) < 0)
         {
             return;
         }
 
-        if (!tab.IsPinned)
-        {
-            tab.IsPinned = true;
-            space.Tabs.Move(current, 0);
-            StatusText = $"Pinned {tab.Title}";
-        }
-        else
-        {
-            tab.IsPinned = false;
-            var target = space.Tabs.Count(candidate => candidate.IsPinned);
-            space.Tabs.Move(current, Math.Clamp(target, 0, space.Tabs.Count - 1));
-            StatusText = $"Unpinned {tab.Title}";
-        }
-
+        ClearGroupUndo();
+        tab.IsPinned = !tab.IsPinned;
         tab.LastAccessedAt = DateTimeOffset.UtcNow;
+
+        // The rail puts pinned tabs first, so the persisted order follows the same rule.
+        RebuildTabOrder(space);
         if (ReferenceEquals(space, ActiveSpace))
         {
-            RefreshTabSections();
+            RefreshTabRail();
+        }
+
+        StatusText = tab.IsPinned ? $"Pinned {tab.Title}" : $"Unpinned {tab.Title}";
+        ScheduleSave();
+    }
+
+    // ---------------------------------------------------------------- groups
+
+    /// <summary>
+    /// Creates one group per database shared by at least two loose tabs. Existing tab order is
+    /// preserved; only headers appear, so nothing jumps while the user is working.
+    /// </summary>
+    [RelayCommand]
+    private void GroupByDatabase()
+    {
+        if (ActiveSpace is not { } space)
+        {
+            return;
+        }
+
+        var taken = space.Groups
+            .Select(group => group.Database)
+            .Where(database => database is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var buckets = space.Tabs
+            .Where(tab => !tab.IsPinned
+                && tab.Group is null
+                && !string.IsNullOrWhiteSpace(tab.Database)
+                && !taken.Contains(tab.Database))
+            .GroupBy(tab => tab.Database, StringComparer.OrdinalIgnoreCase)
+            .Where(bucket => bucket.Count() >= 2)
+            .ToList();
+
+        if (buckets.Count == 0)
+        {
+            StatusText = "Nothing to group: tabs need to share a database";
+            return;
+        }
+
+        ClearGroupUndo();
+        _lastGrouping = [];
+        var colorOffset = space.Groups.Count;
+
+        foreach (var bucket in buckets)
+        {
+            var group = new TabGroupViewModel(
+                Guid.NewGuid().ToString("n"),
+                bucket.Key,
+                NextGroupColor(colorOffset++),
+                isPinned: false,
+                database: bucket.Key)
+            {
+                // The working set stays open; the rest recede.
+                IsExpanded = bucket.Contains(ActiveTab),
+            };
+
+            foreach (var tab in bucket)
+            {
+                AssignTab(tab, group);
+            }
+
+            space.Groups.Add(group);
+            _lastGrouping.Add(group);
+        }
+
+        RebuildTabOrder(space);
+        RefreshTabRail();
+        EnableGroupUndo();
+        ScheduleSave();
+
+        var count = buckets.Sum(bucket => bucket.Count());
+        StatusText = $"Grouped {count} tabs by database";
+    }
+
+    /// <summary>Removes the groups the last "Group by database" action created.</summary>
+    [RelayCommand]
+    private void UndoGrouping()
+    {
+        if (ActiveSpace is not { } space || _lastGrouping.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var group in _lastGrouping.Where(space.Groups.Contains).ToList())
+        {
+            foreach (var tab in group.Tabs.ToList())
+            {
+                tab.Group = null;
+                tab.IsPinned = false;
+                tab.NotifyGroupMembershipChanged();
+            }
+
+            group.Tabs.Clear();
+            space.Groups.Remove(group);
+        }
+
+        _lastGrouping = [];
+        ClearGroupUndo();
+        RebuildTabOrder(space);
+        RefreshTabRail();
+        ScheduleSave();
+        StatusText = "Grouping undone";
+    }
+
+    public void ToggleGroupExpanded(TabGroupViewModel group)
+    {
+        group.IsExpanded = !group.IsExpanded;
+        RefreshTabRail();
+        ScheduleSave();
+    }
+
+    public void ToggleGroupPin(TabGroupViewModel group)
+    {
+        var space = group.Tabs.FirstOrDefault()?.Space ?? ActiveSpace;
+        ClearGroupUndo();
+        _lastGrouping = [];
+        group.IsPinned = !group.IsPinned;
+
+        foreach (var tab in group.Tabs)
+        {
+            // A grouped tab is protected by its group's pin, never by its own.
+            tab.IsPinned = false;
+            tab.NotifyGroupMembershipChanged();
+        }
+
+        if (space is not null)
+        {
+            RebuildTabOrder(space);
+        }
+
+        RefreshTabRail();
+        ScheduleSave();
+        StatusText = group.IsPinned
+            ? $"Pinned group {group.Name}"
+            : $"Unpinned group {group.Name}";
+    }
+
+    public bool RenameGroup(TabGroupViewModel group, string name)
+    {
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0 || string.Equals(trimmed, group.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        group.Name = trimmed;
+        StatusText = $"Renamed group to {trimmed}";
+        ScheduleSave();
+        return true;
+    }
+
+    /// <summary>Creates a group around one tab. A pinned tab therefore becomes a pinned folder.</summary>
+    public void NewGroupFromTab(TabViewModel tab)
+    {
+        var space = tab.Space;
+        ClearGroupUndo();
+        _lastGrouping = [];
+        var name = !string.IsNullOrWhiteSpace(tab.Database) ? tab.Database : "New group";
+
+        var group = new TabGroupViewModel(
+            Guid.NewGuid().ToString("n"),
+            name,
+            NextGroupColor(space.Groups.Count),
+            isPinned: tab.IsPinned,
+            database: string.IsNullOrWhiteSpace(tab.Database) ? null : tab.Database)
+        {
+            IsExpanded = true,
+        };
+
+        AssignTab(tab, group);
+        space.Groups.Add(group);
+        RebuildTabOrder(space);
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabRail();
         }
 
         ScheduleSave();
+        StatusText = $"Created group {name}";
     }
+
+    /// <summary>Moves a tab into a group, or to the loose tabs when <paramref name="target"/> is null.</summary>
+    public void MoveTabToGroup(TabViewModel tab, TabGroupViewModel? target)
+    {
+        if (ReferenceEquals(tab.Group, target))
+        {
+            return;
+        }
+
+        ClearGroupUndo();
+        _lastGrouping = [];
+        var space = tab.Space;
+        var wasPinned = tab.Group?.IsPinned ?? tab.IsPinned;
+
+        if (target is null)
+        {
+            tab.Group?.Tabs.Remove(tab);
+            tab.Group = null;
+
+            // Keep the tab in the band it was already in; ungrouping should not teleport it.
+            tab.IsPinned = wasPinned;
+            tab.NotifyGroupMembershipChanged();
+        }
+        else
+        {
+            AssignTab(tab, target);
+            target.IsExpanded = true;
+        }
+
+        PruneEmptyGroups(space);
+        RebuildTabOrder(space);
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabRail();
+        }
+
+        ScheduleSave();
+        StatusText = target is null
+            ? $"Moved {tab.Title} to loose tabs"
+            : $"Moved {tab.Title} to {target.Name}";
+    }
+
+    /// <summary>Dissolves a group; its tabs stay where they are as loose tabs in the same band.</summary>
+    public void Ungroup(TabGroupViewModel group)
+    {
+        var space = group.Tabs.FirstOrDefault()?.Space ?? ActiveSpace;
+        if (space is null)
+        {
+            return;
+        }
+
+        var name = group.Name;
+        var pinned = group.IsPinned;
+        var tabs = group.Tabs.ToList();
+
+        ClearGroupUndo();
+        _lastGrouping = [];
+
+        foreach (var tab in tabs)
+        {
+            tab.Group = null;
+            tab.IsPinned = pinned;
+            tab.NotifyGroupMembershipChanged();
+        }
+
+        group.Tabs.Clear();
+        space.Groups.Remove(group);
+        _lastGrouping.Remove(group);
+
+        RebuildTabOrder(space);
+        if (ReferenceEquals(space, ActiveSpace))
+        {
+            RefreshTabRail();
+        }
+
+        ScheduleSave();
+        StatusText = $"Ungrouped {name}";
+    }
+
+    private void AssignTab(TabViewModel tab, TabGroupViewModel group)
+    {
+        if (ReferenceEquals(tab.Group, group))
+        {
+            return;
+        }
+
+        tab.Group?.Tabs.Remove(tab);
+        if (!group.Tabs.Contains(tab))
+        {
+            group.Tabs.Add(tab);
+        }
+
+        tab.Group = group;
+        tab.IsPinned = false;
+        tab.NotifyGroupMembershipChanged();
+    }
+
+    private static void PruneEmptyGroups(SpaceViewModel space)
+    {
+        foreach (var empty in space.Groups.Where(group => group.Tabs.Count == 0).ToList())
+        {
+            space.Groups.Remove(empty);
+        }
+    }
+
+    private static string NextGroupColor(int index) =>
+        StudioColors.Palette[Math.Abs(index) % StudioColors.Palette.Length];
+
+    /// <summary>
+    /// Undo stays available until the next rail action. A timer would make the one way back from
+    /// grouping disappear while the user is still reading the result.
+    /// </summary>
+    private void EnableGroupUndo() => CanUndoGrouping = true;
+
+    private void ClearGroupUndo() => CanUndoGrouping = false;
 
     /// <summary>
     /// Moves a tab out of its workspace into the archive. Auto-archive always leaves one tab in
@@ -465,6 +778,8 @@ public partial class StudioViewModel : ObservableObject
             return false;
         }
 
+        ClearGroupUndo();
+        _lastGrouping = [];
         var wasActive = ReferenceEquals(ActiveTab, tab);
 
         // Closing/archiving disposes the tab's own server session. CloseTabAsync already awaited
@@ -481,8 +796,9 @@ public partial class StudioViewModel : ObservableObject
             tab.Title,
             tab.Database,
             tab.Content,
-            tab.IsPinned,
-            DateTimeOffset.UtcNow);
+            tab.IsPinned || tab.Group?.IsPinned == true,
+            DateTimeOffset.UtcNow,
+            tab.Group?.Name);
 
         ArchivedTabs.Insert(0, entry);
         if (ReferenceEquals(space.LastActiveTab, tab))
@@ -490,11 +806,14 @@ public partial class StudioViewModel : ObservableObject
             space.LastActiveTab = null;
         }
 
+        tab.Group?.Tabs.Remove(tab);
+        tab.Group = null;
         space.Tabs.Remove(tab);
+        RebuildTabOrder(space);
 
         if (ReferenceEquals(space, ActiveSpace))
         {
-            RefreshTabSections();
+            RefreshTabRail();
         }
 
         if (wasActive && ReferenceEquals(space, ActiveSpace) && space.Tabs.Count > 0)
@@ -520,6 +839,9 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
+        ClearGroupUndo();
+        _lastGrouping = [];
+
         var space = Spaces.FirstOrDefault(candidate => candidate.Id == archived.SpaceId)
             ?? ActiveSpace
             ?? Spaces.FirstOrDefault();
@@ -541,12 +863,34 @@ public partial class StudioViewModel : ObservableObject
             LastAccessedAt = DateTimeOffset.UtcNow,
         };
 
-        var index = archived.IsPinned ? 0 : space.Tabs.Count(candidate => candidate.IsPinned);
-        space.Tabs.Insert(index, tab);
+        // A group with the same name (and band) is the remembered home; otherwise the tab comes
+        // back as a loose tab, still pinned if it was.
+        var group = string.IsNullOrWhiteSpace(archived.GroupName)
+            ? null
+            : space.Groups.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, archived.GroupName, StringComparison.OrdinalIgnoreCase)
+                && candidate.IsPinned == archived.IsPinned)
+                ?? space.Groups.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, archived.GroupName, StringComparison.OrdinalIgnoreCase));
+
+        if (group is not null)
+        {
+            tab.IsPinned = false;
+            tab.Group = group;
+            group.Tabs.Add(tab);
+            group.IsExpanded = true;
+            space.Tabs.Add(tab);
+        }
+        else
+        {
+            space.Tabs.Insert(archived.IsPinned ? 0 : LooseInsertIndex(space), tab);
+        }
+
+        RebuildTabOrder(space);
 
         if (ReferenceEquals(space, ActiveSpace))
         {
-            RefreshTabSections();
+            RefreshTabRail();
             SelectTab(tab);
         }
 
@@ -604,6 +948,7 @@ public partial class StudioViewModel : ObservableObject
                 }
 
                 if (tab.IsPinned
+                    || tab.Group?.IsPinned == true
                     || ReferenceEquals(tab, ActiveTab)
                     || tab.LastAccessedAt > cutoff)
                 {
@@ -680,6 +1025,7 @@ public partial class StudioViewModel : ObservableObject
     public TabViewModel CreateTab(string? databaseName)
     {
         var space = ActiveSpace ?? throw new InvalidOperationException("No active workspace.");
+        ClearGroupUndo();
 
         var tab = new TabViewModel(
             Guid.NewGuid().ToString("n"),
@@ -688,11 +1034,31 @@ public partial class StudioViewModel : ObservableObject
             space,
             string.Empty);
 
-        // A new tab opens above the other unpinned tabs, like Arc's new-tab row.
-        space.Tabs.Insert(space.Tabs.Count(existing => existing.IsPinned), tab);
+        // After "Group by database", a tab opened on that database lands in its group; the group
+        // expands so the new tab is visible instead of hidden inside a collapsed header.
+        var group = string.IsNullOrWhiteSpace(databaseName)
+            ? null
+            : space.Groups.FirstOrDefault(candidate =>
+                !string.IsNullOrWhiteSpace(candidate.Database)
+                && string.Equals(candidate.Database, databaseName, StringComparison.OrdinalIgnoreCase));
+
+        if (group is not null)
+        {
+            tab.Group = group;
+            group.Tabs.Add(tab);
+            group.IsExpanded = true;
+            space.Tabs.Add(tab);
+        }
+        else
+        {
+            // A new tab opens above the other loose tabs, like Arc's new-tab row.
+            space.Tabs.Insert(LooseInsertIndex(space), tab);
+        }
+
+        RebuildTabOrder(space);
         if (ReferenceEquals(space, ActiveSpace))
         {
-            RefreshTabSections();
+            RefreshTabRail();
         }
 
         SelectTab(tab);
@@ -824,8 +1190,12 @@ public partial class StudioViewModel : ObservableObject
         ActiveSpace = null;
         ActiveTab = null;
         Tabs.Clear();
-        PinnedTabs.Clear();
-        UnpinnedTabs.Clear();
+        PinnedRail.Clear();
+        UnpinnedRail.Clear();
+        HasPinnedTabs = false;
+        CanGroupByDatabase = false;
+        CanUndoGrouping = false;
+        _lastGrouping = [];
         Results.Clear();
         LastResult = null;
         ResultMessage = string.Empty;
@@ -1345,7 +1715,10 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveSpace = space;
 
-        RefreshTabSections();
+        // An undo belongs to the workspace where the grouping happened.
+        _lastGrouping = [];
+        ClearGroupUndo();
+        RefreshTabRail();
 
         var target = tab ?? space.LastActiveTab ?? space.Tabs.FirstOrDefault();
         SelectTab(target);
@@ -1533,6 +1906,13 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
+        // Selecting a tab must never leave it hidden inside a collapsed group.
+        if (tab.Group is { IsExpanded: false } collapsed)
+        {
+            collapsed.IsExpanded = true;
+            RefreshTabRail();
+        }
+
         foreach (var candidate in Tabs)
         {
             candidate.IsActive = candidate == tab;
@@ -1624,7 +2004,7 @@ public partial class StudioViewModel : ObservableObject
             space.Tabs.Insert(0, replacement);
             if (ReferenceEquals(space, ActiveSpace))
             {
-                RefreshTabSections();
+                RefreshTabRail();
                 SelectTab(replacement);
             }
         }
@@ -1632,59 +2012,126 @@ public partial class StudioViewModel : ObservableObject
         StatusText = $"Closed {tab.Title} · moved to archive";
     }
 
-    /// <summary>Rebuilds the pinned and unpinned rail sections from the active space.</summary>
-    private void RefreshTabSections()
+    /// <summary>
+    /// Rebuilds the two rail bands from the active space. A group's header is followed by its
+    /// tabs only while the group is expanded; collapsed groups contribute one row.
+    /// </summary>
+    private void RefreshTabRail()
     {
         Tabs.Clear();
-        PinnedTabs.Clear();
-        UnpinnedTabs.Clear();
+        PinnedRail.Clear();
+        UnpinnedRail.Clear();
 
         if (ActiveSpace is { } space)
         {
             foreach (var tab in space.Tabs)
             {
                 Tabs.Add(tab);
-                (tab.IsPinned ? PinnedTabs : UnpinnedTabs).Add(tab);
             }
-        }
 
-        HasPinnedTabs = PinnedTabs.Count > 0;
-    }
-
-    /// <summary>Moves every pinned tab to the front, preserving their relative order.</summary>
-    private static void NormalizePinnedOrder(SpaceViewModel space)
-    {
-        var target = 0;
-        foreach (var tab in space.Tabs.Where(candidate => candidate.IsPinned).ToList())
-        {
-            var current = space.Tabs.IndexOf(tab);
-            if (current != target)
+            foreach (var group in space.Groups.Where(candidate => candidate.IsPinned))
             {
-                space.Tabs.Move(current, target);
+                PinnedRail.Add(group);
+                if (group.IsExpanded)
+                {
+                    foreach (var tab in group.Tabs)
+                    {
+                        PinnedRail.Add(tab);
+                    }
+                }
             }
 
-            target++;
-        }
-    }
+            foreach (var tab in space.Tabs.Where(tab => tab.IsPinned && tab.Group is null))
+            {
+                PinnedRail.Add(tab);
+            }
 
-    /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
-    public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
+            foreach (var group in space.Groups.Where(candidate => !candidate.IsPinned))
+            {
+                UnpinnedRail.Add(group);
+                if (group.IsExpanded)
+                {
+                    foreach (var tab in group.Tabs)
+                    {
+                        UnpinnedRail.Add(tab);
+                    }
+                }
+            }
+
+            foreach (var tab in space.Tabs.Where(tab => !tab.IsPinned && tab.Group is null))
+            {
+                UnpinnedRail.Add(tab);
+            }
+
+            CanGroupByDatabase = HasUngroupedDatabaseCluster(space);
+        }
+        else
+        {
+            CanGroupByDatabase = false;
+        }
+
+        HasPinnedTabs = PinnedRail.Count > 0;
+    }
 
     /// <summary>
-    /// The rail's two ListViews own the drag gesture and reorder their section. Rebuild the
-    /// persisted order as pinned section + unpinned section, without disturbing the lists.
+    /// Persisted order is the visual order: pinned groups, loose pinned tabs, unpinned groups,
+    /// loose unpinned tabs. Every band is represented, so collapsing a group never loses tabs.
     /// </summary>
-    public void SyncTabOrder()
+    private static void RebuildTabOrder(
+        SpaceViewModel space,
+        IReadOnlyList<TabViewModel>? pinnedLooseOrder = null,
+        IReadOnlyList<TabViewModel>? unpinnedLooseOrder = null)
     {
-        if (ActiveSpace is not { } space)
+        PruneEmptyGroups(space);
+
+        var ordered = new List<TabViewModel>();
+        var seen = new HashSet<TabViewModel>();
+
+        void Take(TabViewModel tab)
         {
-            return;
+            if (seen.Add(tab))
+            {
+                ordered.Add(tab);
+            }
         }
 
-        var ordered = PinnedTabs.Concat(UnpinnedTabs).ToList();
-        if (ordered.Count != space.Tabs.Count)
+        foreach (var group in space.Groups.Where(candidate => candidate.IsPinned))
         {
-            return;
+            foreach (var tab in group.Tabs)
+            {
+                Take(tab);
+            }
+        }
+
+        // A drag reorders only the rows it can see; collapsed members keep their relative order.
+        foreach (var tab in pinnedLooseOrder
+            ?? space.Tabs.Where(tab => tab.IsPinned && tab.Group is null).ToList())
+        {
+            Take(tab);
+        }
+
+        foreach (var group in space.Groups.Where(candidate => !candidate.IsPinned))
+        {
+            foreach (var tab in group.Tabs)
+            {
+                Take(tab);
+            }
+        }
+
+        foreach (var tab in unpinnedLooseOrder
+            ?? space.Tabs.Where(tab => !tab.IsPinned && tab.Group is null).ToList())
+        {
+            Take(tab);
+        }
+
+        // A tab whose group vanished is loose, not invisible.
+        foreach (var tab in space.Tabs)
+        {
+            if (seen.Add(tab))
+            {
+                tab.Group = null;
+                ordered.Add(tab);
+            }
         }
 
         for (var target = 0; target < ordered.Count; target++)
@@ -1695,15 +2142,139 @@ public partial class StudioViewModel : ObservableObject
                 space.Tabs.Move(current, target);
             }
         }
+    }
 
-        // The sections already reflect the drag; only the full mirror needs rebuilding.
-        Tabs.Clear();
-        foreach (var tab in ordered)
+    /// <summary>Index where a loose tab belongs: top of the loose section, before older loose tabs.</summary>
+    private static int LooseInsertIndex(SpaceViewModel space)
+    {
+        var firstLoose = space.Tabs.FirstOrDefault(tab => !tab.IsPinned && tab.Group is null);
+        return firstLoose is null ? space.Tabs.Count : space.Tabs.IndexOf(firstLoose);
+    }
+
+    /// <summary>True when grouping would create at least one group.</summary>
+    private static bool HasUngroupedDatabaseCluster(SpaceViewModel space)
+    {
+        var grouped = space.Groups
+            .Select(group => group.Database)
+            .Where(database => database is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return space.Tabs
+            .Where(tab => !tab.IsPinned
+                && tab.Group is null
+                && !string.IsNullOrWhiteSpace(tab.Database)
+                && !grouped.Contains(tab.Database))
+            .GroupBy(tab => tab.Database, StringComparer.OrdinalIgnoreCase)
+            .Any(bucket => bucket.Count() >= 2);
+    }
+
+    /// <summary>Status-bar caret readout, reported by the editor surface after every move.</summary>
+    public void SetCaret(int line, int column) => CaretText = $"Ln {line}, Col {column}";
+
+    /// <summary>
+    /// A rail ListView reordered its band. Rebuild membership from where each row landed: a tab
+    /// under a header joins that group, and a tab without one becomes loose in that band.
+    /// </summary>
+    public void SyncRailOrder(bool pinnedBand)
+    {
+        if (ActiveSpace is not { } space)
         {
-            Tabs.Add(tab);
+            return;
         }
 
+        ClearGroupUndo();
+        _lastGrouping = [];
+        var rail = pinnedBand ? PinnedRail : UnpinnedRail;
+        TabGroupViewModel? current = null;
+        var loose = new List<TabViewModel>();
+        var groupOrder = new Dictionary<TabGroupViewModel, List<TabViewModel>>();
+
+        foreach (var item in rail)
+        {
+            switch (item)
+            {
+                case TabGroupViewModel group:
+                    current = group;
+                    groupOrder[group] = [];
+                    break;
+
+                case TabViewModel tab:
+                    if (current is null)
+                    {
+                        loose.Add(tab);
+                    }
+                    else
+                    {
+                        groupOrder[current].Add(tab);
+                    }
+
+                    break;
+            }
+        }
+
+        foreach (var (group, order) in groupOrder)
+        {
+            // Dropping a tab on a collapsed header opens it, so the move is visible.
+            if (order.Count > 0)
+            {
+                group.IsExpanded = true;
+            }
+
+            foreach (var tab in order)
+            {
+                if (!ReferenceEquals(tab.Group, group))
+                {
+                    tab.Group?.Tabs.Remove(tab);
+                    if (!group.Tabs.Contains(tab))
+                    {
+                        group.Tabs.Add(tab);
+                    }
+
+                    tab.Group = group;
+                }
+
+                tab.IsPinned = false;
+                tab.NotifyGroupMembershipChanged();
+            }
+
+            ReorderGroup(group, order);
+        }
+
+        foreach (var tab in loose)
+        {
+            tab.Group?.Tabs.Remove(tab);
+            tab.Group = null;
+            tab.IsPinned = pinnedBand;
+            tab.NotifyGroupMembershipChanged();
+        }
+
+        PruneEmptyGroups(space);
+        RebuildTabOrder(
+            space,
+            pinnedLooseOrder: pinnedBand ? loose : null,
+            unpinnedLooseOrder: pinnedBand ? null : loose);
+        RefreshTabRail();
         ScheduleSave();
+    }
+
+    private static void ReorderGroup(TabGroupViewModel group, IReadOnlyList<TabViewModel> order)
+    {
+        var target = 0;
+        foreach (var tab in order)
+        {
+            var current = group.Tabs.IndexOf(tab);
+            if (current < 0)
+            {
+                continue;
+            }
+
+            if (current != target)
+            {
+                group.Tabs.Move(current, target);
+            }
+
+            target++;
+        }
     }
 
     /// <summary>The results ListView reordered the mirrored collection; reorder the tab's own set.</summary>
@@ -1759,6 +2330,15 @@ public partial class StudioViewModel : ObservableObject
             Profile = VisibleProfile(space.Connection),
             ActiveDatabase = space.PreferredDatabase,
             ActiveTabId = space.LastActiveTab?.Id,
+            Groups = space.Groups.Select(group => new TabGroupState
+            {
+                Id = group.Id,
+                Name = group.Name,
+                Color = group.ColorHex,
+                Pinned = group.IsPinned,
+                Expanded = group.IsExpanded,
+                Database = group.Database,
+            }).ToList(),
             Tabs = space.Tabs.Select(tab => new TabState
             {
                 Id = tab.Id,
@@ -1767,6 +2347,7 @@ public partial class StudioViewModel : ObservableObject
                 Content = tab.Content,
                 Pinned = tab.IsPinned,
                 LastAccessedAt = tab.LastAccessedAt,
+                GroupId = tab.Group?.Id,
             }).ToList(),
         }).ToList(),
         ArchivedTabs = ArchivedTabs.Select(tab => new ArchivedTabState
@@ -1780,6 +2361,7 @@ public partial class StudioViewModel : ObservableObject
             Content = tab.Content,
             Pinned = tab.IsPinned,
             ArchivedAt = tab.ArchivedAt,
+            GroupName = tab.GroupName,
         }).ToList(),
     };
 
@@ -1869,7 +2451,7 @@ public partial class StudioViewModel : ObservableObject
 
             foreach (var tabState in spaceState.Tabs)
             {
-                space.Tabs.Add(new TabViewModel(
+                var tab = new TabViewModel(
                     string.IsNullOrWhiteSpace(tabState.Id) ? Guid.NewGuid().ToString("n") : tabState.Id,
                     tabState.Title,
                     tabState.Database,
@@ -1878,7 +2460,45 @@ public partial class StudioViewModel : ObservableObject
                 {
                     IsPinned = tabState.Pinned,
                     LastAccessedAt = tabState.LastAccessedAt ?? DateTimeOffset.UtcNow,
-                });
+                };
+
+                space.Tabs.Add(tab);
+            }
+
+            // Groups are restored before membership so a tab can find its group by id.
+            foreach (var groupState in spaceState.Groups)
+            {
+                if (string.IsNullOrWhiteSpace(groupState.Name))
+                {
+                    continue;
+                }
+
+                var group = new TabGroupViewModel(
+                    string.IsNullOrWhiteSpace(groupState.Id) ? Guid.NewGuid().ToString("n") : groupState.Id,
+                    groupState.Name,
+                    string.IsNullOrWhiteSpace(groupState.Color)
+                        ? StudioColors.Palette[space.Groups.Count % StudioColors.Palette.Length]
+                        : groupState.Color,
+                    groupState.Pinned,
+                    groupState.Database)
+                {
+                    IsExpanded = groupState.Expanded,
+                };
+
+                space.Groups.Add(group);
+
+                foreach (var tabState in spaceState.Tabs.Where(
+                    candidate => string.Equals(candidate.GroupId, group.Id, StringComparison.Ordinal)))
+                {
+                    if (space.Tabs.FirstOrDefault(candidate => candidate.Id == tabState.Id) is not { } tab)
+                    {
+                        continue;
+                    }
+
+                    tab.Group = group;
+                    tab.IsPinned = false;
+                    group.Tabs.Add(tab);
+                }
             }
 
             if (space.Tabs.Count == 0)
@@ -1888,7 +2508,7 @@ public partial class StudioViewModel : ObservableObject
 
             // Pin state existed before the pinned section; normalise old sessions so pinned
             // tabs occupy the front of the persisted order.
-            NormalizePinnedOrder(space);
+            RebuildTabOrder(space);
 
             space.LastActiveTab = space.Tabs.FirstOrDefault(tab => tab.Id == spaceState.ActiveTabId) ?? space.Tabs[0];
             LoadSecrets(space);
@@ -1912,7 +2532,8 @@ public partial class StudioViewModel : ObservableObject
                 archived.Database,
                 archived.Content,
                 archived.Pinned,
-                archived.ArchivedAt));
+                archived.ArchivedAt,
+                archived.GroupName));
         }
 
         // A hidden workspace is intentionally out of the rail, so a restart does not reopen it
