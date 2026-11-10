@@ -73,6 +73,26 @@ public sealed class SpaceState
     public string? ActiveTabId { get; set; }
 
     public List<TabState> Tabs { get; set; } = [];
+
+    /// <summary>Groups in display order; a group is a folder when <see cref="TabGroupState.Pinned"/>.</summary>
+    public List<TabGroupState> Groups { get; set; } = [];
+}
+
+/// <summary>A named set of tabs. Pinned groups render in the pinned band as folders.</summary>
+public sealed class TabGroupState
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Color { get; set; } = "#C4B5FD";
+
+    public bool Pinned { get; set; }
+
+    public bool Expanded { get; set; } = true;
+
+    /// <summary>The database the group was auto-created from; new tabs on it join the group.</summary>
+    public string? Database { get; set; }
 }
 
 /// <summary>One tab: its title, its database subtitle and the SQL it holds.</summary>
@@ -90,6 +110,9 @@ public sealed class TabState
 
     /// <summary>Last selection/edit time; auto-archive measures inactivity from it.</summary>
     public DateTimeOffset? LastAccessedAt { get; set; }
+
+    /// <summary>The group this tab belongs to; null for a loose tab.</summary>
+    public string? GroupId { get; set; }
 }
 
 /// <summary>A tab kept in the archive/history page after it left its workspace.</summary>
@@ -112,6 +135,9 @@ public sealed class ArchivedTabState
     public bool Pinned { get; set; }
 
     public DateTimeOffset ArchivedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>The group the tab was in, so a restore returns it to the same place.</summary>
+    public string? GroupName { get; set; }
 }
 
 /// <summary>Reads the pre-SQLite <c>studio.json</c> state once, so upgrades keep their spaces.</summary>
@@ -134,7 +160,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed class StudioStore
 {
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -271,6 +297,18 @@ public sealed class StudioStore
                 archived_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS tab_groups (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                color TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                expanded INTEGER NOT NULL DEFAULT 1,
+                database TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS app_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -279,14 +317,17 @@ public sealed class StudioStore
 
             CREATE INDEX IF NOT EXISTS idx_spaces_sort_order ON spaces(sort_order);
             CREATE INDEX IF NOT EXISTS idx_tabs_space_id ON tabs(space_id, sort_order);
+            CREATE INDEX IF NOT EXISTS idx_tab_groups_space_id ON tab_groups(space_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_archived_tabs_archived_at ON archived_tabs(archived_at DESC);
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
-        // workspace icon. Version 4 adds the rail visibility flag. Existing rows keep their data;
-        // the new columns are added in place.
+        // workspace icon. Version 4 adds the rail visibility flag. Version 5 adds tab groups and
+        // the archive's group name. Existing rows keep their data; new columns are added in place.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
+        EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");
+        EnsureColumn(connection, transaction, "archived_tabs", "group_name", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "icon", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "hidden", "INTEGER NOT NULL DEFAULT 0");
 
@@ -380,6 +421,7 @@ public sealed class StudioStore
         foreach (var space in spaces)
         {
             space.Profile = ReadProfile(connection, space.Id);
+            space.Groups = ReadGroups(connection, space.Id);
             space.Tabs = ReadTabs(connection, space.Id);
         }
 
@@ -404,6 +446,37 @@ public sealed class StudioStore
         return profile;
     }
 
+    private static List<TabGroupState> ReadGroups(SqliteConnection connection, string spaceId)
+    {
+        var groups = new List<TabGroupState>();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, name, COALESCE(color, ''), COALESCE(pinned, 0), COALESCE(expanded, 1),
+                   COALESCE(database, '')
+            FROM tab_groups
+            WHERE space_id = $id
+            ORDER BY sort_order;
+            """;
+        command.Parameters.AddWithValue("$id", spaceId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            groups.Add(new TabGroupState
+            {
+                Id = reader.GetString(0),
+                Name = reader.GetString(1),
+                Color = reader.GetString(2),
+                Pinned = reader.GetInt64(3) != 0,
+                Expanded = reader.GetInt64(4) != 0,
+                Database = reader.GetString(5) is { Length: > 0 } database ? database : null,
+            });
+        }
+
+        return groups;
+    }
+
     private static List<TabState> ReadTabs(SqliteConnection connection, string spaceId)
     {
         var tabs = new List<TabState>();
@@ -411,7 +484,7 @@ public sealed class StudioStore
         command.CommandText =
             """
             SELECT id, title, COALESCE(database, ''), COALESCE(content, ''),
-                   COALESCE(pinned, 0), COALESCE(last_accessed_at, '')
+                   COALESCE(pinned, 0), COALESCE(last_accessed_at, ''), COALESCE(group_id, '')
             FROM tabs
             WHERE space_id = $id
             ORDER BY sort_order;
@@ -431,6 +504,7 @@ public sealed class StudioStore
                 // A tab saved before the inactivity clock existed counts as used now, so the
                 // first launch after the upgrade does not sweep the whole workspace.
                 LastAccessedAt = ParseTimestamp(reader.GetString(5)),
+                GroupId = reader.GetString(6) is { Length: > 0 } groupId ? groupId : null,
             });
         }
 
@@ -445,7 +519,7 @@ public sealed class StudioStore
             """
             SELECT id, space_id, space_name, COALESCE(color, ''), title,
                    COALESCE(database, ''), COALESCE(content, ''), COALESCE(pinned, 0),
-                   COALESCE(archived_at, '')
+                   COALESCE(archived_at, ''), COALESCE(group_name, '')
             FROM archived_tabs
             ORDER BY archived_at DESC;
             """;
@@ -464,6 +538,7 @@ public sealed class StudioStore
                 Content = reader.GetString(6),
                 Pinned = reader.GetInt64(7) != 0,
                 ArchivedAt = ParseTimestamp(reader.GetString(8)),
+                GroupName = reader.GetString(9) is { Length: > 0 } groupName ? groupName : null,
             });
         }
 
@@ -517,6 +592,7 @@ public sealed class StudioStore
                 ("$sort", spaceOrder++));
 
             WriteProfile(connection, transaction, space);
+            WriteGroups(connection, transaction, space);
             WriteTabs(connection, transaction, space);
         }
 
@@ -574,6 +650,41 @@ public sealed class StudioStore
         }
     }
 
+    private static void WriteGroups(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
+    {
+        // Groups are small and few; replacing the space's set keeps ordering and deletions in one
+        // statement pair instead of tracking a diff.
+        Execute(connection, transaction, "DELETE FROM tab_groups WHERE space_id = $id;", ("$id", space.Id));
+
+        var order = 0;
+        foreach (var group in space.Groups)
+        {
+            Execute(
+                connection,
+                transaction,
+                """
+                INSERT INTO tab_groups (id, space_id, name, color, pinned, expanded, database, sort_order)
+                VALUES ($id, $space, $name, $color, $pinned, $expanded, $database, $sort)
+                ON CONFLICT(id) DO UPDATE SET
+                    space_id = excluded.space_id,
+                    name = excluded.name,
+                    color = excluded.color,
+                    pinned = excluded.pinned,
+                    expanded = excluded.expanded,
+                    database = excluded.database,
+                    sort_order = excluded.sort_order;
+                """,
+                ("$id", group.Id),
+                ("$space", space.Id),
+                ("$name", group.Name),
+                ("$color", group.Color),
+                ("$pinned", group.Pinned ? 1 : 0),
+                ("$expanded", group.Expanded ? 1 : 0),
+                ("$database", group.Database),
+                ("$sort", order++));
+        }
+    }
+
     private static void WriteTabs(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
     {
         var tabIds = new HashSet<string>(StringComparer.Ordinal);
@@ -586,8 +697,8 @@ public sealed class StudioStore
                 connection,
                 transaction,
                 """
-                INSERT INTO tabs (id, space_id, title, database, content, pinned, last_accessed_at, sort_order)
-                VALUES ($id, $space, $title, $database, $content, $pinned, $accessed, $sort)
+                INSERT INTO tabs (id, space_id, title, database, content, pinned, last_accessed_at, group_id, sort_order)
+                VALUES ($id, $space, $title, $database, $content, $pinned, $accessed, $group, $sort)
                 ON CONFLICT(id) DO UPDATE SET
                     space_id = excluded.space_id,
                     title = excluded.title,
@@ -595,6 +706,7 @@ public sealed class StudioStore
                     content = excluded.content,
                     pinned = excluded.pinned,
                     last_accessed_at = excluded.last_accessed_at,
+                    group_id = excluded.group_id,
                     sort_order = excluded.sort_order,
                     updated_at = datetime('now');
                 """,
@@ -605,6 +717,7 @@ public sealed class StudioStore
                 ("$content", tab.Content),
                 ("$pinned", tab.Pinned ? 1 : 0),
                 ("$accessed", (tab.LastAccessedAt ?? DateTimeOffset.UtcNow).ToString("o", CultureInfo.InvariantCulture)),
+                ("$group", tab.GroupId),
                 ("$sort", tabOrder++));
         }
 
@@ -629,8 +742,8 @@ public sealed class StudioStore
                 connection,
                 transaction,
                 """
-                INSERT INTO archived_tabs (id, space_id, space_name, color, title, database, content, pinned, archived_at)
-                VALUES ($id, $space, $space_name, $color, $title, $database, $content, $pinned, $archived)
+                INSERT INTO archived_tabs (id, space_id, space_name, color, title, database, content, pinned, archived_at, group_name)
+                VALUES ($id, $space, $space_name, $color, $title, $database, $content, $pinned, $archived, $group)
                 ON CONFLICT(id) DO UPDATE SET
                     space_id = excluded.space_id,
                     space_name = excluded.space_name,
@@ -639,7 +752,8 @@ public sealed class StudioStore
                     database = excluded.database,
                     content = excluded.content,
                     pinned = excluded.pinned,
-                    archived_at = excluded.archived_at;
+                    archived_at = excluded.archived_at,
+                    group_name = excluded.group_name;
                 """,
                 ("$id", tab.Id),
                 ("$space", tab.SpaceId),
@@ -649,7 +763,8 @@ public sealed class StudioStore
                 ("$database", tab.Database),
                 ("$content", tab.Content),
                 ("$pinned", tab.Pinned ? 1 : 0),
-                ("$archived", tab.ArchivedAt.ToString("o", CultureInfo.InvariantCulture)));
+                ("$archived", tab.ArchivedAt.ToString("o", CultureInfo.InvariantCulture)),
+                ("$group", tab.GroupName));
         }
 
         var storedTabs = SelectIds(connection, transaction, "SELECT id FROM archived_tabs;");

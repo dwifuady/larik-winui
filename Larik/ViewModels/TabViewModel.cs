@@ -115,6 +115,33 @@ public partial class TabViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(RowHeight))]
     public partial bool IsPinned { get; set; }
 
+    /// <summary>
+    /// The group this tab belongs to, or null for a loose tab. Pinning a tab and putting it in a
+    /// pinned group are different: the tab's own pin is for loose tabs, a pinned group protects
+    /// all of its members.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RowHeight))]
+    [NotifyPropertyChangedFor(nameof(RowPadding))]
+    [NotifyPropertyChangedFor(nameof(IsInPinnedSection))]
+    [NotifyPropertyChangedFor(nameof(PinReason))]
+    public partial TabGroupViewModel? Group { get; set; }
+
+    /// <summary>True when this tab renders in the pinned band, whether by its own pin or its group's.</summary>
+    public bool IsInPinnedSection => IsPinned || Group?.IsPinned == true;
+
+    /// <summary>Why this tab is protected from auto-archive; null when it is not.</summary>
+    public string? PinReason => IsPinned ? "Pinned" : Group?.IsPinned == true ? $"Pinned in {Group.Name}" : null;
+
+    /// <summary>Called when the group's pin changes: the tab's band and compact height follow it.</summary>
+    public void NotifyGroupMembershipChanged()
+    {
+        OnPropertyChanged(nameof(IsInPinnedSection));
+        OnPropertyChanged(nameof(RowHeight));
+        OnPropertyChanged(nameof(RowPadding));
+        OnPropertyChanged(nameof(PinReason));
+    }
+
     /// <summary>True while the tab title is edited in place in the rail.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TitleVisibility))]
@@ -137,7 +164,12 @@ public partial class TabViewModel : ObservableObject
     public Visibility RenameEditorVisibility => IsRenaming ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Pinned rows sit above the TABS header and are a little more compact, like Arc.</summary>
-    public double RowHeight => IsPinned ? 36 : 42;
+    public double RowHeight => IsInPinnedSection ? 36 : 42;
+
+    /// <summary>Grouped tabs indent under their header so the rail reads as a tree, not a list.</summary>
+    public Thickness RowPadding => Group is null
+        ? new Thickness(0, 0, 4, 0)
+        : new Thickness(16, 0, 4, 0);
 
     public void BeginRename()
     {
