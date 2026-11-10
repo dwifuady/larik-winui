@@ -5,6 +5,12 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 
 ## What works
 
+### Editions
+
+- **Microsoft Store** — SQL Server and PostgreSQL built in, Microsoft-signed, no Drivers page and no
+  downloaded assemblies.
+- **GitHub** — the same core plus Settings → Drivers and the curated index (MongoDB today).
+
 - **Vertical tabs, groups and pinned folders** per workspace, active tab tinted with the workspace
   colour (2 px strip + 26 % tint), database subtitle revealed on hover/active, close button.
   **Groups** are collapsible headers with a colour edge and a count; their tabs indent underneath,

@@ -40,6 +40,20 @@ are self-contained and need no separate .NET install.
 x:Bind survive) and needs no extra flags. Day-to-day runs go through `winapp run`; the release
 workflow uses `dotnet publish` with `WindowsPackageType=None` for the portable artifacts.
 
+The Store configuration ships only the built-in providers. Generate its manifest first:
+
+```powershell
+pwsh scripts/prepare-store-manifest.ps1 `
+    -IdentityName '<Partner Center identity>' `
+    -Publisher 'CN=<Partner Center publisher>' `
+    -Version 0.1.0
+
+dotnet build Larik/Larik.csproj -c Store
+```
+
+`-c Store` compiles `LARIK_STORE`, hides the Drivers page and never scans `Plugins`. See
+[`STORE.md`](STORE.md).
+
 ## Verify
 
 Test in layers, cheapest first: `dotnet build` → `dotnet test` → the **ordered prefix** of the UI
@@ -147,3 +161,9 @@ tag. The release publishes these asset names:
 - `Larik-<version>-win-<arch>-setup.exe`
 - `Larik-<version>-win-<arch>.zip`
 - `SHA256SUMS.txt`
+
+### Store package
+
+The Store build is separate from the tag release. Run **Actions → Store package** with a version;
+it generates the manifest from Partner Center values, verifies the MSIX identity, publisher and
+version, and uploads an unsigned x64 MSIX for manual submission. See [`STORE.md`](STORE.md).
