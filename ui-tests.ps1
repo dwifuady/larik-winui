@@ -2237,6 +2237,20 @@ try {
         Wait-ForText 'Switch workspace' 10
     }
 
+    Test-UI 'settings offers the add-ons page' {
+        Click-Element 'Settings'
+        Wait-ForText 'Snippets' 10
+
+        Focus-App
+        Invoke-Ui @('click', 'AddonsNavItem') | Out-Null
+        Wait-ForText 'Install from zip' 10
+        Assert-True ((Find-Element 'Installed').matchCount -gt 0) 'the installed section is missing'
+        Assert-True ((Find-Element 'Available').matchCount -gt 0) 'the available section is missing'
+
+        Click-Element 'Back'
+        Wait-ForText 'Switch workspace' 10
+    }
+
     Test-UI 'deleting the last workspace returns to onboarding' {
         Open-WorkspaceSettings 'Staging'
         Invoke-Element 'Delete workspace'
