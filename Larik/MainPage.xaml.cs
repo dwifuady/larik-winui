@@ -1475,7 +1475,7 @@ public sealed partial class MainPage : Page
             ItemsSource = providers.Select(p => p.DisplayName).ToList(),
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
-        AutomationProperties.SetName(providerBox, "Provider");
+        AutomationProperties.SetName(providerBox, "Database");
 
         var providerId = connection?.ProviderId ?? DatabaseProviderCatalog.Default?.Id;
         var current = providers.FirstOrDefault(provider => provider.Id == providerId) ?? providers[0];
@@ -1640,9 +1640,28 @@ public sealed partial class MainPage : Page
             return profile;
         }
 
+        ContentDialog? dialog = null;
+
         var providerGroup = new StackPanel { Spacing = 4 };
-        providerGroup.Children.Add(new TextBlock { Text = "Provider", FontSize = 11 });
+        providerGroup.Children.Add(new TextBlock { Text = "Database", FontSize = 11 });
         providerGroup.Children.Add(providerBox);
+
+        // The picker only lists installed drivers; the rare "my engine is missing" path lives here,
+        // where the user notices it, instead of requiring them to discover Settings first.
+        var installDriverLink = new HyperlinkButton
+        {
+            Content = "Install another database driver…",
+            FontSize = 11,
+            Padding = new Thickness(0),
+        };
+        AutomationProperties.SetName(installDriverLink, "Install another database driver");
+        installDriverLink.Click += (_, _) =>
+        {
+            dialog?.Hide();
+            SettingsPage.InitialSection = "drivers";
+            Frame.Navigate(typeof(SettingsPage), ViewModel);
+        };
+        providerGroup.Children.Add(installDriverLink);
 
         var body = new StackPanel { Spacing = 10 };
         body.Children.Add(primaryFields);
@@ -2030,7 +2049,7 @@ public sealed partial class MainPage : Page
         };
 
         var deleteRequested = false;
-        var dialog = new ContentDialog
+        dialog = new ContentDialog
         {
             Title = creating ? "New workspace" : "Workspace settings",
             XamlRoot = ownerXamlRoot,
