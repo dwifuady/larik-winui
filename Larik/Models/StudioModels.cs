@@ -40,6 +40,7 @@ public static class SnippetDialects
     [
         ("mssql", "SQL Server"),
         ("postgres", "PostgreSQL"),
+        ("mongodb", "MongoDB"),
     ];
 
     public static string Label(string id)

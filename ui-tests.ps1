@@ -1006,6 +1006,18 @@ try {
             Assert-True ((Find-Element 'Host').matchCount -gt 0) 'PostgreSQL settings did not render'
             Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the PostgreSQL password field is missing'
 
+            # The MongoDB provider is loaded too; its own declared settings drive the form, so the
+            # dialog proves the assembly registered without the shell knowing anything about Mongo.
+            Click-Element 'Provider'
+            Start-Sleep -Milliseconds 600
+            Assert-True ((Find-Element 'MongoDB').matchCount -gt 0) 'the MongoDB provider was not listed'
+            $mongo = @((Find-Element 'MongoDB').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+            Assert-True ($null -ne $mongo) 'the MongoDB provider item is missing'
+            Invoke-Ui @('click', $mongo.selector) | Out-Null
+            Start-Sleep -Milliseconds 700
+            Assert-True ((Find-Element 'Host').matchCount -gt 0) 'MongoDB settings did not render'
+            Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the MongoDB password field is missing'
+
             # The SQL Server form is the tall one: Test must keep its result on screen, not
             # just in the automation tree below the visible part of the dialog. Pick it by name so
             # adding a provider never depends on the picker's order.

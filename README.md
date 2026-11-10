@@ -24,8 +24,9 @@ build is code-signed, so Windows SmartScreen may warn on the first run:
 **More info → Run anyway**.
 
 The SQL Server provider needs a reachable SQL Server (LocalDB works); the
-**PostgreSQL** provider needs a reachable PostgreSQL server. The built-in **Demo**
-provider works without a server, so the app opens and runs offline.
+**PostgreSQL** provider needs a reachable PostgreSQL server; the **MongoDB** provider needs a
+reachable `mongod`. The built-in **Demo** provider works without a server, so the app opens and
+runs offline.
 
 ```
 C:\dev\larik-winui\
@@ -45,7 +46,11 @@ C:\dev\larik-winui\
 ├── Larik.Data.Postgres/          # PostgreSQL provider on Npgsql
 │   ├── PostgresProvider.cs       # per-database sessions, catalog schema, transactions, notices
 │   └── PostgresDialect.cs        # PostgreSQL editor language (dollar quotes, LIMIT, CALL)
-├── Larik.Data.Tests/             # editor-language golden tests (net10.0, xUnit)
+├── Larik.Data.MongoDB/           # MongoDB provider on MongoDB.Driver
+│   ├── MongoProvider.cs          # session, sampled schema, execution, mongosh passthrough
+│   ├── MongoTSqlDialect.cs       # T-SQL editor surface + mixed-script (shell) tagging
+│   └── TSqlMongoCompiler.cs      # T-SQL → aggregation pipeline / write command translator
+├── Larik.Data.Tests/             # editor-language + SQL↔MongoDB translator golden tests (net10.0, xUnit)
 ├── docs/PROVIDERS.md             # provider handbook (contracts, blueprints, gaps)
 ├── AGENTS.md                     # repo rules + build/verify guide for contributors/AI agents
 ├── Larik/                        # WinUI 3 app (net10.0-windows10.0.26100.0, WASDK 2.6)
@@ -359,6 +364,18 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   foreign-key lookups use `LIMIT`, `RAISE NOTICE`/`WARNING` open a Messages tab, and the `TXN` guard
   follows the `BEGIN`/`COMMIT`/`ROLLBACK` the tab issued (a failed statement inside a transaction
   marks it rollback-only).
+- **MongoDB**: pick it in the workspace dialog like any provider (needs a reachable `mongod`). The
+  editor surface is your T-SQL — the active language is a SQL dialect, so highlighting, Ctrl+Enter/F5,
+  T-SQL completion (collections in `FROM`, sampled fields) and the schema browser all work through the
+  one seam. Each statement is translated by the provider into an aggregation pipeline or a write
+  command (`SELECT`/`WHERE`/`ORDER`/`GROUP`/`JOIN` → `$match`/`$sort`/`$group`/`$lookup`; `INSERT`/
+  `UPDATE`/`DELETE`), and the pipeline that actually ran is shown in a collapsible *Generated query*
+  strip on the result tab. `UUID('…')`/`ObjectId('…')` literals are supported, and because the sampled
+  field type is known, a plain `WHERE _id = '…'` is coerced to the UUID/ObjectId binary it compares against.
+  Collections are tables whose fields are sampled from a few documents (`_id` is the primary key),
+  `USE [db]` switches the tab's database, and mongosh passes through — `db.users.find({...})` runs as
+  written. `BEGIN TRAN` reports a clear "not supported yet"; multi-document transactions are the next
+  iteration.
 - **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
   warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
   open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
@@ -508,7 +525,8 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 
 | Gap | Why / next step |
 |---|---|
-| Only three providers ship | SQL Server, PostgreSQL and Demo. MongoDB only needs a new provider assembly (see above and `docs/PROVIDERS.md`), not app changes. |
+| Four providers ship | SQL Server, PostgreSQL, MongoDB and the in-memory Demo. Each is an assembly behind the same contracts. |
+| MongoDB is a T-SQL surface over a NoSQL engine | The provider translates your T-SQL into aggregation pipelines / write commands and passes mongosh (`db.c.method(…)`) through. Deliberately limited: single-column `JOIN … ON` (a multi-key ON is rejected), an `INSERT` column list is recommended (bare `VALUES` store under generated keys), a handful of mongosh methods, and no multi-document transactions yet (`BEGIN TRAN` errors). The result-tab *Generated query* strip shows the pipeline that actually ran. |
 | Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but SQL Server reads `sys.procedures` only and completion offers procedures only after `EXEC`/`CALL`. PostgreSQL reads functions too, but they are not offered in expression positions yet. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
 | PostgreSQL overloads collapse to one routine | The contract identifies a routine by schema + name, so the provider keeps the first overload's signature instead of showing two `CALL` candidates with the same name. A contract-level routine identity is the fix. |
 | Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |

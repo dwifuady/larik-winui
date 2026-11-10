@@ -195,6 +195,7 @@ public sealed partial class ResultsGrid : UserControl
     {
         SaveViewState();
         HideCellPreview();
+        UpdateGeneratedQuery(result);
 
         // The messages panel shares the row area with the grid. A previous Messages tab can leave
         // it visible, and its selectable text would then sit over the next tab's rows.
@@ -277,6 +278,40 @@ public sealed partial class ResultsGrid : UserControl
         EmptyText.Visibility = Visibility.Collapsed;
         MessagesText.Text = string.Empty;
         MessagesScroll.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Shows the command a provider actually sent, when it reports one (for example MongoDB's
+    /// pipeline for a translated SELECT). Collapsed by default so the grid stays quiet.
+    /// </summary>
+    private void UpdateGeneratedQuery(QueryResult? result)
+    {
+        var query = result?.GeneratedQuery;
+        GeneratedQueryText.Text = query ?? string.Empty;
+        GeneratedQueryBar.Visibility = string.IsNullOrWhiteSpace(query) ? Visibility.Collapsed : Visibility.Visible;
+        GeneratedQueryScroll.Visibility = Visibility.Collapsed;
+        GeneratedQueryChevron.Glyph = "\uE70D";
+    }
+
+    private void GeneratedQueryToggle_Click(object sender, RoutedEventArgs e)
+    {
+        var expand = GeneratedQueryScroll.Visibility != Visibility.Visible;
+        GeneratedQueryScroll.Visibility = expand ? Visibility.Visible : Visibility.Collapsed;
+        GeneratedQueryChevron.Glyph = expand ? "\uE70E" : "\uE70D";
+    }
+
+    private void CopyGeneratedQuery_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(GeneratedQueryText.Text))
+        {
+            return;
+        }
+
+        var package = new DataPackage();
+        package.SetText(GeneratedQueryText.Text);
+        Clipboard.SetContent(package);
+        Clipboard.Flush();
+        StatusChanged?.Invoke(this, "Generated query copied");
     }
     // ---------------------------------------------------------------- layout + rows
 

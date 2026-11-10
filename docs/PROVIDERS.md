@@ -112,8 +112,10 @@ and the new default-null properties. Keep them.
 ### Which interface?
 
 - **SQL engine** → `ISqlDialect` + `SqlLanguage`. Reuse the shared scanner.
-- **Non-SQL engine** (MongoDB) → `IEditorLanguage` only. Implement your own tokenizer/splitter; do
-  **not** pretend it is a SQL dialect.
+- **Non-SQL engine** → `IEditorLanguage` only. Implement your own tokenizer/splitter; do
+  **not** pretend it is a SQL dialect. (MongoDB is the one exception already shipped: its document
+  surface is the user's T-SQL, so it implements `ISqlDialect` — see §9. The rule stands for a surface
+  that is genuinely non-SQL.)
 
 `ISqlDialect` exists because completion needs a few lists (keywords, functions, table-context
 words). Everything else about the editor is plain `IEditorLanguage`.
@@ -368,7 +370,8 @@ also uses the filtered lookup.
   other providers leave it empty and the tab never appears.
 - `QueryResult.GeneratedQuery` is for engines that translate user text. Example: a MongoDB provider
   compiling a SQL `SELECT` to an aggregation pipeline can report the pipeline it actually ran. The
-  app currently stores it but does not display it; a result-tab "generated query" bar is future work.
+  shell renders it in a collapsible **Generated query** strip on the result tab (collapsed by default,
+  with copy), and hides the strip entirely when the provider reports nothing.
 
 ---
 
@@ -398,7 +401,7 @@ Current limitations, by design for now:
 
 **Recommendation:** first-party engines ship as built-in project references in
 `Larik/App.xaml.cs` + `Larik.csproj`, using the same contracts a plugin would. That gives dependency
-safety, trimming coverage and a test target. SQL Server and PostgreSQL already follow this rule.
+safety, trimming coverage and a test target. SQL Server, PostgreSQL and MongoDB already follow this rule.
 Harden the loader (`AssemblyDependencyResolver`, manifest, unload) only when third-party plugins are
 actually expected.
 
@@ -454,43 +457,54 @@ normal UI path.
 
 ---
 
-## 9. Blueprint: MongoDB (plugin)
+## 9. MongoDB (built-in)
 
-MongoDB is **not** a SQL dialect. The reference Tauri app (`C:\dev\larik-sql-studio`) demonstrates
-the shape:
+MongoDB ships as `Larik.Data.MongoDB` on MongoDB.Driver, registered in `App.xaml.cs`, covered by
+`TSqlMongoCompilerTests` (translation goldens), `MongoDialectTests` (editor language) and
+`MongoIntegrationTests` (a real round-trip that is a no-op unless a `mongod` answers on
+`localhost:27017`, so CI stays green offline).
 
-- a dedicated editor language (`src/utils/mongo/language.ts`) that accepts **mongosh and SQL
-  SELECT**;
-- a splitter that tags each statement (`shell` / `line` / `sql`) and splits on `;`, with line
-  statements ending at newline (`src/utils/mongo/shell.ts`);
-- SQL SELECT compiled to an aggregation pipeline entirely inside the driver
-  (`src-tauri/src/db/mongodb/sql.rs`), reported through `generated_query`;
-- Mongo-specific completion (`src/utils/mongo/completion.ts`), not the SQL completion engine.
+The editor surface is **the user's T-SQL**, which is a deliberate deviation from the older notion here
+that "a non-SQL engine implements `IEditorLanguage` and must not pretend it is a SQL dialect". The
+document the user writes *is* SQL, so the language implements `ISqlDialect`: highlighting, Ctrl+Enter /
+F5, T-SQL completion (collections in `FROM`, sampled fields) and the schema browser's preview/lookup
+statements all flow through the existing SQL seam with zero app changes. mongosh is additive: a
+statement starting with `db.` is tagged `shell` via `StatementSpan.Language` and passed to the driver
+as written. Keep the `IEditorLanguage`-only rule for a future genuinely non-SQL surface.
 
-In this app:
+1. `MongoProvider : IDatabaseProvider` — `Id = Dialect = "mongodb"`, `DescribeEndpoint` → `MongoDB · host:port`;
+   settings: host, port, database, auth source, user, password, direct connection, connect/query timeouts.
+2. `MongoConnection : IDatabaseConnection` — one `MongoClient` per session (one per query tab):
+   - ping + `buildInfo` on open; `ListDatabaseNames` for the database list;
+   - `GetSchemaAsync` samples up to 200 documents per collection and infers fields + BSON types, with
+     `_id` as the primary key. An empty or permission-denied collection yields just its name, so the
+     schema is a browsing nicety, not a hard dependency;
+   - `ExecuteBatchAsync` splits via `MongoTSqlDialect.Split` — the same language the editor shows, with
+     mongosh statements already tagged — and stops the batch on the first error;
+   - `USE [db]` changes the session's active database (reported by `GetCurrentDatabaseAsync`); the row
+     cap (`EffectiveMaxRows + 1`) is enforced by appending a `$limit` unless the user already set one.
+3. `MongoTSqlDialect : SqlLanguage, ISqlDialect` — reuses `GenericSqlLanguage.TokenKeywords` (the
+   T-SQL token set), `[x]`/`N'...'`/`@`, `//` comments, splits on `;` with no `GO`, and overrides
+   `Split` to tag mongosh spans `shell`. Completion lists carry the T-SQL surface plus Mongo helpers
+   (`ObjectId`, `ISODate`, `NumberInt`, …).
+4. `TSqlMongoCompiler` — the pure, golden-tested translator: a lexer + recursive-descent parser +
+   compiler that turns a statement into an `MSelect` (aggregation pipeline), `MInsert`/`MUpdate`/
+   `MDelete` (write command) or `MUse`. SELECT covers projection, WHERE (comparison, `IN`, `BETWEEN`,
+   `LIKE`, `IS NULL`, `AND`/`OR`/`NOT` — a query-language `$match` with an `$expr` fallback),
+   INNER/LEFT `JOIN` (single-column `ON` → `$lookup`+`$unwind`), `GROUP BY`/aggregates/`HAVING`,
+   `ORDER BY`, `TOP`/`LIMIT`/`OFFSET`, and `DISTINCT` (as a `$group`). Scalar helpers (`COALESCE`,
+   `UPPER`/`LOWER`, date parts, `OBJECTID()`/`ISODATE()`…) map to aggregation operators. Every
+   `MSelect` reports the pipeline it actually ran through `QueryResult.GeneratedQuery`.
+5. mongosh passthrough — `MongoShellRunner` handles a small set of driver methods (`find`, `findOne`,
+   `count`, `insertOne`/`insertMany`, `updateOne`/`updateMany`, `deleteOne`/`deleteMany`) when the
+   argument is extended JSON; anything else is a clear "use the SQL surface" error. `ObjectId('…')`
+   inside a document argument is not parsed here — the SQL surface supports it as a value.
 
-```csharp
-public sealed class MongoProvider : IDatabaseProvider
-{
-    public string Id => "mongodb";
-    public string Dialect => "mongodb";
-    public IEditorLanguage? EditorLanguage => MongoLanguage.Instance; // NOT ISqlDialect
-}
-
-public sealed class MongoLanguage : IEditorLanguage
-{
-    public string Id => "mongodb";
-    public IReadOnlyList<QueryToken> Tokenize(string? text) { /* JS-flavoured */ }
-    public IReadOnlyList<StatementSpan> Split(string? text) { /* tags: "shell"/"line"/"sql" */ }
-}
-```
-
-What works with zero app edits: highlighting, Ctrl+Enter/F5 boundaries (including mixed scripts),
-snippet scoping, and `QueryResult.GeneratedQuery`. What still needs one *future additive* seam:
-non-SQL completion (collection names, shell helpers). Do not build it until MongoDB is real; when
-you do, add a per-language completion contributor behind `CompletionQuery.Language`.
-
-Keep the SQL-on-Mongo translator inside the provider. It is provider code, not app code.
+Known, deliberate limits (mirrored in `README.md`): single-column `JOIN … ON`; an `INSERT` column list
+is recommended (bare `VALUES` store under generated `c1…cN` keys); no multi-document transactions yet
+(`SupportsTransactions` stays false, the shell hides the guard, and `BEGIN TRAN` reports an error); a
+small mongosh subset; sampled (not enforced) schema; multi-field joins and `INSERT ... SELECT` are
+rejected with a message.
 
 ---
 
@@ -531,17 +545,17 @@ Keep the SQL-on-Mongo translator inside the provider. It is provider code, not a
 
 | Area | State |
 |---|---|
-| MongoDB | Not implemented. This seam exists so it stays additive. |
+| MongoDB | Implemented (`Larik.Data.MongoDB`): a T-SQL surface translated to aggregation pipelines/write commands, sampled schema, mongosh passthrough. Deliberate limits: single-column `JOIN … ON`, `INSERT` column list recommended, no multi-document transactions yet (`BEGIN TRAN` errors), small mongosh method subset, sampled (not enforced) schema. See §9. |
 | Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. PostgreSQL reuses them; a MySQL provider should promote them into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
 | Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `"public"."users" AS u`). SQL Server reads `sys.schemas`; PostgreSQL reads `pg_namespace`. Views complete like tables. Overloaded PostgreSQL routines collapse to the first signature because the contract has no overload identity. |
 | Statement splitting | Dollar quotes, `E'...'`, quoted identifiers and nested block comments are in `SqlLanguageOptions`; `::` casts and `$1` parameters need no splitting. Parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and T-SQL `GO n` repeat expansion are still open. |
 | Formatter | `SqlFormatter` is app-owned and keyword-based; not dialect-aware. |
 | Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. PostgreSQL SSL mode is a documented text field until `Choice` exists. |
 | Snippet dialects | `SnippetDialects.Known` is a fixed list (`mssql`, `postgres`). |
-| Non-SQL completion | No contributor seam yet (see MongoDB blueprint). |
+| Non-SQL completion | No contributor seam yet (see §9). MongoDB's T-SQL surface reuses the SQL path; a genuinely non-SQL surface still needs one. |
 | Plugin isolation | `Assembly.LoadFrom` in the default context; no unload, no dependency resolver, no manifest. |
 | Trimming | Off: `Larik.csproj` sets `PublishTrimmed=false` for Debug and Release, so WinUI/XAML and reflection-based plugin discovery survive. A `TrimmerRootAssembly` becomes relevant only if trimming is enabled. |
 | Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it from `@@TRANCOUNT`/`XACT_STATE()`; PostgreSQL tracks the transaction commands it sent because the backend cannot introspect its own in-transaction state while answering. Other providers keep the defaults. |
 | App exit | Closing a tab or disconnecting rolls back; closing the whole app relies on the server rolling back when its sessions end. There is no app-exit prompt. |
 | A failing statement stops the rest of its `GO` batch | SQL Server executes a `GO` batch natively, so the first server error ends the remaining statements in that batch. The shell already sends each `GO` batch separately; split-and-execute per statement as well if every statement must report independently. |
-| `GeneratedQuery` UI | Field exists; no result-tab bar yet. |
+| `GeneratedQuery` UI | Implemented: a collapsible **Generated query** strip on the result tab shows the native command when a provider reports one; hidden otherwise. |
