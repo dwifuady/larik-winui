@@ -110,9 +110,12 @@ public sealed partial class ResultsGrid : UserControl
     {
         InitializeComponent();
 
-        _dividerBrush = BrushOr("DividerStrokeColorDefaultBrush", StudioColors.Muted);
-        _headerBackground = BrushOr("HairlineSubtleBrush", StudioColors.Muted);
+        _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
+        _headerBackground = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
         UpdateAccentBrushes();
+
+        // Rows and headers cache brushes in code; a runtime Light/Dark switch must rebuild them.
+        ActualThemeChanged += (_, _) => ApplyTheme();
 
         // ListViewItem marks pointer presses handled for its own selection bookkeeping. Listen
         // for handled events too, otherwise clicking a cell never reaches ResultsGrid.
@@ -419,7 +422,7 @@ public sealed partial class ResultsGrid : UserControl
                 CharacterSpacing = 80,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 TextAlignment = column.Numeric ? TextAlignment.Right : TextAlignment.Left,
-                Foreground = (Brush)Application.Current.Resources["StudioTextMutedBrush"],
+                Foreground = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted),
                 VerticalAlignment = VerticalAlignment.Center,
             };
 
@@ -979,7 +982,7 @@ public sealed partial class ResultsGrid : UserControl
 
         var layout = _layout.Columns[column];
         var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
-        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var muted = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
         var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
             ? $"row {_rows[row].Index + 1}"
             : $"{layout.DataType} · row {_rows[row].Index + 1}";
@@ -1020,7 +1023,7 @@ public sealed partial class ResultsGrid : UserControl
             : formatted.Text;
 
         CellPreviewValue.Text = display;
-        CellPreviewValue.Foreground = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        CellPreviewValue.Foreground = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, StudioColors.Muted);
 
         var footer = formatted.Text.Length > PreviewCharacterLimit
             ? $"Showing first {PreviewCharacterLimit:N0} of {formatted.Text.Length:N0} characters — Copy copies all"
@@ -1540,10 +1543,33 @@ public sealed partial class ResultsGrid : UserControl
         _referenceBorderBrush = new SolidColorBrush(StudioColors.WithAlpha(color, 0xC0));
     }
 
-    private static Brush BrushOr(string key, Brush fallback) =>
-        Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush
-            ? brush
-            : fallback;
+    /// <summary>
+    /// Rebuilds the header and repaints realized rows after the user switches Light/Dark. Token
+    /// brushes are cached in fields and in row views, so the framework cannot refresh them alone.
+    /// </summary>
+    private void ApplyTheme()
+    {
+        _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
+        _headerBackground = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
+
+        if (_layout is not null)
+        {
+            BuildHeader(_layout);
+        }
+
+        foreach (var row in FindDescendants<ResultRowView>(RowsList))
+        {
+            row.ApplyTheme();
+        }
+
+        if (_previewOpen)
+        {
+            CellPreviewValue.Foreground = ThemeService.GetBrush(
+                "StudioTextPrimaryBrush",
+                ActualTheme,
+                StudioColors.Muted);
+        }
+    }
 
     private static bool IsKeyDown(VirtualKey key) =>
         InputKeyboardSource.GetKeyStateForCurrentThread(key).HasFlag(CoreVirtualKeyStates.Down);

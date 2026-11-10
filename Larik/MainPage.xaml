@@ -64,7 +64,7 @@
                             VerticalAlignment="Center"
                             FontSize="12"
                             FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
-                            Foreground="{x:Bind local:MainPage.TabTitleBrush(IsActive), Mode=OneWay}"
+                            Foreground="{x:Bind TitleBrush, Mode=OneWay}"
                             Text="{x:Bind Title, Mode=OneWay}"
                             TextTrimming="CharacterEllipsis"
                             Visibility="{x:Bind TitleVisibility, Mode=OneWay}" />
@@ -1510,8 +1510,8 @@
                 Padding="12"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Top"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                Background="{ThemeResource PanelBackgroundBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
                 BorderThickness="1"
                 CornerRadius="10">
                 <Grid RowSpacing="8">

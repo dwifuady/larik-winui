@@ -51,7 +51,7 @@ public partial class ResultSetViewModel : ObservableObject
 
     public Brush DetailBrush => Result.IsError
         ? StudioColors.Danger
-        : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        : ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted);
 
     /// <summary>Header text for the active result, including the row-cap notice.</summary>
     public string Message => Result.IsTruncated && Result.RowLimit is { } limit
@@ -73,8 +73,15 @@ public partial class ResultSetViewModel : ObservableObject
         : Microsoft.UI.Text.FontWeights.Normal;
 
     public Brush TitleBrush => IsActive
-        ? (Brush)Application.Current.Resources["StudioTextPrimaryBrush"]
-        : (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
+        ? ThemeService.GetBrush("StudioTextPrimaryBrush", StudioColors.Muted)
+        : ThemeService.GetBrush("StudioTextSecondaryBrush", StudioColors.Muted);
+
+    /// <summary>Code-resolved brushes do not follow a runtime theme switch on their own.</summary>
+    public void NotifyThemeChanged()
+    {
+        OnPropertyChanged(nameof(DetailBrush));
+        OnPropertyChanged(nameof(TitleBrush));
+    }
 
     /// <summary>Inactive tabs keep their close affordance, but quiet until the tab is chosen.</summary>
     public double CloseOpacity => IsActive ? 1 : 0.45;

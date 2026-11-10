@@ -61,6 +61,7 @@ public partial class StudioViewModel : ObservableObject
             NotifyWorkspaceList();
         };
         _snippets.Changed += (_, _) => OnPropertyChanged(nameof(Snippets));
+        ThemeService.Changed += (_, _) => NotifyThemeChanged();
         PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab))
@@ -83,6 +84,36 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>Last cell-preview width, or null for the default.</summary>
     public double? CellPreviewWidth { get; private set; }
+
+    /// <summary>The appearance choice last applied to the window; persisted with the session.</summary>
+    public AppTheme Theme { get; private set; } = AppTheme.System;
+
+    /// <summary>Switches the live window and marks the preference for the next save.</summary>
+    public void SetTheme(AppTheme theme)
+    {
+        Theme = theme;
+        ThemeService.Apply(theme);
+        ScheduleSave();
+    }
+
+    /// <summary>
+    /// Re-evaluates view-model brushes that code resolved from the old theme. XAML
+    /// <c>ThemeResource</c> values update on their own; these properties are plain CLR values.
+    /// </summary>
+    public void NotifyThemeChanged()
+    {
+        foreach (var space in Spaces)
+        {
+            foreach (var tab in space.Tabs)
+            {
+                tab.NotifyThemeChanged();
+                foreach (var result in tab.Results)
+                {
+                    result.NotifyThemeChanged();
+                }
+            }
+        }
+    }
 
     public void SetWindowBounds(WindowBoundsState? bounds)
     {
@@ -2319,6 +2350,7 @@ public partial class StudioViewModel : ObservableObject
         WindowBounds = WindowBounds,
         ResultsPaneHeight = ResultsPaneHeight,
         CellPreviewWidth = CellPreviewWidth,
+        Theme = ThemeService.ToStorage(Theme),
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -2421,6 +2453,7 @@ public partial class StudioViewModel : ObservableObject
         WindowBounds = state.WindowBounds;
         ResultsPaneHeight = state.ResultsPaneHeight;
         CellPreviewWidth = state.CellPreviewWidth;
+        Theme = ThemeService.Parse(state.Theme);
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);

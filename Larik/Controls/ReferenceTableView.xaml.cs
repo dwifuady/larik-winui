@@ -1,5 +1,6 @@
 using Larik.Data;
 using Larik.Models;
+using Larik.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -17,12 +18,18 @@ public sealed partial class ReferenceTableView : UserControl
     private const double MaxColumnWidth = 280;
 
     private ScrollViewer? _listScroller;
+    private QueryResult? _result;
+    private IReadOnlyList<int>? _matchedRows;
+    private Brush? _matchBackground;
+    private Brush? _matchBorder;
+    private Brush? _divider;
 
     public ReferenceTableView()
     {
         InitializeComponent();
         Loaded += (_, _) => EnsureListScroller();
         SizeChanged += (_, _) => EnsureListScroller();
+        ActualThemeChanged += (_, _) => Render();
     }
 
     private void EnsureListScroller()
@@ -49,12 +56,28 @@ public sealed partial class ReferenceTableView : UserControl
         Brush matchBorder,
         Brush divider)
     {
+        _result = result;
+        _matchedRows = matchedRows;
+        _matchBackground = matchBackground;
+        _matchBorder = matchBorder;
+        _divider = divider;
+        Render();
+    }
+
+    private void Render()
+    {
+        if (_result is not { } result || _matchedRows is not { } matchedRows)
+        {
+            return;
+        }
+
         if (result.Columns.Count == 0)
         {
             Clear();
             return;
         }
 
+        var divider = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, _divider ?? StudioColors.Muted);
         var layout = BuildLayout(result);
         BuildHeader(layout, divider);
 
@@ -68,8 +91,8 @@ public sealed partial class ReferenceTableView : UserControl
                 Index = index,
                 Cells = result.Rows[index],
                 Layout = layout,
-                HighlightBrush = isMatch ? matchBackground : null,
-                HighlightBorderBrush = isMatch ? matchBorder : null,
+                HighlightBrush = isMatch ? _matchBackground : null,
+                HighlightBorderBrush = isMatch ? _matchBorder : null,
             });
         }
 
@@ -95,6 +118,8 @@ public sealed partial class ReferenceTableView : UserControl
 
     public void Clear()
     {
+        _result = null;
+        _matchedRows = null;
         RowsList.ItemsSource = null;
         HeaderHost.Children.Clear();
         HeaderHost.Width = double.NaN;
@@ -150,11 +175,8 @@ public sealed partial class ReferenceTableView : UserControl
         HeaderHost.Children.Clear();
         HeaderHost.Width = layout.TotalWidth;
 
-        var background = Application.Current.Resources.TryGetValue("HairlineSubtleBrush", out var value)
-            && value is Brush brush
-                ? brush
-                : divider;
-        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var background = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, divider);
+        var muted = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, divider);
 
         foreach (var column in layout.Columns)
         {

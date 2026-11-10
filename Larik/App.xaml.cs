@@ -53,6 +53,10 @@ public partial class App : Application
         // beside the Tauri app's, and carries over only its own pre-separation file.
         LarikPaths.MigrateLegacyState();
 
+        // Application.RequestedTheme is startup-only. Read the saved appearance now so the first
+        // frame, the caption buttons and Mica all open in the user's chosen theme.
+        ThemeService.Initialize(new StudioStore().LoadThemePreference());
+
         // Providers are discovered, not hard-coded: built-in assemblies plus any plugin DLL
         // dropped in the app's or the user's Plugins folder.
         DatabaseProviderCatalog.Initialize(

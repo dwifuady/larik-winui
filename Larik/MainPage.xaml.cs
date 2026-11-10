@@ -54,10 +54,6 @@ public sealed partial class MainPage : Page
 
     public StudioViewModel ViewModel { get; } = new();
 
-    /// <summary>Inactive tabs recede; the active tab carries primary text (Arc sidebar behaviour).</summary>
-    public static Brush TabTitleBrush(bool isActive) =>
-        (Brush)Application.Current.Resources[isActive ? "StudioTextPrimaryBrush" : "StudioTextSecondaryBrush"];
-
     public MainPage()
     {
         InitializeComponent();
@@ -92,6 +88,8 @@ public sealed partial class MainPage : Page
             Root.Background = (Brush)Application.Current.Resources["StudioBackgroundBrush"];
         }
 
+        ActualThemeChanged += (_, _) => ApplyThemeResources();
+
         // One schema control serves both placements; the shell owns what insert and preview mean.
         SchemaPeek.CloseRequested += (_, _) => CloseSchemaPeek();
         SchemaPeek.PinRequested += (_, _) => PinSchemaBrowser(open: true);
@@ -106,6 +104,22 @@ public sealed partial class MainPage : Page
         SchemaPinned.StatusRequested += (_, message) => ViewModel.StatusText = message;
 
         ResultsGrid.PreviewWidthChanged += (_, width) => ViewModel.SetCellPreviewWidth(width);
+    }
+
+    private void ApplyThemeResources()
+    {
+        if (!MicaController.IsSupported())
+        {
+            Root.Background = ThemeService.GetBrush("StudioBackgroundBrush", ActualTheme, StudioColors.Muted);
+        }
+
+        ResultMessageText.Foreground = ViewModel.LastResult?.IsError == true
+            ? StudioColors.Danger
+            : ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
+
+        // The OS can change the system theme while the preference is still "System", which does
+        // not raise ThemeService.Changed; CLR brush properties need this nudge either way.
+        ViewModel.NotifyThemeChanged();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -142,7 +156,7 @@ public sealed partial class MainPage : Page
         ViewModel.ToggleSidebarCommand.Execute(null);
 
     private void Settings_Click(object sender, RoutedEventArgs e) =>
-        Frame.Navigate(typeof(SettingsPage));
+        Frame.Navigate(typeof(SettingsPage), ViewModel);
 
     // ---------------------------------------------------------------- schema browser
 
@@ -1416,6 +1430,10 @@ public sealed partial class MainPage : Page
 
         await ViewModel.SelectDatabaseAsync(database);
         DatabaseSelectorButton.Flyout?.Hide();
+
+        // Choosing a database is a step towards writing SQL, not the destination: put the caret
+        // back in the editor so the next keystroke goes where the user expects.
+        DispatcherQueue.TryEnqueue(() => SqlEditor.FocusEditor());
     }
 
     // ---------------------------------------------------------------- workspace settings
@@ -2331,6 +2349,9 @@ public sealed partial class MainPage : Page
 
         HideNewTabPalette();
         ViewModel.CreateTab(database);
+
+        // A new query tab is ready to type in; the palette's search box has already closed.
+        DispatcherQueue.TryEnqueue(() => SqlEditor.FocusEditor());
     }
 
     // ---------------------------------------------------------------- splitter
@@ -2477,7 +2498,7 @@ public sealed partial class MainPage : Page
         var result = ViewModel.LastResult;
         ResultMessageText.Foreground = result?.IsError == true
             ? StudioColors.Danger
-            : (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+            : ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
 
         ResultsGrid.ReferenceController = result is null
             ? null

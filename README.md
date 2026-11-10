@@ -521,10 +521,13 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with the transient message + `Ln/Col` (connection state lives in the rail),
-  splitter between editor and results. **Settings** (snippets, about) and the **Workspaces**
-  manager are app destinations: Workspaces opens from the switcher, while Settings sits on its
-  gear in the rail footer beside the workspace dots — the query toolbar only carries editor
-  actions (Format, Run, Stop).
+  splitter between editor and results. **Settings** (appearance, snippets, about) and the
+  **Workspaces** manager are app destinations: Workspaces opens from the switcher, while Settings
+  sits on its gear in the rail footer beside the workspace dots - the query toolbar only carries
+  editor actions (Format, Run, Stop). Appearance offers **Use Windows setting / Light / Dark**;
+  the choice is saved in `app_state` (`theme`), applied before the first frame, and runtime
+  switches move the content, result rows, editor syntax colours, caption buttons and Mica together
+  without a restart.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
   (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
   `FocusEditor`), so the editor can be swapped for a WebView2/Monaco island without changing the
@@ -533,7 +536,9 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 - **Native chrome**: the window uses a `MicaBackdrop`; the rail, toolbar and status bar are
   transparent so they read as one chrome surface with the title bar, and only real content sits on
   Fluent card brushes (`CardBackgroundFillColorDefaultBrush`). Falls back to the design's solid
-  background when `MicaController.IsSupported()` is false.
+  background when `MicaController.IsSupported()` is false. A forced Light/Dark choice recreates the
+  backdrop so Mica matches the content instead of the OS, and `AppWindowTitleBar.PreferredTheme`
+  keeps the caption buttons in the same mode.
 
 ## Deliberate gaps (next iterations)
 
@@ -579,6 +584,11 @@ estimates, `Notice` for `RAISE NOTICE` messages, and tracked `BEGIN`/`COMMIT`/`R
 - `ListView.CanReorderItems` reorders the bound `ObservableCollection` but not the model behind a
   mirror. Both tab strips write the new order back on `DragItemsCompleted` (query tabs to the space,
   result tabs to the query tab) and reindex the result titles.
+- `Application.RequestedTheme` can only be assigned during startup, so the saved appearance is read
+  before the first window and a runtime switch moves the root `FrameworkElement.RequestedTheme`
+  instead. `Application.Current.Resources[key]` still resolves against the startup app theme, so
+  code that caches brushes (result rows, headers) uses `ThemeService.GetBrush` with the control's
+  `ActualTheme`; XAML `ThemeResource` values update on their own.
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - MVVM Toolkit `[ObservableProperty]` on fields warns (MVVMTK0045) under WinRT/AOT; partial
   properties keep the build warning-free and AOT-ready.

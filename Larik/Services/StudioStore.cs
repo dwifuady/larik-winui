@@ -29,6 +29,9 @@ public sealed class StudioState
 
     /// <summary>Width of the cell-preview pane in DIPs.</summary>
     public double? CellPreviewWidth { get; set; }
+
+    /// <summary>The saved appearance choice: <c>system</c>, <c>light</c> or <c>dark</c>.</summary>
+    public string Theme { get; set; } = "system";
 }
 
 /// <summary>
@@ -187,6 +190,23 @@ public sealed class StudioStore
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads only the appearance choice, before the first window exists. The app theme has to be
+    /// assigned during startup, so loading the full workspace state here would be wasted work.
+    /// </summary>
+    public AppTheme LoadThemePreference()
+    {
+        try
+        {
+            using var connection = Open();
+            return ThemeService.Parse(ReadState(connection, "theme"));
+        }
+        catch
+        {
+            return AppTheme.System;
         }
     }
 
@@ -389,6 +409,7 @@ public sealed class StudioStore
             WindowBounds = ReadWindowBounds(connection),
             ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
             CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
+            Theme = ReadState(connection, "theme") ?? "system",
         };
 
         var spaces = new List<SpaceState>();
@@ -606,6 +627,7 @@ public sealed class StudioStore
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        SetState(connection, transaction, "theme", ThemeService.ToStorage(ThemeService.Parse(state.Theme)));
         if (state.ResultsPaneHeight is { } resultsHeight)
         {
             SetState(

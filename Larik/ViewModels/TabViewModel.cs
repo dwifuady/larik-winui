@@ -90,8 +90,21 @@ public partial class TabViewModel : ObservableObject
         }
     }
 
-    public SolidColorBrush TransactionBrush => (SolidColorBrush)Application.Current.Resources[
-        Session.IsDoomed ? "StudioDangerBrush" : "StudioWarningBrush"];
+    public SolidColorBrush TransactionBrush => (SolidColorBrush)ThemeService.GetBrush(
+        Session.IsDoomed ? "StudioDangerBrush" : "StudioWarningBrush",
+        StudioColors.Warning);
+
+    /// <summary>Active tabs carry primary text; inactive tabs recede (Arc sidebar behaviour).</summary>
+    public Brush TitleBrush => ThemeService.GetBrush(
+        IsActive ? "StudioTextPrimaryBrush" : "StudioTextSecondaryBrush",
+        StudioColors.Muted);
+
+    /// <summary>Code-resolved brushes do not follow a runtime theme switch on their own.</summary>
+    public void NotifyThemeChanged()
+    {
+        OnPropertyChanged(nameof(TitleBrush));
+        OnPropertyChanged(nameof(TransactionBrush));
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Subtitle))]
