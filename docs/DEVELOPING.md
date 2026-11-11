@@ -162,6 +162,27 @@ tag. The release publishes these asset names:
 - `Larik-<version>-win-<arch>.zip`
 - `SHA256SUMS.txt`
 
+### Auto-update (GitHub edition)
+
+`Services/UpdateService.cs` asks
+`https://api.github.com/repos/dwifuady/larik-winui/releases/latest` once per launch, compares the
+tag with `AppInfo.Version`, and picks `Larik-<version>-win-<arch>-setup.exe` when an Inno
+uninstaller is beside the app, otherwise the portable ZIP. The download goes to
+`%LOCALAPPDATA%\Larik WinUI\updates\<version>\` and is checked against `SHA256SUMS.txt`; a complete
+download is reused on the next launch. The installer runs with `/DIR=<current folder> /RELAUNCH=1`,
+and the portable path extracts the ZIP and starts a `cmd` helper that waits for the app to exit,
+copies with `robocopy`, and reopens `Larik.exe`.
+
+Only **unpackaged** builds self-update. `UpdateService.CanSelfUpdate` returns false when the process
+has package identity (Store, or `winapp run`) or when the build defines `LARIK_STORE`; the launch
+check and the About controls are then skipped. The preference lives in `app_state` as
+`check_for_updates` and defaults to on.
+
+To exercise the real feed locally, publish a portable build with a lower version and run it — the
+latest release is offered with its real size. Download and checksum work there; leave Install for a
+throw-away folder, because it really does replace the running copy. The UI suite runs the packaged
+debug identity, so it asserts the opposite side of the gate: no updater is offered there.
+
 ### Store package
 
 The Store build is separate from the tag release. Run **Actions → Store package** with a version;

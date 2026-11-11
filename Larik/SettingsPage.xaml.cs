@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Reflection;
 using Larik.Data.Addons;
 using Larik.Models;
 using Larik.Services;
@@ -39,6 +38,7 @@ public sealed partial class SettingsPage : Page
     private bool _suppressSelection;
     private bool _suppressCategory;
     private bool _syncingTheme;
+    private bool _loadingUpdates;
     private bool _addonsBusy;
     private StudioViewModel? _studio;
     private string _search = string.Empty;
@@ -80,9 +80,33 @@ public sealed partial class SettingsPage : Page
         App.Window.SetTitleBar(SettingsTitleBar);
         DatabasePathText.Text = LarikPaths.DatabasePath;
 
-        var version = typeof(SettingsPage).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        VersionText.Text = $"Version {(string.IsNullOrEmpty(version) ? "0.0.0" : version.Split('+')[0])} · MIT licensed";
+        var version = AppInfo.HasVersion ? AppInfo.Version : "0.0.0";
+        VersionText.Text = $"Version {version} · MIT licensed";
+
+        if (UpdateService.CanSelfUpdate)
+        {
+            _loadingUpdates = true;
+            try
+            {
+                CheckForUpdatesToggle.IsOn = _studio?.CheckForUpdates ?? true;
+            }
+            finally
+            {
+                _loadingUpdates = false;
+            }
+
+            CheckForUpdatesToggle.IsEnabled = _studio is not null;
+            UpdateStatusText.Text = CheckForUpdatesToggle.IsOn
+                ? "A check runs once when Larik starts."
+                : "Automatic checks are off. Use Check now when you want to look.";
+        }
+        else
+        {
+            // A packaged copy (the Store edition, or a debug run through winapp) owns no writable
+            // files here, so the Store delivers its updates instead.
+            UpdatesCard.Visibility = Visibility.Collapsed;
+            ManagedUpdatesNote.Visibility = Visibility.Visible;
+        }
 
         if (DialectChips.Children.Count == 0)
         {
@@ -191,6 +215,50 @@ public sealed partial class SettingsPage : Page
         else
         {
             ThemeService.Apply(theme);
+        }
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    private void CheckForUpdatesToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUpdates || _studio is null)
+        {
+            return;
+        }
+
+        _studio.CheckForUpdates = CheckForUpdatesToggle.IsOn;
+        UpdateStatusText.Text = CheckForUpdatesToggle.IsOn
+            ? "A check runs once when Larik starts."
+            : "Automatic checks are off. Use Check now when you want to look.";
+    }
+
+    private async void CheckNow_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Window is not MainWindow window)
+        {
+            return;
+        }
+
+        CheckNowButton.IsEnabled = false;
+        UpdateStatusText.Text = "Checking for updates…";
+
+        try
+        {
+            var status = await window.Update.CheckNowAsync();
+            UpdateStatusText.Text = status switch
+            {
+                UpdateCheckStatus.Available =>
+                    "An update is available. Use the notice at the bottom of the window to download it.",
+                UpdateCheckStatus.UpToDate => "You're running the latest version.",
+                UpdateCheckStatus.Failed =>
+                    "Couldn't check for updates. Check your connection and try again.",
+                _ => "Couldn't check for updates right now. Try again in a moment.",
+            };
+        }
+        finally
+        {
+            CheckNowButton.IsEnabled = true;
         }
     }
 

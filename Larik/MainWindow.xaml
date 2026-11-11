@@ -12,6 +12,54 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <!--  The page owns the whole window: the rail runs to the top edge and the caption lives inside the content column.  -->
-    <Frame x:Name="RootFrame" />
+    <Grid>
+        <!--  The page owns the whole window: the rail runs to the top edge and the caption lives inside the content column.  -->
+        <Frame x:Name="RootFrame" />
+
+        <!--
+            The update notice floats above whichever page is showing, so downloading never shifts
+            the workspace underneath it. It never opens in packaged builds: UpdateService reports
+            CanSelfUpdate false there and the launch check is skipped.
+        -->
+        <InfoBar
+            x:Name="UpdateBar"
+            Margin="24,24,24,44"
+            MaxWidth="540"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            AutomationProperties.AutomationId="UpdateInfoBar"
+            AutomationProperties.Name="Larik update"
+            IsClosable="True"
+            IsOpen="{x:Bind Update.IsOpen, Mode=TwoWay}"
+            Message="{x:Bind Update.Message, Mode=OneWay}"
+            Severity="{x:Bind Update.Severity, Mode=OneWay}"
+            Title="{x:Bind Update.Title, Mode=OneWay}">
+            <InfoBar.ActionButton>
+                <Button
+                    AutomationProperties.AutomationId="UpdateActionButton"
+                    AutomationProperties.Name="Download or install the update"
+                    Click="UpdateAction_Click"
+                    Content="{x:Bind Update.ActionText, Mode=OneWay}"
+                    IsEnabled="{x:Bind Update.CanAct, Mode=OneWay}"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Visibility="{x:Bind Update.ActionVisibility, Mode=OneWay}" />
+            </InfoBar.ActionButton>
+            <InfoBar.Content>
+                <StackPanel
+                    Spacing="6"
+                    Visibility="{x:Bind Update.ProgressVisibility, Mode=OneWay}">
+                    <ProgressBar
+                        AutomationProperties.Name="Update download progress"
+                        IsIndeterminate="{x:Bind Update.IsProgressIndeterminate, Mode=OneWay}"
+                        Maximum="100"
+                        Value="{x:Bind Update.ProgressValue, Mode=OneWay}" />
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="{x:Bind Update.ProgressText, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </InfoBar.Content>
+        </InfoBar>
+    </Grid>
 </Window>

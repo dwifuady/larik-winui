@@ -2232,6 +2232,12 @@ try {
         Click-Element 'About'
         Wait-ForText 'larik-winui' 10
 
+        # The suite drives a packaged debug identity, and a packaged copy must never offer the
+        # GitHub updater: it cannot replace files inside its package. The Store edition updates
+        # through the Store instead.
+        Assert-True ((Find-Element 'Check for updates automatically').matchCount -eq 0) 'a packaged build offered the GitHub updater'
+        Wait-ForText 'Updates are delivered by the Microsoft Store.' 10
+
         Click-Element 'Back'
         Wait-ForText 'Switch workspace' 10
     }

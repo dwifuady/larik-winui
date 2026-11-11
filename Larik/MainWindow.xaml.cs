@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Larik.Services;
+using Larik.ViewModels;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -21,6 +22,9 @@ public sealed partial class MainWindow : Window
     /// user actually chose.
     /// </summary>
     private WindowBoundsState? _normalBounds;
+
+    /// <summary>The launch update check and its download/install state.</summary>
+    public UpdateViewModel Update { get; } = new();
 
     public MainWindow()
     {
@@ -54,6 +58,25 @@ public sealed partial class MainWindow : Window
             mainPage?.ViewModel.SaveNow();
         };
     }
+
+    /// <summary>
+    /// Runs the once-per-launch GitHub check after the window is visible, so a slow network never
+    /// delays the first frame. Packaged builds and users who turned the check off return at once.
+    /// </summary>
+    public void StartUpdateCheck()
+    {
+        if (!UpdateService.CanSelfUpdate)
+        {
+            return;
+        }
+
+        if (RootFrame.Content is MainPage { ViewModel.CheckForUpdates: true })
+        {
+            _ = Update.CheckAsync();
+        }
+    }
+
+    private async void UpdateAction_Click(object sender, RoutedEventArgs e) => await Update.ActAsync();
 
     /// <summary>Applies the saved rectangle, or the comfortable desktop default on a first run.</summary>
     private void RestoreBounds(WindowBoundsState? bounds)

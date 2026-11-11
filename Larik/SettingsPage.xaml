@@ -622,6 +622,79 @@
                             Foreground="{ThemeResource StudioTextMutedBrush}"
                             Text="Version 0.0.0" />
 
+                        <!--  ============ UPDATES (GitHub edition only) ============  -->
+                        <Border
+                            x:Name="UpdatesCard"
+                            Margin="0,8,0,0"
+                            Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="3" VerticalAlignment="Center">
+                                        <TextBlock
+                                            FontSize="14"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                            Text="Check for updates automatically" />
+                                        <TextBlock
+                                            FontSize="11"
+                                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                                            Text="Larik checks GitHub Releases at launch. No workspace data or connection details are sent."
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        x:Name="CheckForUpdatesToggle"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="Check for updates automatically"
+                                        OffContent="Off"
+                                        OnContent="On"
+                                        Toggled="CheckForUpdatesToggle_Toggled" />
+                                </Grid>
+
+                                <Border
+                                    Height="1"
+                                    Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        x:Name="UpdateStatusText"
+                                        VerticalAlignment="Center"
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="A check runs once when Larik starts."
+                                        TextWrapping="Wrap" />
+                                    <Button
+                                        x:Name="CheckNowButton"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="Check for updates now"
+                                        Click="CheckNow_Click"
+                                        Content="Check now" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock
+                            x:Name="ManagedUpdatesNote"
+                            Margin="0,8,0,0"
+                            FontSize="11"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="This copy is installed as a Windows package. Updates are delivered by the Microsoft Store."
+                            TextWrapping="Wrap"
+                            Visibility="Collapsed" />
+
                         <TextBlock
                             Margin="0,12,0,0"
                             CharacterSpacing="120"

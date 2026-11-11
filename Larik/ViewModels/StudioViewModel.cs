@@ -212,6 +212,13 @@ public partial class StudioViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(AutoArchiveDescription))]
     public partial double AutoArchiveDays { get; set; } = 30;
 
+    /// <summary>
+    /// Whether the GitHub edition checks Releases once at launch. Packaged builds never check, so
+    /// this preference only affects the unpackaged installer and portable ZIP.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool CheckForUpdates { get; set; } = true;
+
     public Visibility ArchiveVisibility => IsArchiveOpen ? Visibility.Visible : Visibility.Collapsed;
 
     public Visibility ArchiveEmptyVisibility => HasVisibleArchivedTabs ? Visibility.Collapsed : Visibility.Visible;
@@ -485,6 +492,8 @@ public partial class StudioViewModel : ObservableObject
     partial void OnAutoArchiveEnabledChanged(bool value) => ScheduleSave();
 
     partial void OnAutoArchiveDaysChanged(double value) => ScheduleSave();
+
+    partial void OnCheckForUpdatesChanged(bool value) => ScheduleSave();
 
     /// <summary>Renames a tab. An empty name is ignored so a tab never loses its label.</summary>
     public bool RenameTab(TabViewModel tab, string title)
@@ -2386,6 +2395,7 @@ public partial class StudioViewModel : ObservableObject
         QueryCounter = _queryCounter,
         AutoArchiveEnabled = AutoArchiveEnabled,
         AutoArchiveDays = EffectiveAutoArchiveDays,
+        CheckForUpdates = CheckForUpdates,
         WindowBounds = WindowBounds,
         ResultsPaneHeight = ResultsPaneHeight,
         CellPreviewWidth = CellPreviewWidth,
@@ -2496,6 +2506,7 @@ public partial class StudioViewModel : ObservableObject
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);
+        CheckForUpdates = state.CheckForUpdates;
 
         foreach (var spaceState in state.Spaces)
         {

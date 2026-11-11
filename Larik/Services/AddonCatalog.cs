@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Larik.Data.Addons;
 
@@ -21,7 +20,7 @@ public static class AddonCatalog
 
     public static bool AddonsEnabled => AddonPolicy.AddonsEnabled;
 
-    public static string AppVersion { get; } = ReadAppVersion();
+    public static string AppVersion { get; } = AppInfo.HasVersion ? AppInfo.Version : "0.0.0";
 
     public static string CurrentPlatform =>
         RuntimeInformation.ProcessArchitecture switch
@@ -40,15 +39,5 @@ public static class AddonCatalog
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
             "Larik/0.1 (+https://github.com/dwifuady/larik-winui)");
         return client;
-    }
-
-    private static string ReadAppVersion()
-    {
-        var informational = typeof(AddonCatalog).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
-        return string.IsNullOrWhiteSpace(informational)
-            ? "0.0.0"
-            : informational.Split('+')[0];
     }
 }

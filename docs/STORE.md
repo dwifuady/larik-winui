@@ -19,6 +19,7 @@ index (MongoDB today). Both come from this repository; the difference is the bui
 | Settings → Drivers | hidden |
 | “Install another database driver…” | hidden |
 | Missing driver copy | “Not included in this edition” |
+| Self-update | none; About says Store updates come from the Store |
 | Package | x64 MSIX, self-contained, unsigned (the Store signs it) |
 | Index | `official.json` exists for a future signed first-party channel; unused today |
 
@@ -110,7 +111,8 @@ artifact itself stays unsigned.
 
 8. **Submit**, watch certification, fix anything it reports, and resubmit.
 9. **Updates**: increase the four-part package version, rerun the workflow, and submit the new
-   MSIX.
+   MSIX. The Store edition deliberately does **not** use the GitHub in-app updater: packaged copies
+   cannot replace their own files, and Store updates belong to the Store.
 
 ---
 

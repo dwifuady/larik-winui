@@ -66,5 +66,9 @@ public partial class App : Application
         Window = new MainWindow();
         DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         Window.Activate();
+
+        // The notice is useful only once the shell is on screen; checking before Activate would
+        // race the first layout and could show a bar over a window that is not there yet.
+        ((MainWindow)Window).StartUpdateCheck();
     }
 }
