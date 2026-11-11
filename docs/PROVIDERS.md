@@ -22,7 +22,7 @@ All contracts live in `Larik.Data` (`net10.0`, zero package references, no WinUI
 | `IDatabaseProvider` | Identity (`Id`, `DisplayName`, `Dialect`), settings, `CreateConnection`, `EditorLanguage`, `DescribeEndpoint`, `DescribeIdentity`. |
 | `IDatabaseConnection` | One session: `OpenAsync`/`CloseAsync`, `State`, `ServerVersion`, `GetDatabasesAsync`, `GetDatabaseDetailsAsync` (optional; marks databases the login cannot open), `ExecuteAsync`, `ExecuteBatchAsync`, `GetSchemaAsync`, `GetRoutinesAsync` (optional; procedures), `EstimateRowCountAsync` (optional; reference-preview size hint), `GetCurrentDatabaseAsync` (optional; reports a `USE` to the shell), plus optional transaction state/commit/rollback. |
 | `ConnectionProfile` | Saved non-secret values keyed by `ProviderSetting.Key`; `Get`/`GetInt`/`GetBool`. |
-| `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `IsAdvanced`). |
+| `ProviderSetting` | Declarative connection-dialog field (`Text`, `Password`, `Number`, `Boolean`, `File`, `IsAdvanced`). A `File` field is an editable path with a Browse… action; `FileExtensions` seeds the picker's filter. |
 | `QueryResult` | Columns, rows, `RecordsAffected`, message, error flag, elapsed, row cap, `Messages` (PRINT/warnings), `GeneratedQuery`, and `Statement` (the SQL that produced the result, used to resolve references). |
 | `TableSchema` / `ForeignKeySchema` | Table or view name, optional `Schema`, `Kind` (`Table`/`View`), columns, `ColumnDetails` (types), primary key, foreign keys (with `ReferencedSchema`). |
 | `RoutineSchema` / `RoutineParameter` | Stored procedure or function: optional `Schema`, `Kind`, ordered parameters with type/output/default. |
@@ -77,6 +77,14 @@ The default returns null, so an older provider simply shows no identity.
 The connection dialog builds itself from `Settings`. Password fields are stored in Windows
 Credential Manager, never in the SQLite state file. `IsAdvanced` moves rare fields into the
 dialog's **Advanced** section.
+
+A provider that opens a local file (SQLite, for example) declares the field as
+`ProviderSettingKind.File` and lists `FileExtensions` (`["db", "sqlite"]`). The field stays an
+editable path — the profile stores exactly what the provider reads, so `:memory:` or a path pasted
+from a script still works — and the dialog adds a **Browse…** action for an existing file. The
+filter is a hint, not validation: the picker also accepts any file, because a file-based engine
+does not always mandate an extension. Creating a new file is the path field's job (the provider's
+create-if-missing behaviour decides), so there is no second picker intent to choose from.
 
 ---
 

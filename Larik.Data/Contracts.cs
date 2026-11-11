@@ -7,6 +7,13 @@ public enum ProviderSettingKind
     Password,
     Number,
     Boolean,
+
+    /// <summary>
+    /// A local file path (a SQLite database, for example). The dialog keeps the path editable and
+    /// adds a Browse… action, so values a picker cannot express — an in-memory token or a path
+    /// pasted from a script — still work. Appended last so older hosts fall back to a text box.
+    /// </summary>
+    File,
 }
 
 /// <summary>
@@ -22,6 +29,14 @@ public sealed class ProviderSetting
     public string? DefaultValue { get; init; }
     public string? Placeholder { get; init; }
     public string? Hint { get; init; }
+
+    /// <summary>
+    /// Extensions the browse dialog offers for a <see cref="ProviderSettingKind.File"/> field,
+    /// without the leading dot (for example <c>["db", "sqlite"]</c>). Empty means any file. These
+    /// are a picker hint, not validation: the path field stays authoritative, and the picker always
+    /// allows any file because a file-based engine may accept any name.
+    /// </summary>
+    public IReadOnlyList<string> FileExtensions { get; init; } = [];
 
     /// <summary>
     /// Rare tuning fields (port, encryption, timeouts) are tucked into the dialog's Advanced

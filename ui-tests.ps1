@@ -1355,6 +1355,26 @@ try {
             Assert-True ((Find-Element 'Host').matchCount -gt 0) 'PostgreSQL settings did not render'
             Assert-True ((Find-Element 'Password').matchCount -gt 0) 'the PostgreSQL password field is missing'
 
+            # A provider can declare a file setting: the path stays editable and a Browse… action
+            # sits beside it. The fixture add-on proves the shell renders that kind without the
+            # suite installing a real file provider.
+            if ($LaunchedHere) {
+                Invoke-Ui @('click', $databasePicker.selector) | Out-Null
+                Start-Sleep -Milliseconds 600
+                $fixture = @((Find-Element 'Fixture (add-on)').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+                Assert-True ($null -ne $fixture) 'the fixture provider item is missing'
+                Invoke-Ui @('click', $fixture.selector) | Out-Null
+                Start-Sleep -Milliseconds 700
+                Assert-True ((Find-Element 'Browse for Database file').matchCount -gt 0) 'a file setting has no browse action'
+
+                $fileField = @((Find-Element 'Database file').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+                Assert-True ($null -ne $fileField) 'the file setting is not an editable path'
+                Invoke-Ui @('set-value', $fileField.selector, 'C:\data\app.db') | Out-Null
+                Start-Sleep -Milliseconds 300
+                $typed = ((Invoke-Ui @('get-value', $fileField.selector, '--json')) -join "`n" | ConvertFrom-Json).text
+                Assert-True ($typed -eq 'C:\data\app.db') "the file field kept '$typed'"
+            }
+
             # MongoDB is an add-on now: the built-in picker must not advertise it, and the dialog
             # offers the install path instead.
             Assert-True ((Find-Element 'MongoDB').matchCount -eq 0) 'MongoDB is still built in'
