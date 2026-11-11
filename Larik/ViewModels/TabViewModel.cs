@@ -216,18 +216,46 @@ public partial class TabViewModel : ObservableObject
             ? Results.Count
             : Math.Clamp(Results.IndexOf(_activeResult!), 0, Results.Count - 1);
 
-        if (!append && Results.Count > 0)
+        // Replacing the active result keeps its name: the new grid occupies the same tab.
+        var replaced = !append && Results.Count > 0 ? Results[index] : null;
+        if (replaced is not null)
         {
             Results.RemoveAt(index);
         }
 
         for (var i = 0; i < results.Count; i++)
         {
-            Results.Insert(index + i, new ResultSetViewModel(this, results[i], index + i));
+            // Carry the replaced tab's name only when the new result is the same kind (grid or
+            // messages), so a message tab replaced by a grid never keeps the label "Messages".
+            var carryName = i == 0
+                && replaced is not null
+                && (replaced.Result.Messages.Count > 0) == (results[i].Messages.Count > 0);
+            var title = carryName ? replaced!.Title : NextResultTitle(results[i]);
+            Results.Insert(index + i, new ResultSetViewModel(this, results[i], title));
         }
 
-        Reindex();
         SetActiveResult(Results[Math.Clamp(index, 0, Results.Count - 1)]);
+    }
+
+    /// <summary>
+    /// Names are assigned once at creation: reordering must not renumber tabs, so a new result takes
+    /// the next free number instead of its current position.
+    /// </summary>
+    private string NextResultTitle(QueryResult result)
+    {
+        if (result.Messages.Count > 0)
+        {
+            return "Messages";
+        }
+
+        var used = new HashSet<string>(Results.Select(item => item.Title), StringComparer.Ordinal);
+        var number = 1;
+        while (used.Contains($"Result {number}"))
+        {
+            number++;
+        }
+
+        return $"Result {number}";
     }
 
     public void SelectResult(ResultSetViewModel result)
@@ -239,8 +267,8 @@ public partial class TabViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Applies a reorder performed by the results strip. The active result stays active; only its
-    /// position (and therefore its "Result N" label) changes.
+    /// Applies a reorder performed by the results strip. The active result stays active and every
+    /// tab keeps its name; only the order changes.
     /// </summary>
     public void ApplyResultOrder(IReadOnlyList<ResultSetViewModel> order)
     {
@@ -253,8 +281,6 @@ public partial class TabViewModel : ObservableObject
                 Results.Move(current, target);
             }
         }
-
-        Reindex();
     }
 
     public void CloseResult(ResultSetViewModel result)
@@ -267,7 +293,6 @@ public partial class TabViewModel : ObservableObject
 
         var wasActive = ReferenceEquals(_activeResult, result);
         Results.RemoveAt(index);
-        Reindex();
 
         if (Results.Count == 0)
         {
@@ -291,14 +316,6 @@ public partial class TabViewModel : ObservableObject
             _activeResult = result;
             OnPropertyChanged(nameof(ActiveResult));
             OnPropertyChanged(nameof(Result));
-        }
-    }
-
-    private void Reindex()
-    {
-        for (var index = 0; index < Results.Count; index++)
-        {
-            Results[index].Index = index;
         }
     }
 

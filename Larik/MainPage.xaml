@@ -73,17 +73,12 @@
                             x:Name="TabTitleEditor"
                             Grid.Column="1"
                             Height="20"
-                            MinHeight="0"
-                            Padding="3,0"
                             VerticalAlignment="Center"
                             AutomationProperties.Name="Tab name"
-                            Background="{ThemeResource HairlineSubtleBrush}"
-                            BorderThickness="0"
-                            CornerRadius="3"
                             FontSize="12"
-                            IsSpellCheckEnabled="False"
                             KeyDown="TabTitleEditor_KeyDown"
                             LostFocus="TabTitleEditor_LostFocus"
+                            Style="{StaticResource StudioInlineRenameStyle}"
                             Text="{x:Bind DraftTitle, Mode=OneWay}"
                             Visibility="{x:Bind RenameEditorVisibility, Mode=OneWay}" />
                     </Grid>
@@ -959,6 +954,7 @@
                                 AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
                                 Background="{x:Bind TabBackground, Mode=OneWay}"
                                 CornerRadius="4"
+                                DoubleTapped="ResultTab_DoubleTapped"
                                 ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -975,13 +971,28 @@
                                             FontSize="11"
                                             FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
                                             Foreground="{x:Bind TitleBrush, Mode=OneWay}"
-                                            Text="{x:Bind Title, Mode=OneWay}" />
+                                            Text="{x:Bind Title, Mode=OneWay}"
+                                            Visibility="{x:Bind TitleVisibility, Mode=OneWay}" />
+                                        <TextBox
+                                            x:Name="ResultTitleEditor"
+                                            Height="20"
+                                            MinWidth="56"
+                                            MaxWidth="160"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="Result name"
+                                            FontSize="11"
+                                            KeyDown="ResultTitleEditor_KeyDown"
+                                            LostFocus="ResultTitleEditor_LostFocus"
+                                            Style="{StaticResource StudioInlineRenameStyle}"
+                                            Text="{x:Bind DraftTitle, Mode=OneWay}"
+                                            Visibility="{x:Bind RenameEditorVisibility, Mode=OneWay}" />
                                         <TextBlock
                                             MaxWidth="160"
                                             FontSize="10"
                                             Foreground="{x:Bind DetailBrush, Mode=OneWay}"
                                             Text="{x:Bind Detail, Mode=OneWay}"
-                                            TextTrimming="CharacterEllipsis" />
+                                            TextTrimming="CharacterEllipsis"
+                                            Visibility="{x:Bind TitleVisibility, Mode=OneWay}" />
                                     </StackPanel>
 
                                     <Button
