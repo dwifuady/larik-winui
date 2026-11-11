@@ -30,6 +30,10 @@ Requires Windows 10 1809+ and does not need a separate .NET install. The GitHub
 installer and portable ZIP are unsigned, so Windows SmartScreen may warn on the first run:
 **More info → Run anyway**. The Microsoft Store edition is signed by Microsoft.
 
+GitHub builds keep themselves current: an in-app notice checks Releases at launch, downloads the
+matching installer or portable ZIP, verifies its checksum, and installs it without leaving the app.
+The Store edition updates through the Store instead.
+
 ## What it does
 
 - **Workspaces are the object.** One workspace owns one connection; its databases sit underneath.

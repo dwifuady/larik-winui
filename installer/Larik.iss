@@ -82,4 +82,13 @@ Name: "{autoprograms}\Larik"; Filename: "{app}\Larik.exe"
 Name: "{autodesktop}\Larik"; Filename: "{app}\Larik.exe"; Tasks: desktopicon
 
 [Run]
+; A normal install offers the launch checkbox on the finished page. The in-app updater runs the
+; installer with /SILENT, so it passes /RELAUNCH=1 to reopen Larik once the files are in place.
 Filename: "{app}\Larik.exe"; Description: "{cm:LaunchProgram,Larik}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Larik.exe"; Flags: nowait; Check: ShouldRelaunchAfterUpdate
+
+[Code]
+function ShouldRelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;

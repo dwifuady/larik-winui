@@ -32,6 +32,12 @@ public sealed class StudioState
 
     /// <summary>The saved appearance choice: <c>system</c>, <c>light</c> or <c>dark</c>.</summary>
     public string Theme { get; set; } = "system";
+
+    /// <summary>
+    /// Whether the GitHub edition checks Releases once per launch. Packaged builds never check,
+    /// regardless of this preference.
+    /// </summary>
+    public bool CheckForUpdates { get; set; } = true;
 }
 
 /// <summary>
@@ -415,6 +421,8 @@ public sealed class StudioStore
             ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
             CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
             Theme = ReadState(connection, "theme") ?? "system",
+            CheckForUpdates = !bool.TryParse(ReadState(connection, "check_for_updates"), out var checkForUpdates)
+                || checkForUpdates,
         };
 
         var spaces = new List<SpaceState>();
@@ -646,6 +654,7 @@ public sealed class StudioStore
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "theme", ThemeService.ToStorage(ThemeService.Parse(state.Theme)));
+        SetState(connection, transaction, "check_for_updates", state.CheckForUpdates ? "true" : "false");
         if (state.ResultsPaneHeight is { } resultsHeight)
         {
             SetState(

@@ -175,6 +175,8 @@ jobs:
               ''
               'The SQL Server provider needs a reachable SQL Server (LocalDB works). The built-in Demo provider works without a server, so the app opens and runs offline.'
               ''
+              'Existing installs of the GitHub edition check for updates on launch and can download and install this release from the in-app notice. The Microsoft Store edition updates through the Store.'
+              ''
               'Larik is free software under the MIT license. See `THIRD-PARTY-NOTICES.md` in the ZIP for bundled components.'
               ''
               '## Changes'

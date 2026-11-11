@@ -11,6 +11,14 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   downloaded assemblies.
 - **GitHub** — the same core plus Settings → Drivers and the curated index (MongoDB today).
 
+- **Self-update (GitHub edition)**: the unpackaged installer and portable ZIP check GitHub Releases
+  once at launch, show a non-blocking notice, download in the background, verify the published
+  `SHA256SUMS.txt`, and install. An installed copy runs the per-user installer silently and reopens
+  Larik; a portable copy replaces its own folder after the app exits. Settings → About → **Check
+  now** runs the same check on demand and remembers **Check for updates automatically** in
+  `app_state`. A packaged build (the Store edition, or a debug run through `winapp`) never checks
+  or replaces its files: About hides the updater and says Store updates come from the Store.
+
 - **Vertical tabs, groups and pinned folders** per workspace, active tab tinted with the workspace
   colour (2 px strip + 26 % tint), database subtitle revealed on hover/active, close button.
   **Groups** are collapsible headers with a colour edge and a count; their tabs indent underneath,
@@ -311,6 +319,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | Gap | Why / next step |
 |---|---|
 | Three providers ship | SQL Server, PostgreSQL and the in-memory Demo. MongoDB ships as an add-on from its own repository (`dwifuady/larik-mongodb`). |
+| Updates are full downloads and unsigned | Each release downloads the whole ZIP or installer; there are no delta patches. The updater trusts TLS plus the release's `SHA256SUMS.txt`, not an Authenticode signature, so signing the GitHub artifacts is still future work. A portable copy in a read-only folder cannot update in place and points at the new ZIP instead. |
 | MongoDB is a T-SQL surface over a NoSQL engine | The provider translates your T-SQL into aggregation pipelines / write commands and passes mongosh (`db.c.method(…)`) through. Deliberately limited: single-column `JOIN … ON` (a multi-key ON is rejected), an `INSERT` column list is recommended (bare `VALUES` store under generated keys), a handful of mongosh methods, and no multi-document transactions yet (`BEGIN TRAN` errors). The result-tab *Generated query* strip shows the pipeline that actually ran. |
 | Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but SQL Server reads `sys.procedures` only and completion offers procedures only after `EXEC`/`CALL`. PostgreSQL reads functions too, but they are not offered in expression positions yet. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
 | PostgreSQL overloads collapse to one routine | The contract identifies a routine by schema + name, so the provider keeps the first overload's signature instead of showing two `CALL` candidates with the same name. A contract-level routine identity is the fix. |
