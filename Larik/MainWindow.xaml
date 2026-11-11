@@ -45,7 +45,9 @@
                     Visibility="{x:Bind Update.ActionVisibility, Mode=OneWay}" />
             </InfoBar.ActionButton>
             <InfoBar.Content>
+                <!--  The content slot is the last row, so it needs its own bottom padding; InfoBar does not add one when the action button is hidden.  -->
                 <StackPanel
+                    Margin="0,2,0,12"
                     Spacing="6"
                     Visibility="{x:Bind Update.ProgressVisibility, Mode=OneWay}">
                     <ProgressBar
