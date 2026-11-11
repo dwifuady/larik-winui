@@ -18,6 +18,12 @@ RELEASE_NOTES.md
 # UI test evidence
 ui-test-artifacts/
 
+# Store submission material and design sketches: kept locally, not in the repo.
+# Screenshots are regenerated from the Store build; the listing copy lives outside git.
+store-listing/
+mockups/
+docs/mockups/
+
 # IDE / OS
 .vs/
 *.user
