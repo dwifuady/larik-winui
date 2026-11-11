@@ -97,9 +97,10 @@ rollback a file write.
 Installed state lives on disk, not in `StudioStore`, so a manual copy of the `Plugins` folder
 works and an add-on survives a state-file reset. The cached index is disposable.
 
-Under MSIX, `%LOCALAPPDATA%` is redirected into the package's `LocalCache`. The Store build
-therefore has its own `Plugins` folder, separate from the portable and installer builds. That is
-acceptable, but it means:
+A packaged (MSIX) run keeps its state in the package's `LocalState`, so the Store build has its own
+`Plugins` folder, separate from the portable and installer builds. The Store build never scans it
+(add-ons are disabled there); the note only matters if a signed first-party channel ever uses it.
+That is acceptable, but it means:
 
 - add-on installation is per channel, not shared;
 - uninstalling the Store package removes its add-ons;
@@ -459,7 +460,7 @@ release with the add-on system present.
 - **No installer components.** MSIX installs the whole package. A Store customer cannot untick
   MongoDB; optional providers must be add-ons (or MSIX optional packages, §9.4).
 - **Install path is read-only.** `WindowsApps` cannot host plugins; everything goes to the
-  package's `LocalCache`, as designed.
+  package's `LocalState`, as designed.
 - **Uninstall removes add-ons.** Reinstall reads the cached index and offers the previously
   installed set.
 - **Updates are independent.** A Store update can raise `LarikDataContract.Version` past an

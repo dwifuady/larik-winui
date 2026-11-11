@@ -215,7 +215,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   **SQL Server** or **PostgreSQL**, and typing the trigger then Tab expands it in the editor. Rows
   persist in the same SQLite database as the workspace (the `snippets` table, same shape as
   `src-tauri/src/storage/snippets.rs`), with built-ins seeded by stable id so edits survive upgrades.
-- **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik WinUI\larik-winui.db`
+- **Persistence**: a SQLite database at `%LOCALAPPDATA%\Larik WinUI\larik-winui.db` for the unpackaged
+  build, or `<package>\LocalState\larik-winui.db` for a packaged (MSIX) one
   (`larik-winui-dev.db` in Debug builds) keeps `spaces`, `space_settings`, `tabs`, `archived_tabs`,
   `snippets` and `app_state` — the same model as `src-tauri/src/storage`, extended with pin state,
   the inactivity clock and archived tabs — so spaces, connection profiles (non-secret settings),
@@ -232,10 +233,11 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   app's** (`%APPDATA%\larik\larik-sql-studio\data\larik.db`): the two schemas share table names but
   not versions, so the WinUI build keeps its own file and the two apps install and run side by side.
   The first launch after this split copies the WinUI build's older `%LOCALAPPDATA%\Larik` database
-  (and `studio.json`) forward once, without touching the Tauri store. Windows may redirect a
-  packaged (MSIX) build's writes into
-  `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\Larik WinUI` — standard MSIX
-  AppData redirection, not a second store; the app still addresses it as `%LOCALAPPDATA%\Larik WinUI`.
+  (and `studio.json`) forward once, without touching the Tauri store. A packaged (MSIX) build keeps
+  its state in the package's `LocalState` instead — `LarikPaths` asks
+  `ApplicationData.Current.LocalFolder` when the process has package identity, so an uninstall takes
+  the data with it and the Store and GitHub editions never share a database. Packaged builds do not
+  import the old `%LOCALAPPDATA%\Larik` store; that carry-over belongs to the unpackaged edition.
 - **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
   reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
   the pane, and running a query while it is hidden opens it again. Closing the only result hides the

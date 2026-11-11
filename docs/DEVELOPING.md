@@ -141,9 +141,9 @@ an existing instance first.
   a background process from stealing focus. The test harness presses a synthetic Alt before
   `SetForegroundWindow` to unlock it; without that, clicks and keys land in whatever window has focus
   (the IDE), while UIA `invoke`/`get-value` still work — a confusing half-passing suite.
-- MSIX can redirect `%LOCALAPPDATA%` writes into
-  `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local`; state checks must look in both
-  places, and a direct `.exe` run uses the real profile path.
+- A packaged (MSIX) run keeps its state in the package's `LocalState`
+  (`%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState`); an unpackaged run uses the real
+  `%LOCALAPPDATA%\Larik WinUI`. State checks must look in both places.
 
 ## Releasing
 

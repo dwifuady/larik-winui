@@ -152,6 +152,9 @@ if (Test-Path $ManifestPath) {
 }
 if ($Package) {
     $CacheLocal = Join-Path $env:LOCALAPPDATA "Packages\$($Package.PackageFamilyName)\LocalCache\Local"
+    # The packaged build keeps its store in the package's LocalState; older packaged builds wrote
+    # under LocalCache, and a packaged debug identity may still have left files there.
+    $StateRoots += Join-Path $env:LOCALAPPDATA "Packages\$($Package.PackageFamilyName)\LocalState"
     $StateRoots += Join-Path $CacheLocal 'Larik WinUI'
     $LegacyStateRoots += Join-Path $CacheLocal 'Larik'
 }
@@ -241,6 +244,8 @@ function Get-StateDatabasePath {
     if ($LaunchedHere) {
         $roots += @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -ErrorAction SilentlyContinue |
                 ForEach-Object { Join-Path $_.FullName 'LocalCache\Local\Larik WinUI' })
+        $roots += @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName 'LocalState' })
     }
     $roots += @($StateRoots)
     foreach ($root in $roots | Select-Object -Unique) {
@@ -2283,6 +2288,17 @@ try {
         # The About page names this build's own store, so local data is easy to find.
         Click-Element 'About'
         Wait-ForText 'larik-winui' 10
+
+        # A packaged copy keeps its store inside the package: an uninstall must take it with the
+        # app, and it must not land in the shared %LOCALAPPDATA%\Larik WinUI of the GitHub build.
+        if ($Package) {
+            $storePath = @((Find-Element 'larik-winui').matches |
+                Where-Object { $_.name -like '*larik-winui*.db' } |
+                Select-Object -First 1)
+            Assert-True ($null -ne $storePath) 'the About page does not name the store'
+            Assert-True ($storePath.name -match '\\Packages\\[^\\]+\\LocalState\\') `
+                "the packaged store is outside the package: $($storePath.name)"
+        }
 
         # The suite drives a packaged debug identity, and a packaged copy must never offer the
         # GitHub updater: it cannot replace files inside its package. The Store edition updates

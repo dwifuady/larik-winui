@@ -128,11 +128,17 @@ artifact itself stays unsigned.
 
 ## 4. State continuity
 
-The Store MSIX writes to the package's `LocalCache`; the GitHub build writes to
-`%LOCALAPPDATA%\Larik WinUI`. A user who tries both sees two different stores unless the one-time
-import from the profile store to the package store is present and verified in the Store package
-before submission. Test this with a state that contains at least one workspace, one tab and one
-saved connection.
+A packaged copy keeps its state in the package's `LocalState`:
+`%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\larik-winui.db`. `LarikPaths` uses
+`ApplicationData.Current.LocalFolder` whenever the process has package identity, so the file belongs
+to the package. The GitHub build writes to `%LOCALAPPDATA%\Larik WinUI`.
+
+That split is deliberate: uninstalling the Store copy removes its data with it, and the two editions
+never open each other's database. There is no import between them — a user who tries both starts
+fresh in the second one, and the listing says so.
+
+On a clean VM, confirm that About names a path under `\Packages\<family>\LocalState\` and that
+`%LOCALAPPDATA%\Larik WinUI` was not created.
 
 ---
 

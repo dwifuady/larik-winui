@@ -14,7 +14,19 @@ public static class LarikPaths
     public const string DatabaseFileName = "larik-winui.db";
 #endif
 
-    /// <summary><c>%LOCALAPPDATA%\Larik WinUI</c>, or the directory named by <c>LARIK_STATE_DIR</c>.</summary>
+    /// <summary>
+    /// The package's <c>LocalState</c> folder for a packaged run, otherwise null. Resolved once:
+    /// <c>ApplicationData.Current</c> throws when the process has no package identity.
+    /// </summary>
+    private static readonly string? PackageStateDirectory = ResolvePackageStateDirectory();
+
+    /// <summary>True when this process runs from an MSIX package (Store, or the debug identity).</summary>
+    public static bool IsPackaged => PackageStateDirectory is not null;
+
+    /// <summary>
+    /// The package's <c>LocalState</c> for a packaged run, otherwise <c>%LOCALAPPDATA%\Larik WinUI</c>,
+    /// or the directory named by <c>LARIK_STATE_DIR</c>.
+    /// </summary>
     public static string StateDirectory { get; } = ResolveStateDirectory();
 
     public static string DatabasePath { get; } = Path.Combine(StateDirectory, DatabaseFileName);
@@ -79,15 +91,39 @@ public static class LarikPaths
             return directory;
         }
 
+        // A packaged copy keeps its state inside the package. Writing to %LOCALAPPDATA% would
+        // outlive an uninstall and land in the same folder as the unpackaged (GitHub) edition,
+        // which is exactly the edition isolation the Store build promises.
+        if (PackageStateDirectory is not null)
+        {
+            return PackageStateDirectory;
+        }
+
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Larik WinUI");
     }
 
+    private static string? ResolvePackageStateDirectory()
+    {
+        try
+        {
+            var local = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
+            return string.IsNullOrEmpty(local) ? null : local;
+        }
+        catch
+        {
+            // No package identity, or the API is unavailable: an unpackaged run is not an error.
+            return null;
+        }
+    }
+
     private static string? ResolveLegacyDatabasePath()
     {
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LARIK_STATE_DIR")))
+        if (IsPackaged || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LARIK_STATE_DIR")))
         {
+            // The legacy store lives outside the package. A packaged copy must not import it:
+            // that would cross the edition boundary the Store build is meant to keep.
             return null;
         }
 
