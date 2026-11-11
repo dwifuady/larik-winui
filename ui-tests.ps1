@@ -1972,9 +1972,9 @@ try {
         Invoke-Ui @('drag', $from, $to, '--hold-ms', '250', '--dwell-ms', '300') | Out-Null
         Start-Sleep -Milliseconds 700
 
-        # Dragging the model result (old Result 1) to the right makes the label result first;
-        # titles reindex, so the old second grid must now answer to Result 2.
-        Click-Element 'Result 2'
+        # Dragging the model result (old Result 1) to the right makes the label result first.
+        # Names are stable, so the old first grid keeps answering to Result 1 in its new place.
+        Click-Element 'Result 1'
         Start-Sleep -Milliseconds 600
         Assert-True ((Find-Element 'model').matchCount -gt 0) 'the first result did not move to the right'
         Assert-True ((Find-Element 'row_1').matchCount -eq 0) 'the second result stayed in place'
@@ -1984,9 +1984,45 @@ try {
         Start-Sleep -Milliseconds 500
         Click-Element 'Query 2'
         Start-Sleep -Milliseconds 500
-        Click-Element 'Result 2'
+        Click-Element 'Result 1'
         Start-Sleep -Milliseconds 500
         Assert-True ((Find-Element 'model').matchCount -gt 0) 'the reordered results reverted on tab switch'
+    }
+
+    Test-UI 'a result tab renames on double-click and keeps the name' {
+        $tab = @((Find-Element 'Result 1').matches) |
+            Where-Object { $_.type -eq 'ListItem' -and $_.width -gt 0 } |
+            Select-Object -First 1
+        Assert-True ($null -ne $tab) 'the result tab was not found'
+
+        Invoke-Ui @('click', $tab.selector, '--double') -Attempts 4 | Out-Null
+        Wait-ForText 'Result name' 10
+        $editor = @((Find-Element 'Result name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $editor) 'the inline result rename editor did not appear'
+        Invoke-Ui @('set-value', $editor.selector, 'Model rows') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Model rows').matchCount -gt 0) 'the result rename did not commit'
+        Assert-True ((Find-Element 'Result 1').matchCount -eq 0) 'the old result name is still visible'
+
+        # The name belongs to the result, not the position: it survives a query-tab round trip.
+        Click-Element 'Query 1'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Model rows').matchCount -gt 0) 'the result name was lost on tab switch'
+
+        # Restore the generated name so later checks keep the plain Result N labels.
+        $renamed = @((Find-Element 'Model rows').matches) |
+            Where-Object { $_.type -eq 'ListItem' -and $_.width -gt 0 } |
+            Select-Object -First 1
+        Invoke-Ui @('click', $renamed.selector, '--double') -Attempts 4 | Out-Null
+        Wait-ForText 'Result name' 10
+        $editor = @((Find-Element 'Result name').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $editor.selector, 'Result 1') | Out-Null
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'Result 1').matchCount -gt 0) 'the result name was not restored'
     }
 
     Test-UI 'new tabs open on top and query tabs can be reordered by dragging' {

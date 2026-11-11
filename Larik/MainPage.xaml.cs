@@ -2978,6 +2978,88 @@ public sealed partial class MainPage : Page
         }
     }
 
+    /// <summary>Double-clicking a result tab is the quick path to renaming it in place.</summary>
+    private void ResultTab_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ResultSetViewModel result } container)
+        {
+            BeginResultRename(result, container);
+            e.Handled = true;
+        }
+    }
+
+    private void BeginResultRename(ResultSetViewModel result, FrameworkElement container)
+    {
+        if (!result.IsRenaming)
+        {
+            result.BeginRename();
+        }
+
+        // The editor is only visible after the tab has re-rendered, so focus it next tick.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var editor = FindDescendant<TextBox>(container, "ResultTitleEditor");
+            if (editor is null)
+            {
+                return;
+            }
+
+            editor.Focus(FocusState.Programmatic);
+            editor.SelectAll();
+        });
+    }
+
+    private void ResultTitleEditor_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (sender is not TextBox box || box.DataContext is not ResultSetViewModel result)
+        {
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            CommitResultRename(result, box.Text);
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CancelResultRename(result);
+            e.Handled = true;
+        }
+    }
+
+    private void ResultTitleEditor_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox box
+            && box.DataContext is ResultSetViewModel result
+            && result.IsRenaming)
+        {
+            CommitResultRename(result, box.Text);
+        }
+    }
+
+    private void CommitResultRename(ResultSetViewModel result, string text)
+    {
+        if (!result.IsRenaming)
+        {
+            return;
+        }
+
+        result.EndRename();
+        ViewModel.RenameResult(result, text);
+    }
+
+    private void CancelResultRename(ResultSetViewModel result)
+    {
+        if (!result.IsRenaming)
+        {
+            return;
+        }
+
+        result.EndRename();
+        ViewModel.StatusText = "Rename cancelled";
+    }
+
     private void ResultTabClose_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: ResultSetViewModel result })

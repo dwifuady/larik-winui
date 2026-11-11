@@ -50,8 +50,9 @@ The Store edition updates through the Store instead.
 - **One session per tab.** Temp tables, `SET` options and `BEGIN TRAN` stay on that tab; a `TXN`
   guard offers Commit and Roll back, and `USE` moves the tab, rail and completion to the new
   database.
-- **Results that hold up.** One result tab per result set, a virtualized grid, cell preview with
-  JSON/XML formatting, foreign-key reference previews, TSV copy, and CSV/JSON export.
+- **Results that hold up.** One result tab per result set — drag to reorder, double-click to rename
+  — a virtualized grid, cell preview with JSON/XML formatting, foreign-key reference previews, TSV
+  copy, and CSV/JSON export.
 - **Windows-native craft.** Mica and the system theme, Light/Dark/HighContrast, real keyboard and
   accessibility support, and no web-app chrome.
 

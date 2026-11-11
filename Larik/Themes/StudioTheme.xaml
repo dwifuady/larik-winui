@@ -102,6 +102,81 @@
         <Setter Property="Foreground" Value="{ThemeResource StudioTextSecondaryBrush}" />
     </Style>
 
+    <!--
+        Inline rename box for tabs. The default TextBox template adds its own clear button (a
+        second X beside the tab's close button) and a bright accent underline; this keeps only the
+        text surface, with the accent moved to a quiet border when focused.
+    -->
+    <Style x:Key="StudioInlineRenameStyle" TargetType="TextBox">
+        <Setter Property="Background" Value="{ThemeResource ElevatedSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{ThemeResource StudioTextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource HairlineBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="4,0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="IsSpellCheckEnabled" Value="False" />
+        <Setter Property="UseSystemFocusVisuals" Value="False" />
+        <Setter Property="SelectionHighlightColor" Value="{ThemeResource EditorSelectionBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Grid>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" />
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters>
+                                        <Setter Target="BorderElement.BorderBrush" Value="{ThemeResource HairlineBrush}" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Focused">
+                                    <VisualState.Setters>
+                                        <Setter Target="BorderElement.BorderBrush" Value="{ThemeResource StudioAccentBrush}" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="BorderElement.Background" Value="{ThemeResource PanelBackgroundBrush}" />
+                                        <Setter Target="BorderElement.BorderBrush" Value="{ThemeResource HairlineSubtleBrush}" />
+                                        <Setter Target="ContentElement.Foreground" Value="{ThemeResource StudioTextMutedBrush}" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
+                        <Border
+                            x:Name="BorderElement"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Control.IsTemplateFocusTarget="True"
+                            CornerRadius="{TemplateBinding CornerRadius}" />
+                        <ScrollViewer
+                            x:Name="ContentElement"
+                            Margin="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            AutomationProperties.AccessibilityView="Raw"
+                            HorizontalScrollBarVisibility="Hidden"
+                            HorizontalScrollMode="Disabled"
+                            IsTabStop="False"
+                            VerticalScrollBarVisibility="Hidden"
+                            VerticalScrollMode="Disabled"
+                            ZoomMode="Disabled" />
+                        <TextBlock
+                            x:Name="PlaceholderTextContentPresenter"
+                            Margin="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            IsHitTestVisible="False"
+                            Text="{TemplateBinding PlaceholderText}"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Destructive confirmation: same weight as the accent action, but red and never the default. -->
     <Style
         x:Key="StudioDangerButtonStyle"

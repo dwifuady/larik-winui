@@ -511,6 +511,15 @@ public partial class StudioViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>Renames a result tab. An empty name is ignored so a tab never loses its label.</summary>
+    public void RenameResult(ResultSetViewModel result, string title)
+    {
+        if (result.Rename(title))
+        {
+            StatusText = $"Renamed result tab to {result.Title}";
+        }
+    }
+
     /// <summary>
     /// Pinning acts on what the user right-clicked: a loose tab, or the group a tab belongs to.
     /// A pinned group is the folder form, so the whole set moves band together.

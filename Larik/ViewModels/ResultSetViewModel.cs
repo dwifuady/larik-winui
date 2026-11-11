@@ -10,21 +10,35 @@ namespace Larik.ViewModels;
 /// <summary>One result tab inside a query tab. A batch can produce several of these.</summary>
 public partial class ResultSetViewModel : ObservableObject
 {
-    public ResultSetViewModel(TabViewModel tab, QueryResult result, int index)
+    /// <summary>
+    /// <paramref name="title"/> is the tab's label at creation. It is deliberately stable rather
+    /// than derived from the position, so reordering the strip never renumbers a result.
+    /// </summary>
+    public ResultSetViewModel(TabViewModel tab, QueryResult result, string title)
     {
         Tab = tab;
         Result = result;
-        Index = index;
+        _title = title;
     }
 
     public TabViewModel Tab { get; }
 
     public QueryResult Result { get; }
 
+    private string _title;
+
+    /// <summary>The visible name, kept across reorders and used by the tab's automation name.</summary>
+    public string Title => _title;
+
+    public string CloseName => $"Close {Title}";
+
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(Title))]
-    [NotifyPropertyChangedFor(nameof(CloseName))]
-    public partial int Index { get; set; }
+    [NotifyPropertyChangedFor(nameof(TitleVisibility))]
+    [NotifyPropertyChangedFor(nameof(RenameEditorVisibility))]
+    public partial bool IsRenaming { get; set; }
+
+    [ObservableProperty]
+    public partial string DraftTitle { get; set; } = string.Empty;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TabBackground))]
@@ -34,9 +48,9 @@ public partial class ResultSetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ActiveStripOpacity))]
     public partial bool IsActive { get; set; }
 
-    public string Title => Result.Messages.Count > 0 ? "Messages" : $"Result {Index + 1}";
+    public Visibility TitleVisibility => IsRenaming ? Visibility.Collapsed : Visibility.Visible;
 
-    public string CloseName => $"Close {Title}";
+    public Visibility RenameEditorVisibility => IsRenaming ? Visibility.Visible : Visibility.Collapsed;
 
     public string Detail => Result.IsError
         ? "Error"
@@ -76,6 +90,13 @@ public partial class ResultSetViewModel : ObservableObject
         ? ThemeService.GetBrush("StudioTextPrimaryBrush", StudioColors.Muted)
         : ThemeService.GetBrush("StudioTextSecondaryBrush", StudioColors.Muted);
 
+    /// <summary>Inactive tabs keep their close affordance, but quiet until the tab is chosen.</summary>
+    public double CloseOpacity => IsActive ? 1 : 0.45;
+
+    public double ActiveStripOpacity => IsActive ? 1 : 0;
+
+    public SolidColorBrush AccentBrush => Tab.Space.AccentBrush;
+
     /// <summary>Code-resolved brushes do not follow a runtime theme switch on their own.</summary>
     public void NotifyThemeChanged()
     {
@@ -83,10 +104,26 @@ public partial class ResultSetViewModel : ObservableObject
         OnPropertyChanged(nameof(TitleBrush));
     }
 
-    /// <summary>Inactive tabs keep their close affordance, but quiet until the tab is chosen.</summary>
-    public double CloseOpacity => IsActive ? 1 : 0.45;
+    public void BeginRename()
+    {
+        DraftTitle = Title;
+        IsRenaming = true;
+    }
 
-    public double ActiveStripOpacity => IsActive ? 1 : 0;
+    public void EndRename() => IsRenaming = false;
 
-    public SolidColorBrush AccentBrush => Tab.Space.AccentBrush;
+    /// <summary>Applies a typed name. An empty name is ignored so a tab never loses its label.</summary>
+    public bool Rename(string title)
+    {
+        var trimmed = title.Trim();
+        if (trimmed.Length == 0 || string.Equals(trimmed, _title, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _title = trimmed;
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(CloseName));
+        return true;
+    }
 }

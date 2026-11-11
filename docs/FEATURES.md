@@ -249,7 +249,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   Ctrl+Enter replaces the active result tab; Ctrl+\ appends new
   result tabs. Tabs show their row count or error, can be switched and closed, and belong to their
   query tab. **Drag a result tab to reorder it** within the query tab; the active result stays
-  active and the remaining tabs renumber. Each grid is virtualized — a `ListView` realizes only
+  active and each tab keeps its name (names are assigned once, not from the position).
+  **Double-click a result tab to rename it** in place; Enter commits and Esc cancels. Each grid is
+  virtualized — a `ListView` realizes only
   the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
