@@ -1221,6 +1221,18 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             return;
         }
 
+        // Ctrl+Tab is also swallowed by the editor, and it must win over accepting a completion.
+        // Shift reverses the direction; neither leaves the workspace.
+        if (e.Key == VirtualKey.Tab && IsKeyDown(VirtualKey.Control) && !IsKeyDown(VirtualKey.Menu))
+        {
+            HideCompletions();
+            CommandRequested?.Invoke(
+                this,
+                IsKeyDown(VirtualKey.Shift) ? EditorCommandKind.PreviousTab : EditorCommandKind.NextTab);
+            e.Handled = true;
+            return;
+        }
+
         if (IsKeyDown(VirtualKey.Control) && !IsKeyDown(VirtualKey.Shift) && !IsKeyDown(VirtualKey.Menu))
         {
             switch (e.Key)

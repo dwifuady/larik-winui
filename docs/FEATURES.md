@@ -36,7 +36,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   **inline**; Enter commits, Esc cancels, clicking away commits. Closing is non-destructive: the tab
   **moves to the archive** and can be restored into its group.
   **New tabs open at the top of the unpinned section**, and the **New tab row** is a full-width
-  tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too.
+  tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too, and
+  **Ctrl+Tab / Ctrl+Shift+Tab** cycle the active workspace's query tabs from anywhere in the app
+  (wrapping at the ends, never leaving the workspace).
   The workspace switcher spans the full rail width; the sidebar toggle lives in the title bar
   (Ctrl+B also works). The connection state sits on one line under the workspace name with its
   single action (**Connect** / **Disconnect**) at the end of that line, so the primary action is
@@ -49,8 +51,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 - **New-tab command palette**: the New tab row opens a searchable palette instead of a modal
   database picker. Type to filter the workspace's databases, use Up/Down, and press Enter to open
   the tab (Esc or the backdrop cancels). Databases the login can open lead the list, alphabetically,
-  followed by the ones it can only see; the current tab's database stays first in its group. With no
-  databases available, Enter opens an unbound tab.
+  followed by the ones it can only see; the current tab's database stays first in its group. Names the
+  login cannot open are listed but **disabled** (labelled *no access*) and are skipped by the arrow
+  keys, Enter and clicks. With no databases available, Enter opens an unbound tab.
 - **Archive & history**: the TABS header's archive button opens a page listing
   archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
   back in its workspace (pin state, and its group when that group still exists); Delete or

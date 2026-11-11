@@ -52,4 +52,21 @@ public sealed class DatabaseInfoTests
         Assert.NotEmpty(databases);
         Assert.All(databases, database => Assert.True(database.IsAccessible));
     }
+
+    [Fact]
+    public async Task Demo_marker_lists_a_database_the_login_cannot_open_without_leaking_the_marker()
+    {
+        var provider = new DemoProvider();
+        var profile = new ConnectionProfile { ProviderId = DemoProvider.ProviderId };
+        profile.Values["databases"] = "larik_a,!larik_locked";
+        await using var connection = provider.CreateConnection(profile);
+        await connection.OpenAsync();
+
+        var databases = await connection.GetDatabaseDetailsAsync();
+        var names = await connection.GetDatabasesAsync();
+
+        Assert.Equal(["larik_a", "larik_locked"], databases.Select(database => database.Name));
+        Assert.False(databases[1].IsAccessible);
+        Assert.DoesNotContain("!larik_locked", names);
+    }
 }

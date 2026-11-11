@@ -18,6 +18,10 @@ public enum EditorCommandKind
     NewTab,
     ToggleSidebar,
 
+    /// <summary>Cycle to the next/previous query tab in the workspace (Ctrl+Tab / Ctrl+Shift+Tab).</summary>
+    NextTab,
+    PreviousTab,
+
     /// <summary>Toggle the results pane (Ctrl+R).</summary>
     ToggleResults,
 

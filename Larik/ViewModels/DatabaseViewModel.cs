@@ -17,6 +17,9 @@ public sealed partial class DatabaseViewModel : ObservableObject
     /// <summary>False when the login can see the name but cannot open it; it sorts after the usable ones.</summary>
     public bool IsAccessible => Info.IsAccessible;
 
+    /// <summary>The new-tab palette lists the name but disables it and says why.</summary>
+    public Visibility AccessHintVisibility => IsAccessible ? Visibility.Collapsed : Visibility.Visible;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(NameWeight))]
     [NotifyPropertyChangedFor(nameof(CheckVisibility))]

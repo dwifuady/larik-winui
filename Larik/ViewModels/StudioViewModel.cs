@@ -2016,6 +2016,26 @@ public partial class StudioViewModel : ObservableObject
         ScheduleSave();
     }
 
+    /// <summary>
+    /// Cycles the active workspace's query tabs in rail order, wrapping at the ends. Ctrl+Tab and
+    /// Ctrl+Shift+Tab must never leave the workspace, so this only walks <see cref="Tabs"/>.
+    /// </summary>
+    public bool SelectRelativeTab(int offset)
+    {
+        if (Tabs.Count < 2)
+        {
+            return false;
+        }
+
+        var index = ActiveTab is null ? -1 : Tabs.IndexOf(ActiveTab);
+        var next = index < 0
+            ? offset > 0 ? 0 : Tabs.Count - 1
+            : (index + offset + Tabs.Count) % Tabs.Count;
+
+        SelectTab(Tabs[next]);
+        return true;
+    }
+
     /// <summary>Points the space's database context at the tab's database and reloads completion.</summary>
     private void ApplyTabDatabase(TabViewModel tab)
     {

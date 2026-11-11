@@ -685,7 +685,7 @@ try {
 
         $databases = @((Find-Element 'Databases').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
         Assert-True ($null -ne $databases) 'the Demo databases field is missing'
-        Invoke-Ui @('set-value', $databases.selector, 'larik_staging,larik_sandbox') | Out-Null
+        Invoke-Ui @('set-value', $databases.selector, 'larik_staging,larik_sandbox,!larik_archive') | Out-Null
         Start-Sleep -Milliseconds 300
         $demoNames = ((Invoke-Ui @('get-value', $databases.selector, '--json')) -join "`n" | ConvertFrom-Json).text
         Assert-True ($demoNames -match 'larik_staging') "the Demo databases field kept '$demoNames'"
@@ -1629,6 +1629,25 @@ try {
         Assert-True ((Find-Element 'tempdb').matchCount -gt 0) 'the database selector did not follow the tab database'
     }
 
+    Test-UI 'the new-tab palette disables a database the login cannot open' {
+        Click-Element 'New query tab'
+        Start-Sleep -Milliseconds 800
+        Focus-Element 'New tab database search'
+        Send-Keys 'larik_archive' -Literal
+        Start-Sleep -Milliseconds 500
+
+        $locked = @((Find-Element 'larik_archive').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+        Assert-True ($null -ne $locked) 'the locked database is not listed'
+        Assert-True (-not $locked.isEnabled) 'the locked database is selectable'
+
+        # Enter must not fall through to the first row when the only match has no access.
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'New query database').matchCount -gt 0) 'Enter opened a tab on a database with no access'
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 400
+    }
+
     Test-UI 'each tab keeps its own result grid' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
@@ -2216,6 +2235,39 @@ try {
         Start-Sleep -Milliseconds 400
         Click-Element 'RunButton'
         Wait-ForText 'Refused'
+    }
+
+    Test-UI 'a long server name stays inside the workspace switcher' {
+        # The switcher shows the endpoint above Connect. A long host must trim to one bounded line
+        # with the full value in its tooltip, instead of widening the flyout. Edit the workspace
+        # while another space is active: saving a changed active connection reconnects, which
+        # would hold the dialog open for the lifetime of the fixture host's connect timeout.
+        Switch-Workspace 'Staging'
+        Open-WorkspaceSettings 'Local SQL Server'
+        $server = @((Find-Element 'Server').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Assert-True ($null -ne $server) 'the server field is missing'
+        Invoke-Ui @('set-value', $server.selector, 'larik-marquee-fixture-with-a-very-long-server-name.example.internal\SQLEXPRESS') | Out-Null
+        Click-Element 'Save'
+        Start-Sleep -Milliseconds 1500
+        Close-WorkspaceManager
+
+        Switch-Workspace 'Local SQL Server'
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        $line = @((Find-Element 'larik-marquee-fixture').matches | Where-Object { $_.type -eq 'Text' } | Select-Object -First 1)
+        Assert-True ($null -ne $line) 'the switcher did not show the long endpoint'
+        Assert-True ($line.width -le 340) "the long endpoint widened the switcher to $($line.width)px"
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 300
+
+        # Put the live LocalDB back; the remaining checks and the next run depend on it.
+        Switch-Workspace 'Staging'
+        Open-WorkspaceSettings 'Local SQL Server'
+        $server = @((Find-Element 'Server').matches | Where-Object { $_.type -eq 'Edit' } | Select-Object -First 1)
+        Invoke-Ui @('set-value', $server.selector, '(localdb)\MSSQLLocalDB') | Out-Null
+        Click-Element 'Save'
+        Start-Sleep -Milliseconds 1500
+        Close-WorkspaceManager
     }
 
     # Last: the settings page replaces the shell in the same frame, so nothing after it is checked.

@@ -48,7 +48,7 @@ public sealed partial class MainPage : Page
     private const double DefaultResultsPaneHeight = 320;
 
     private bool _newTabPaletteOpen;
-    private List<string> _paletteDatabases = [];
+    private List<DatabaseViewModel> _paletteDatabases = [];
 
     private bool _schemaPinned;
     private readonly Dictionary<string, List<string>> _recentObjects = new(StringComparer.Ordinal);
@@ -559,6 +559,12 @@ public sealed partial class MainPage : Page
                 break;
             case EditorCommandKind.NewTab:
                 ViewModel.NewTabCommand.Execute(null);
+                break;
+            case EditorCommandKind.NextTab:
+                ViewModel.SelectRelativeTab(1);
+                break;
+            case EditorCommandKind.PreviousTab:
+                ViewModel.SelectRelativeTab(-1);
                 break;
             case EditorCommandKind.ToggleSidebar:
                 ViewModel.ToggleSidebarCommand.Execute(null);
@@ -1108,7 +1114,10 @@ public sealed partial class MainPage : Page
     private void ShowWorkspaceFlyout(FrameworkElement anchor)
     {
         var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-        var panel = new StackPanel { MinWidth = 288, Spacing = 2 };
+
+        // A fixed width, not a minimum: the switcher must not grow just because one row (the
+        // endpoint) is long. Every row measures inside this width instead.
+        var panel = new StackPanel { Width = 288, Spacing = 2 };
 
         var flyout = new Flyout
         {
@@ -1118,15 +1127,18 @@ public sealed partial class MainPage : Page
 
         if (ViewModel.ActiveSpace is { } active)
         {
-            // The host detail the rail trims away; it says what Connect would connect to.
-            panel.Children.Add(new TextBlock
+            // The host detail the rail trims away; it says what Connect would connect to. The
+            // fixed panel width trims it; the full value is in the tooltip.
+            var statusLine = new TextBlock
             {
                 Margin = new Thickness(12, 8, 12, 6),
                 FontSize = 10,
                 Foreground = mutedBrush,
                 Text = active.Connection.StatusLine,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-            });
+            };
+            ToolTipService.SetToolTip(statusLine, active.Connection.StatusLine);
+            panel.Children.Add(statusLine);
 
             // The one action for the line above it. Connection settings live on the Workspaces
             // page, so this panel never grows a second editor.
@@ -2553,7 +2565,7 @@ public sealed partial class MainPage : Page
         var preferred = ViewModel.ActiveTab?.Database ?? space.PreferredDatabase;
         _paletteDatabases = DatabaseInfo
             .InDisplayOrder(space.Databases.Select(database => database.Info), preferred)
-            .Select(database => database.Name)
+            .Select(info => new DatabaseViewModel(info))
             .ToList();
 
         _newTabPaletteOpen = true;
@@ -2578,23 +2590,32 @@ public sealed partial class MainPage : Page
     {
         var query = NewTabSearchBox.Text.Trim();
         var matches = _paletteDatabases
-            .Where(name => name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(database => database.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         NewTabDatabaseList.ItemsSource = matches;
-        if (matches.Count > 0)
+
+        // Inaccessible names stay visible but are never the Enter target: they are listed only so
+        // the user can tell a database exists rather than wonder why it is missing.
+        var firstAccessible = matches.FindIndex(database => database.IsAccessible);
+        if (firstAccessible >= 0)
         {
-            NewTabDatabaseList.SelectedIndex = 0;
+            NewTabDatabaseList.SelectedIndex = firstAccessible;
             NewTabPaletteMessage.Visibility = Visibility.Collapsed;
             return;
         }
 
+        NewTabDatabaseList.SelectedIndex = -1;
         NewTabPaletteMessage.Visibility = Visibility.Visible;
         NewTabPaletteMessage.Text = _paletteDatabases.Count == 0
             ? ViewModel.ActiveSpace?.Connection.IsConnected == true
                 ? "This connection exposes no databases. Press Enter to open a tab without one."
                 : "Connect this workspace to choose a database. Press Enter to open a tab without one."
-            : $"No database matches \"{query}\".";
+            : matches.Count > 0
+                ? matches.Count == 1
+                    ? $"You don't have access to {matches[0].Name}."
+                    : "You don't have access to those databases."
+                : $"No database matches \"{query}\".";
     }
 
     private void NewTabSearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -2624,17 +2645,18 @@ public sealed partial class MainPage : Page
 
         if (e.Key == Windows.System.VirtualKey.Enter)
         {
-            var chosen = NewTabDatabaseList.SelectedItem as string
-                ?? (NewTabDatabaseList.ItemsSource as IEnumerable<string>)?.FirstOrDefault();
+            var chosen = NewTabDatabaseList.SelectedItem as DatabaseViewModel
+                ?? (NewTabDatabaseList.ItemsSource as IEnumerable<DatabaseViewModel>)?
+                    .FirstOrDefault(database => database.IsAccessible);
 
-            // Keep the palette open when the user typed a query with no matching database.
+            // Keep the palette open when the user typed a query with no usable database.
             if (chosen is null && _paletteDatabases.Count > 0)
             {
                 e.Handled = true;
                 return;
             }
 
-            OpenNewTabPaletteSelection(chosen);
+            OpenNewTabPaletteSelection(chosen?.Name);
             e.Handled = true;
             return;
         }
@@ -2650,23 +2672,48 @@ public sealed partial class MainPage : Page
 
     private void MoveNewTabSelection(int offset)
     {
-        var count = NewTabDatabaseList.Items.Count;
-        if (count == 0)
+        // Arrow keys step over inaccessible rows: they are readable, not reachable.
+        var accessible = new List<int>();
+        for (var i = 0; i < NewTabDatabaseList.Items.Count; i++)
+        {
+            if (NewTabDatabaseList.Items[i] is DatabaseViewModel { IsAccessible: true })
+            {
+                accessible.Add(i);
+            }
+        }
+
+        if (accessible.Count == 0)
         {
             return;
         }
 
-        var index = NewTabDatabaseList.SelectedIndex;
-        NewTabDatabaseList.SelectedIndex = index < 0
-            ? offset > 0 ? 0 : count - 1
-            : (index + offset + count) % count;
+        var position = accessible.IndexOf(NewTabDatabaseList.SelectedIndex);
+        var next = position < 0
+            ? offset > 0 ? 0 : accessible.Count - 1
+            : (position + offset + accessible.Count) % accessible.Count;
+
+        NewTabDatabaseList.SelectedIndex = accessible[next];
+    }
+
+    private void NewTabDatabaseList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer is not ListViewItem item)
+        {
+            return;
+        }
+
+        var inaccessible = args.Item is DatabaseViewModel { IsAccessible: false };
+        item.IsEnabled = !inaccessible;
+        AutomationProperties.SetHelpText(
+            item,
+            inaccessible ? "This login cannot open this database." : string.Empty);
     }
 
     private void NewTabDatabaseList_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is string database)
+        if (e.ClickedItem is DatabaseViewModel { IsAccessible: true } database)
         {
-            OpenNewTabPaletteSelection(database);
+            OpenNewTabPaletteSelection(database.Name);
         }
     }
 
@@ -2916,6 +2963,16 @@ public sealed partial class MainPage : Page
     {
         ViewModel.NewTabCommand.Execute(null);
         args.Handled = true;
+    }
+
+    private void NextTabAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = ViewModel.SelectRelativeTab(1);
+    }
+
+    private void PreviousTabAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = ViewModel.SelectRelativeTab(-1);
     }
 
     private void ToggleSidebarAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
