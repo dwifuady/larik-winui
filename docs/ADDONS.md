@@ -346,9 +346,12 @@ bare file.
   public static class LarikDataContract
   {
       /// <summary>Semantic contract version, independent of AssemblyVersion.</summary>
-      public const string Version = "1.0.0";
+      public const string Version = "1.1.0";
   }
   ```
+
+- Bump the minor version for an additive member or a new `ProviderSettingKind` appended at the end;
+  this host renders an unknown kind as its default text box, so the add-on keeps working.
 
 - The range parser supports exactly `>=a.b <c.d`. Reject anything else. Compare against
   `LarikDataContract.Version`, not the assembly version.

@@ -16,7 +16,18 @@ public sealed class FixtureProvider : IDatabaseProvider
 
     public string Dialect => "mssql";
 
-    public IReadOnlyList<ProviderSetting> Settings => [];
+    public IReadOnlyList<ProviderSetting> Settings { get; } =
+    [
+        // Exercises the shell's file-kind rendering without installing a real file provider.
+        new()
+        {
+            Key = "file",
+            Label = "Database file",
+            Kind = ProviderSettingKind.File,
+            FileExtensions = ["db", "sqlite"],
+            Hint = "Full path to the fixture database.",
+        },
+    ];
 
     public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new FixtureConnection();
 }

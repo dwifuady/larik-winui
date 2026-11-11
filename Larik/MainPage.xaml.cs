@@ -16,6 +16,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.Storage.Pickers;
 using Windows.UI.ViewManagement;
 
 namespace Larik;
@@ -1666,6 +1667,62 @@ public sealed partial class MainPage : Page
             Foreground = mutedBrush,
         };
 
+        // A file field keeps the text box (the profile stores exactly what the provider reads) and
+        // adds Browse… beside it. Open-only by design: creating a new database file is the path
+        // field's job, so the dialog never has to guess which intent the picker should have.
+        Grid CreateFileField(ProviderSetting setting, TextBox pathBox)
+        {
+            var browse = new Button
+            {
+                Content = "Browse…",
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            AutomationProperties.SetName(browse, $"Browse for {setting.Label}");
+            ToolTipService.SetToolTip(browse, "Choose an existing file");
+
+            browse.Click += async (_, _) =>
+            {
+                var picker = new FileOpenPicker();
+                foreach (var extension in setting.FileExtensions)
+                {
+                    var normalized = extension.StartsWith('.') ? extension : "." + extension;
+                    if (!picker.FileTypeFilter.Contains(normalized))
+                    {
+                        picker.FileTypeFilter.Add(normalized);
+                    }
+                }
+
+                // Engines that open a file do not always mandate an extension, so the declared
+                // list must never be the only way to reach a valid file.
+                picker.FileTypeFilter.Add("*");
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, App.WindowHandle);
+
+                var file = await picker.PickSingleFileAsync();
+                if (file is null)
+                {
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(file.Path))
+                {
+                    status.Foreground = dangerBrush;
+                    status.Text = "That file has no local path. Copy it to disk and try again.";
+                    return;
+                }
+
+                pathBox.Text = file.Path;
+                status.Text = string.Empty;
+            };
+
+            var host = new Grid { ColumnSpacing = 8 };
+            host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            host.Children.Add(pathBox);
+            Grid.SetColumn(browse, 1);
+            host.Children.Add(browse);
+            return host;
+        }
+
         // Rare provider fields (port, encryption, timeouts) open in a focused popup instead of
         // expanding the form: the connection form keeps its shape and the fields are visible
         // immediately rather than below the fold.
@@ -1775,7 +1832,9 @@ public sealed partial class MainPage : Page
                 var label = new TextBlock { Text = setting.Label, FontSize = 11 };
                 var group = new StackPanel { Spacing = 4 };
                 group.Children.Add(label);
-                group.Children.Add(input);
+                group.Children.Add(setting.Kind == ProviderSettingKind.File && input is TextBox pathBox
+                    ? CreateFileField(setting, pathBox)
+                    : input);
 
                 if (setting.Hint is { Length: > 0 } hint)
                 {

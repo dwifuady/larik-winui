@@ -99,7 +99,8 @@ completion lists), so the shell never knows a specific database.
 
 Providers are discovered from the app's referenced assemblies and from `Plugins` folders under the
 app directory and `%LOCALAPPDATA%\Larik WinUI`. The connection dialog is generated from the
-provider's declared settings, and declared password fields go to Windows Credential Manager.
+provider's declared settings, declared password fields go to Windows Credential Manager, and a
+declared file field (SQLite-style) keeps an editable path with a Browse… action.
 
 The contract, compatibility rules and provider blueprints are in
 [`docs/PROVIDERS.md`](docs/PROVIDERS.md). Add-on packaging, the curated index and Store channels are

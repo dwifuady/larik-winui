@@ -99,7 +99,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   **New workspace** opens one dialog for the icon, name, colour and connection (rare provider fields
   open from an **Advanced connection settings** row, so the form keeps its shape); nothing is created
   until **Create & connect**, so Cancel leaves the workspace list untouched. Each workspace owns a
-  palette colour (icon chip, tab strip/tint and Run button).
+  palette colour (icon chip, tab strip/tint and Run button). A provider that opens a local file
+  (SQLite-style) gets an editable path field with a **Browse…** action beside it; the picker only
+  opens existing files, so a new database is still created by typing its path.
   **Manage workspaces…** opens a dedicated **Workspaces page**: one ordered list with each
   workspace's provider, endpoint and configured identity (for example
   `PostgreSQL · db.internal:5433 · readonly_analyst`, or
@@ -327,6 +329,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; PostgreSQL adds dollar-quoted bodies, `E'...'` strings, quoted identifiers and nested comments. Semicolons inside parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and nested `BEGIN/END` awareness still need the same AST work as completion. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
+| File settings browse existing files only | **Browse…** opens a file open picker. Creating a new database file is done by typing the path (the provider's create-if-missing setting decides what happens next); a save picker would add a "new vs open" decision to a form that does not need one until users ask. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |
 | No autocommit / manual-commit switch, no isolation dropdown | Deliberately mirrors SSMS for SQL Server: each statement autocommits, `BEGIN TRAN`/`COMMIT` are explicit, and isolation is the server default (`SET TRANSACTION ISOLATION LEVEL` remains available per tab). A DBeaver/DataGrip-style manual-commit mode is a product decision, not a SQL-standard requirement. |
