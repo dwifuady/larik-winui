@@ -477,55 +477,20 @@ normal UI path.
 
 ## 9. MongoDB (add-on)
 
-MongoDB ships as the `dwifuady/larik-mongodb` add-on on MongoDB.Driver, built against the
-`Larik.Data` package and installed from the curated index. The add-on's tests cover
-`TSqlMongoCompilerTests` (translation goldens), `MongoDialectTests` (editor language) and
-`MongoIntegrationTests` (a real round-trip that is a no-op unless a `mongod` answers on
-`localhost:27017`, so CI stays green offline).
+MongoDB is the reference **out-of-tree** provider: `dwifuady/larik-mongodb`, built against the
+`Larik.Data` package, installed from the curated index and released on its own tag. Its code, settings,
+tests, supported syntax and known limits live there (user-facing summary in `docs/FEATURES.md`); they
+are deliberately not restated here, where they would drift.
 
-The editor surface is **the user's T-SQL**, which is a deliberate deviation from the older notion here
-that "a non-SQL engine implements `IEditorLanguage` and must not pretend it is a SQL dialect". The
-document the user writes *is* SQL, so the language implements `ISqlDialect`: highlighting, Ctrl+Enter /
-F5, T-SQL completion (collections in `FROM`, sampled fields) and the schema browser's preview/lookup
-statements all flow through the existing SQL seam with zero app changes. mongosh is additive: a
-statement starting with `db.` is tagged `shell` via `StatementSpan.Language` and passed to the driver
-as written. Keep the `IEditorLanguage`-only rule for a future genuinely non-SQL surface.
+What it proves about the host contract:
 
-1. `MongoProvider : IDatabaseProvider` — `Id = Dialect = "mongodb"`, `DescribeEndpoint` → `MongoDB · host:port`;
-   settings: host, port, database, auth source, user, password, direct connection, connect/query timeouts.
-2. `MongoConnection : IDatabaseConnection` — one `MongoClient` per session (one per query tab):
-   - ping + `buildInfo` on open; `ListDatabaseNames` for the database list;
-   - `GetSchemaAsync` samples up to 200 documents per collection and infers fields + BSON types, with
-     `_id` as the primary key. An empty or permission-denied collection yields just its name, so the
-     schema is a browsing nicety, not a hard dependency;
-   - `ExecuteBatchAsync` splits via `MongoTSqlDialect.Split` — the same language the editor shows, with
-     mongosh statements already tagged — and stops the batch on the first error;
-   - `USE [db]` changes the session's active database (reported by `GetCurrentDatabaseAsync`); the row
-     cap (`EffectiveMaxRows + 1`) is enforced by appending a `$limit` unless the user already set one.
-3. `MongoTSqlDialect : SqlLanguage, ISqlDialect` — reuses `GenericSqlLanguage.TokenKeywords` (the
-   T-SQL token set), `[x]`/`N'...'`/`@`, `//` comments, splits on `;` with no `GO`, and overrides
-   `Split` to tag mongosh spans `shell`. Completion lists carry the T-SQL surface plus Mongo helpers
-   (`ObjectId`, `ISODate`, `NumberInt`, …). It also implements `GetCompletionHints` (the language-owned
-   non-SQL completion seam): `db.` suggests the schema's collections and `db.collection.` suggests the
-   methods the passthrough runner understands.
-4. `TSqlMongoCompiler` — the pure, golden-tested translator: a lexer + recursive-descent parser +
-   compiler that turns a statement into an `MSelect` (aggregation pipeline), `MInsert`/`MUpdate`/
-   `MDelete` (write command) or `MUse`. SELECT covers projection, WHERE (comparison, `IN`, `BETWEEN`,
-   `LIKE`, `IS NULL`, `AND`/`OR`/`NOT` — a query-language `$match` with an `$expr` fallback),
-   INNER/LEFT `JOIN` (single-column `ON` → `$lookup`+`$unwind`), `GROUP BY`/aggregates/`HAVING`,
-   `ORDER BY`, `TOP`/`LIMIT`/`OFFSET`, and `DISTINCT` (as a `$group`). Scalar helpers (`COALESCE`,
-   `UPPER`/`LOWER`, date parts, `OBJECTID()`/`ISODATE()`…) map to aggregation operators. Every
-   `MSelect` reports the pipeline it actually ran through `QueryResult.GeneratedQuery`.
-5. mongosh passthrough — `MongoShellRunner` handles a small set of driver methods (`find`, `findOne`,
-   `count`, `insertOne`/`insertMany`, `updateOne`/`updateMany`, `deleteOne`/`deleteMany`) when the
-   argument is extended JSON; anything else is a clear "use the SQL surface" error. `ObjectId('…')`
-   inside a document argument is not parsed here — the SQL surface supports it as a value.
-
-Known, deliberate limits (mirrored in `docs/FEATURES.md`): single-column `JOIN … ON`; an `INSERT` column list
-is recommended (bare `VALUES` store under generated `c1…cN` keys); no multi-document transactions yet
-(`SupportsTransactions` stays false, the shell hides the guard, and `BEGIN TRAN` reports an error); a
-small mongosh subset; sampled (not enforced) schema; multi-field joins and `INSERT ... SELECT` are
-rejected with a message.
+- A provider ships without touching this repository: `DatabaseProviderCatalog` discovers it, the editor
+  receives its language through `IEditorLanguage`, and no shell code names it.
+- The editor surface may be **the user's T-SQL** even on a non-SQL engine. The document is SQL, so the
+  language implements `ISqlDialect` and the existing seams (highlighting, Ctrl+Enter / F5, completion,
+  schema previews) work with zero app changes. mongosh is additive: a statement starting with `db.` is
+  tagged `shell` via `StatementSpan.Language` and passed to the driver as written. Keep the
+  `IEditorLanguage`-only rule for a future genuinely non-SQL document.
 
 ---
 
@@ -566,7 +531,7 @@ rejected with a message.
 
 | Area | State |
 |---|---|
-| MongoDB | Implemented as the `dwifuady/larik-mongodb` add-on: a T-SQL surface translated to aggregation pipelines/write commands, sampled schema, mongosh passthrough. Deliberate limits: single-column `JOIN … ON`, `INSERT` column list recommended, no multi-document transactions yet (`BEGIN TRAN` errors), small mongosh method subset, sampled (not enforced) schema. See §9. |
+| MongoDB | Implemented as the out-of-tree `dwifuady/larik-mongodb` add-on; the supported syntax and its deliberate limits are documented there and summarised in `docs/FEATURES.md`. See §9 for what it proves about the contract. |
 | Completion model | SQL-clause-shaped and token-based. Keyword/function/table-context lists and identifier quoting come from the dialect; the clause/alias/column-context sets, clause continuations and the `@variable` / `INSERT (…)` / `UPDATE … SET` shapes are engine-side and T-SQL-biased. PostgreSQL reuses them; a MySQL provider should promote them into `ISqlDialect` defaults (the reference app's `src/dialects/types.ts` shows the full shape). |
 | Schema-qualified completion | Implemented: references match `Schema` + `Name` and inserts are dialect-quoted (`[dbo].[users] AS [u]`, `"public"."users" AS u`). SQL Server reads `sys.schemas`; PostgreSQL reads `pg_namespace`. Views complete like tables. Overloaded PostgreSQL routines collapse to the first signature because the contract has no overload identity. |
 | Statement splitting | Dollar quotes, `E'...'`, quoted identifiers and nested block comments are in `SqlLanguageOptions`; `::` casts and `$1` parameters need no splitting. Parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and T-SQL `GO n` repeat expansion are still open. |

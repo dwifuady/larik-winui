@@ -150,20 +150,14 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   foreign-key lookups use `LIMIT`, `RAISE NOTICE`/`WARNING` open a Messages tab, and the `TXN` guard
   follows the `BEGIN`/`COMMIT`/`ROLLBACK` the tab issued (a failed statement inside a transaction
   marks it rollback-only).
-- **MongoDB (add-on)**: install the MongoDB driver from Settings → Drivers (or from the workspace
-  dialog), then pick it like any provider (needs a reachable `mongod`). The
-  editor surface is your T-SQL - the active language is a SQL dialect, so highlighting, Ctrl+Enter/F5,
-  T-SQL completion (collections in `FROM`, sampled fields) and the schema browser all work through the
-  one seam. Each statement is translated by the provider into an aggregation pipeline or a write
-  command (`SELECT`/`WHERE`/`ORDER`/`GROUP`/`JOIN` → `$match`/`$sort`/`$group`/`$lookup`; `INSERT`/
-  `UPDATE`/`DELETE`), and the pipeline that actually ran is shown in a collapsible *Generated query*
-  strip on the result tab. `UUID('…')`/`ObjectId('…')` literals are supported, and because the sampled
-  field type is known, a plain `WHERE _id = '…'` is coerced to the UUID/ObjectId binary it compares against.
-  Collections are tables whose fields are sampled from a few documents (`_id` is the primary key),
-  `USE [db]` switches the tab's database, and mongosh passes through — `db.users.find({...})` runs as
-  written, with `db.` completing collections and `db.collection.` completing the supported methods
-  (contributed by the language, not the shell). `BEGIN TRAN` reports a clear "not supported yet";
-  multi-document transactions are the next iteration.
+- **MongoDB (add-on)**: install the driver from Settings → Drivers (or the workspace dialog) and pick
+  it like any provider. Paste an Atlas `mongodb+srv://` URI into **Connection string** (kept in
+  Credential Manager) for a cluster, or use Host/User/Password for a direct `mongod`. The editor is your
+  T-SQL — statements are translated into aggregation pipelines or write commands, the pipeline that ran
+  is shown in a collapsible *Generated query* strip, sampled collections act as tables, `USE [db]`
+  switches the tab's database, and a `db.collection.method(…)` mongosh subset passes through.
+  `BEGIN TRAN` reports "not supported yet". Supported syntax, settings and the deliberate limits live in
+  the add-on's repository (`dwifuady/larik-mongodb`).
 - **Server messages**: `PRINT`, `RAISERROR` up to severity 10, `SET STATISTICS IO/TIME`, optimizer
   warnings and `USE`'s *Changed database context* arrive through the provider's message channel and
   open a **Messages** tab beside the result tabs, as selectable monospace text. One Messages tab per
