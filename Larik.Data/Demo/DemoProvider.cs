@@ -26,7 +26,7 @@ public sealed class DemoProvider : IDatabaseProvider
             Label = "Databases",
             DefaultValue = "larik_prod,larik_reports",
             Placeholder = "comma,separated",
-            Hint = "Pretend databases exposed by this connection.",
+            Hint = "Pretend databases exposed by this connection. Prefix a name with ! to show it as visible but not openable.",
         },
     ];
 
@@ -83,12 +83,24 @@ internal sealed class DemoConnection(ConnectionProfile profile) : IDatabaseConne
         State = ConnectionState.Connected;
     }
 
-    public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken cancellationToken = default) =>
+        (await GetDatabaseDetailsAsync(cancellationToken))
+            .Select(database => database.Name)
+            .ToList();
+
+    /// <summary>
+    /// The demo has no server-side access rules, so a leading <c>!</c> fakes one: the database is
+    /// listed but the login cannot open it. The UI tests use it to cover the disabled selector state.
+    /// </summary>
+    public async Task<IReadOnlyList<DatabaseInfo>> GetDatabaseDetailsAsync(CancellationToken cancellationToken = default)
     {
         await Task.Delay(60, cancellationToken);
         var configured = profile.Get("databases") ?? "larik_prod";
         return configured
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(name => name.StartsWith('!')
+                ? new DatabaseInfo(name[1..].Trim(), IsAccessible: false)
+                : new DatabaseInfo(name))
             .ToList();
     }
 

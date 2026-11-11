@@ -224,6 +224,8 @@
         <KeyboardAccelerator Key="Enter" Modifiers="Control" Invoked="RunStatementAccelerator_Invoked" />
         <KeyboardAccelerator Key="F5" Invoked="RunAllAccelerator_Invoked" />
         <KeyboardAccelerator Key="T" Modifiers="Control" Invoked="NewTabAccelerator_Invoked" />
+        <KeyboardAccelerator Key="Tab" Modifiers="Control" Invoked="NextTabAccelerator_Invoked" />
+        <KeyboardAccelerator Key="Tab" Modifiers="Control,Shift" Invoked="PreviousTabAccelerator_Invoked" />
         <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="ToggleSidebarAccelerator_Invoked" />
         <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="SchemaAccelerator_Invoked" />
         <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="ToggleResultsAccelerator_Invoked" />
@@ -1535,6 +1537,7 @@
                         MaxHeight="320"
                         Padding="0"
                         AutomationProperties.Name="New query database"
+                        ContainerContentChanging="NewTabDatabaseList_ContainerContentChanging"
                         IsItemClickEnabled="True"
                         ItemClick="NewTabDatabaseList_ItemClick"
                         SelectionMode="Single">
@@ -1545,6 +1548,31 @@
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             </Style>
                         </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DatabaseViewModel">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        FontSize="12"
+                                        Text="{x:Bind Name}"
+                                        TextTrimming="CharacterEllipsis" />
+
+                                    <!--  Visible so the user knows the name exists, disabled so a new tab cannot open it.  -->
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        FontSize="10"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="no access"
+                                        Visibility="{x:Bind AccessHintVisibility}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
                     </ListView>
 
                     <TextBlock
