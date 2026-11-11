@@ -50,7 +50,7 @@ public partial class ResultSetViewModel : ObservableObject
             };
 
     public Brush DetailBrush => Result.IsError
-        ? StudioColors.Danger
+        ? ThemeService.GetBrush("StudioDangerBrush", StudioColors.Danger)
         : ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted);
 
     /// <summary>Header text for the active result, including the row-cap notice.</summary>

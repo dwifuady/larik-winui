@@ -40,6 +40,8 @@ public sealed partial class SettingsPage : Page
     private bool _syncingTheme;
     private bool _loadingUpdates;
     private bool _addonsBusy;
+    private IReadOnlyList<AddonRow> _installedRows = [];
+    private IReadOnlyList<AddonRow> _availableRows = [];
     private StudioViewModel? _studio;
     private string _search = string.Empty;
     private string? _category;
@@ -51,6 +53,14 @@ public sealed partial class SettingsPage : Page
         NavigationCacheMode = NavigationCacheMode.Required;
         SnippetList.ItemsSource = _visible;
         Loaded += SettingsPage_Loaded;
+
+        // Driver rows are code-built, so their token brushes do not follow a Light/Dark switch on
+        // their own. Re-draw them from the rows already fetched (no second catalogue request).
+        ActualThemeChanged += (_, _) =>
+        {
+            RenderAddonRows(InstalledAddonPanel, _installedRows);
+            RenderAddonRows(AvailableAddonPanel, _availableRows);
+        };
 
         if (!AddonPolicy.AddonsEnabled)
         {
@@ -304,6 +314,7 @@ public sealed partial class SettingsPage : Page
             var installedRows = installed
                 .Select(addon => BuildInstalledRow(addon, entriesById.GetValueOrDefault(addon.Id)))
                 .ToList();
+            _installedRows = installedRows;
             RenderAddonRows(InstalledAddonPanel, installedRows);
             InstalledEmptyText.Visibility = installedRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -321,6 +332,7 @@ public sealed partial class SettingsPage : Page
                 available.Add(BuildAvailableRow(entry, update: existing is not null));
             }
 
+            _availableRows = available;
             RenderAddonRows(AvailableAddonPanel, available);
             AvailableEmptyText.Visibility = available.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -389,13 +401,13 @@ public sealed partial class SettingsPage : Page
             Text = row.Name,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
-            Foreground = Resource("StudioTextPrimaryBrush"),
+            Foreground = Resource("StudioTextPrimaryBrush", StudioColors.Muted),
         });
         title.Children.Add(new TextBlock
         {
             Text = row.VersionText,
             FontSize = 10,
-            Foreground = Resource("StudioTextMutedBrush"),
+            Foreground = Resource("StudioTextMutedBrush", StudioColors.Muted),
             VerticalAlignment = VerticalAlignment.Center,
         });
         text.Children.Add(title);
@@ -403,7 +415,7 @@ public sealed partial class SettingsPage : Page
         {
             Text = row.Detail,
             FontSize = 11,
-            Foreground = Resource("StudioTextMutedBrush"),
+            Foreground = Resource("StudioTextMutedBrush", StudioColors.Muted),
             MaxLines = 2,
             TextTrimming = TextTrimming.CharacterEllipsis,
             TextWrapping = TextWrapping.Wrap,
@@ -412,7 +424,7 @@ public sealed partial class SettingsPage : Page
         {
             Text = row.Status,
             FontSize = 10,
-            Foreground = Resource("StudioAccentBrush"),
+            Foreground = Resource("StudioAccentBrush", StudioColors.Muted),
         });
 
         var actions = new StackPanel
@@ -444,7 +456,12 @@ public sealed partial class SettingsPage : Page
         return grid;
     }
 
-    private static Brush Resource(string key) => (Brush)Application.Current.Resources[key];
+    /// <summary>
+    /// Resolves a design token for the page's live theme. App-level lookup follows the startup
+    /// theme, so a runtime Light/Dark switch would leave generated rows with the old colours.
+    /// </summary>
+    private Brush Resource(string key, Brush fallback) =>
+        ThemeService.GetBrush(key, ActualTheme, fallback);
 
     private async void AddonAction_Click(object sender, RoutedEventArgs e)
     {
@@ -607,7 +624,9 @@ public sealed partial class SettingsPage : Page
     private void SetAddonStatus(string text, bool error = false)
     {
         AddonStatusText.Text = text;
-        AddonStatusText.Foreground = Resource(error ? "StudioDangerBrush" : "StudioTextMutedBrush");
+        AddonStatusText.Foreground = Resource(
+            error ? "StudioDangerBrush" : "StudioTextMutedBrush",
+            error ? StudioColors.Danger : StudioColors.Muted);
     }
 
     // ---------------------------------------------------------------- filtering

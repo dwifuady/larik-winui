@@ -301,8 +301,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   sits on its gear in the rail footer beside the workspace dots - the query toolbar only carries
   editor actions (Format, Run, Stop). Appearance offers **Use Windows setting / Light / Dark**;
   the choice is saved in `app_state` (`theme`), applied before the first frame, and runtime
-  switches move the content, result rows, editor syntax colours, caption buttons and Mica together
-  without a restart.
+  switches move the content, result rows, editor syntax colours, code-built flyouts (the workspace
+  switcher and connection dialogs included), caption buttons and Mica together without a restart.
 - **Editor seam**: the shell never touches a `RichEditBox`. It drives `IEditorSurface`
   (text, caret, `EditorLanguage`, `CompletionSource`, `TextChanged`/`CaretChanged`/`CommandRequested`,
   `FocusEditor`), so the editor can be swapped for a WebView2/Monaco island without changing the

@@ -151,6 +151,9 @@ public partial class SpaceViewModel : ObservableObject
 
     public SolidColorBrush StatusBrush => Connection.StatusBrush;
 
+    /// <summary>Code-resolved brushes do not follow a runtime theme switch on their own.</summary>
+    public void NotifyThemeChanged() => OnPropertyChanged(nameof(StatusBrush));
+
     public string ConnectionLine => Connection.StatusLine;
 
     /// <summary>One action slot in the rail: "Connect" while down, "Disconnect" while up.</summary>
