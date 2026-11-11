@@ -89,7 +89,7 @@ public sealed partial class MainPage : Page
         // Without Mica support the backdrop is blank, so fall back to the design's solid background.
         if (!MicaController.IsSupported())
         {
-            Root.Background = (Brush)Application.Current.Resources["StudioBackgroundBrush"];
+            Root.Background = ThemeBrush("StudioBackgroundBrush", StudioColors.Muted);
         }
 
         ActualThemeChanged += (_, _) => ApplyThemeResources();
@@ -114,17 +114,26 @@ public sealed partial class MainPage : Page
     {
         if (!MicaController.IsSupported())
         {
-            Root.Background = ThemeService.GetBrush("StudioBackgroundBrush", ActualTheme, StudioColors.Muted);
+            Root.Background = ThemeBrush("StudioBackgroundBrush", StudioColors.Muted);
         }
 
         ResultMessageText.Foreground = ViewModel.LastResult?.IsError == true
-            ? StudioColors.Danger
-            : ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
+            ? ThemeBrush("StudioDangerBrush", StudioColors.Danger)
+            : ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
 
         // The OS can change the system theme while the preference is still "System", which does
         // not raise ThemeService.Changed; CLR brush properties need this nudge either way.
         ViewModel.NotifyThemeChanged();
     }
+
+    /// <summary>
+    /// Resolves a design token against the page's live theme. Code-built surfaces (flyouts,
+    /// dialogs, generated rows) must not read <c>Application.Current.Resources</c>: that lookup
+    /// follows the startup theme, so after an in-app Light/Dark switch their text keeps the old
+    /// theme's colour (near-white on a light flyout, for example).
+    /// </summary>
+    private Brush ThemeBrush(string key, Brush fallback) =>
+        ThemeService.GetBrush(key, ActualTheme, fallback);
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -1114,7 +1123,7 @@ public sealed partial class MainPage : Page
 
     private void ShowWorkspaceFlyout(FrameworkElement anchor)
     {
-        var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
+        var mutedBrush = ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
 
         // A fixed width, not a minimum: the switcher must not grow just because one row (the
         // endpoint) is long. Every row measures inside this width instead.
@@ -1214,10 +1223,10 @@ public sealed partial class MainPage : Page
     /// </summary>
     private FrameworkElement CreateWorkspaceRow(SpaceViewModel space, Flyout flyout)
     {
-        var primaryBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
-        var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
-        var accentBrush = (Brush)Application.Current.Resources["StudioAccentBrush"];
-        var hairlineBrush = (Brush)Application.Current.Resources["HairlineBrush"];
+        var primaryBrush = ThemeBrush("StudioTextPrimaryBrush", StudioColors.Muted);
+        var secondaryBrush = ThemeBrush("StudioTextSecondaryBrush", StudioColors.Muted);
+        var accentBrush = ThemeBrush("StudioAccentBrush", StudioColors.Muted);
+        var hairlineBrush = ThemeBrush("HairlineBrush", StudioColors.Muted);
         var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
 
         var content = new Grid { ColumnSpacing = 8 };
@@ -1298,11 +1307,11 @@ public sealed partial class MainPage : Page
         };
     }
 
-    private static Border CreateFlyoutSeparator() => new()
+    private Border CreateFlyoutSeparator() => new()
     {
         Height = 1,
         Margin = new Thickness(8, 4, 8, 4),
-        Background = (Brush)Application.Current.Resources["HairlineBrush"],
+        Background = ThemeBrush("HairlineBrush", StudioColors.Muted),
     };
 
     private Button CreateFlyoutAction(string glyph, string label, Func<Task> action)
@@ -1367,14 +1376,14 @@ public sealed partial class MainPage : Page
     /// The colour palette popup. The ring marks the current choice; the identity row's swatch shows
     /// the same colour without opening it.
     /// </summary>
-    private static StackPanel CreateColourSwatches(string selectedHex, Action<string> changed)
+    private StackPanel CreateColourSwatches(string selectedHex, Action<string> changed)
     {
         const double dotSize = 16;
         const double ringSize = dotSize + 8;
         var rings = new Dictionary<string, Ellipse>(StringComparer.OrdinalIgnoreCase);
         var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
-        var ringBrush = (Brush)Application.Current.Resources["StudioTextPrimaryBrush"];
+        var ringBrush = ThemeBrush("StudioTextPrimaryBrush", StudioColors.Muted);
 
         void Select(string hex)
         {
@@ -1491,8 +1500,8 @@ public sealed partial class MainPage : Page
             return null;
         }
 
-        var muted = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-        var danger = StudioColors.Danger;
+        var muted = ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
+        var danger = ThemeBrush("StudioDangerBrush", StudioColors.Danger);
 
         var picker = new ComboBox
         {
@@ -1632,9 +1641,9 @@ public sealed partial class MainPage : Page
         }
 
         var connection = editing?.Connection;
-        var mutedBrush = (Brush)Application.Current.Resources["StudioTextMutedBrush"];
-        var dangerBrush = StudioColors.Danger;
-        var successBrush = StudioColors.Success;
+        var mutedBrush = ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
+        var dangerBrush = ThemeBrush("StudioDangerBrush", StudioColors.Danger);
+        var successBrush = ThemeBrush("StudioSuccessBrush", StudioColors.Success);
 
         var providerBox = new ComboBox
         {
@@ -1763,8 +1772,8 @@ public sealed partial class MainPage : Page
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Padding = new Thickness(12, 9, 12, 9),
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            Background = ThemeBrush("CardBackgroundFillColorDefaultBrush", StudioColors.Muted),
+            BorderBrush = ThemeBrush("CardStrokeColorDefaultBrush", StudioColors.Muted),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             Style = (Style)Application.Current.Resources["StudioIconButtonStyle"],
@@ -2097,7 +2106,7 @@ public sealed partial class MainPage : Page
             ?? StudioColors.Palette[ViewModel.Spaces.Count % StudioColors.Palette.Length];
         var selectedIcon = editing?.IconName;
         var iconStyle = (Style)Application.Current.Resources["StudioIconButtonStyle"];
-        var secondaryBrush = (Brush)Application.Current.Resources["StudioTextSecondaryBrush"];
+        var secondaryBrush = ThemeBrush("StudioTextSecondaryBrush", StudioColors.Muted);
 
         // Identity is one row: icon, name, colour. The icon is the only new decision, and leaving it
         // unanswered is valid — the first letter of the name stands in, so no workspace is a blank.
@@ -2406,7 +2415,7 @@ public sealed partial class MainPage : Page
             {
                 Height = 1,
                 Margin = new Thickness(0, 0, 0, 8),
-                Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+                Background = ThemeBrush("DividerStrokeColorDefaultBrush", StudioColors.Muted),
             });
             deleteSection.Children.Add(deleteButton);
             deleteSection.Children.Add(new TextBlock
@@ -2936,8 +2945,8 @@ public sealed partial class MainPage : Page
     {
         var result = ViewModel.LastResult;
         ResultMessageText.Foreground = result?.IsError == true
-            ? StudioColors.Danger
-            : ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
+            ? ThemeBrush("StudioDangerBrush", StudioColors.Danger)
+            : ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
 
         ResultsGrid.ReferenceController = result is null
             ? null

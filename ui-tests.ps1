@@ -458,6 +458,13 @@ function Assert-True {
 
 function Get-EditorText { (Get-UiJson @('get-value', 'Editor', '--json')).text }
 
+# UIA exposes a TextBlock's resolved ForegroundColor, which is how the theme check proves the
+# workspace switcher's code-built rows switched tokens with the window (not just the XAML surfaces).
+function Get-ElementForegroundArgb {
+    param([string]$Selector)
+    return [int]((Get-UiJson @('get-property', $Selector, '--json')).properties.ForegroundColor)
+}
+
 # Synthetic input only reaches the app while it owns the foreground. Windows blocks a background
 # process from stealing focus, so a synthetic Alt press unlocks SetForegroundWindow first.
 Add-Type @"
@@ -2342,6 +2349,70 @@ try {
 
         Click-Element 'Back'
         Wait-ForText 'Switch workspace' 10
+    }
+
+    Test-UI 'the workspace switcher follows a runtime theme switch' {
+        # The switcher's rows are built in code, so they must resolve their tokens from the live
+        # theme. Switch to both themes and read the active row's resolved foreground: a stale
+        # app-level lookup leaves near-white text on the light flyout (and vice versa).
+        function Assert-SwitcherRowContrast {
+            param([string]$Theme, [bool]$ExpectDarkText)
+
+            Click-Element 'Switch workspace'
+            Start-Sleep -Milliseconds 500
+
+            $row = @((Find-Element 'Staging').matches | Where-Object {
+                $_.type -eq 'Text' -and $_.invokableAncestor -and $_.invokableAncestor.name -like 'Staging,*'
+            } | Select-Object -First 1)
+            Assert-True ($null -ne $row) "the switcher has no Staging row in $Theme"
+
+            $argb = Get-ElementForegroundArgb $row.selector
+            # UIA reports this as 0x00BBGGRR, so read the channels back in RGB order.
+            $r = $argb -band 0xFF
+            $g = ($argb -shr 8) -band 0xFF
+            $b = ($argb -shr 16) -band 0xFF
+            $average = ($r + $g + $b) / 3
+            $hex = '{0:X2}{1:X2}{2:X2}' -f $r, $g, $b
+
+            Send-Keys 'escape'
+            Start-Sleep -Milliseconds 300
+
+            if ($ExpectDarkText) {
+                Assert-True ($average -lt 128) "the workspace name is light (#$hex) on the light flyout"
+            }
+            else {
+                Assert-True ($average -gt 128) "the workspace name is dark (#$hex) on the dark flyout"
+            }
+        }
+
+        $steps = @(
+            @{ Theme = 'Light'; Radio = 'Light'; ExpectDarkText = $true },
+            @{ Theme = 'Dark'; Radio = 'Dark'; ExpectDarkText = $false },
+            # Put the launch preference back: the rest of the run and the next launch share this app.
+            @{ Theme = 'System'; Radio = 'Use Windows setting'; ExpectDarkText = $null }
+        )
+
+        foreach ($step in $steps) {
+            Click-Element 'Settings'
+            Wait-ForText 'Snippets' 10
+            Focus-App
+            Invoke-Ui @('click', 'AppearanceNavItem') | Out-Null
+            Wait-ForText 'Theme' 10
+
+            $radio = @((Find-Element $step.Radio).matches |
+                Where-Object { $_.type -eq 'RadioButton' -and $_.isEnabled } |
+                Select-Object -First 1)
+            Assert-True ($null -ne $radio) "the $($step.Theme) theme option is missing"
+            Invoke-Ui @('invoke', $radio.selector) | Out-Null
+            Start-Sleep -Milliseconds 600
+
+            Click-Element 'Back'
+            Wait-ForText 'Switch workspace' 10
+
+            if ($null -ne $step.ExpectDarkText) {
+                Assert-SwitcherRowContrast $step.Theme $step.ExpectDarkText
+            }
+        }
     }
 
     Test-UI 'deleting the last workspace returns to onboarding' {

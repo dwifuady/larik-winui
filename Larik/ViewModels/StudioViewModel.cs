@@ -104,6 +104,7 @@ public partial class StudioViewModel : ObservableObject
     {
         foreach (var space in Spaces)
         {
+            space.NotifyThemeChanged();
             foreach (var tab in space.Tabs)
             {
                 tab.NotifyThemeChanged();

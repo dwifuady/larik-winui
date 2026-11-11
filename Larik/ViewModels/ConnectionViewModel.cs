@@ -70,9 +70,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
 
     public SolidColorBrush StatusBrush => State switch
     {
-        ConnectionState.Connected => StudioColors.Success,
-        ConnectionState.Faulted => StudioColors.Danger,
-        _ => StudioColors.Warning,
+        ConnectionState.Connected => (SolidColorBrush)ThemeService.GetBrush("StudioSuccessBrush", StudioColors.Success),
+        ConnectionState.Faulted => (SolidColorBrush)ThemeService.GetBrush("StudioDangerBrush", StudioColors.Danger),
+        _ => (SolidColorBrush)ThemeService.GetBrush("StudioWarningBrush", StudioColors.Warning),
     };
 
     public string Endpoint => Provider?.DescribeEndpoint(Profile) ?? ProviderName;

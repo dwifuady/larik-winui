@@ -116,8 +116,8 @@ public sealed class SchemaColumnRow
 
     public Brush KeyBrush => Key switch
     {
-        "PK" => new SolidColorBrush(Color.FromArgb(0xFF, 0xFB, 0xBF, 0x24)),
-        "FK" => new SolidColorBrush(Color.FromArgb(0xFF, 0x93, 0xC5, 0xFD)),
-        _ => new SolidColorBrush(Color.FromArgb(0xFF, 0x8A, 0x8A, 0x8F)),
+        "PK" => ThemeService.GetBrush("StudioWarningBrush", StudioColors.Warning),
+        "FK" => ThemeService.GetBrush("StudioSyntaxFunctionBrush", StudioColors.Muted),
+        _ => ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted),
     };
 }

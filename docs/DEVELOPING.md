@@ -130,8 +130,10 @@ an existing instance first.
 - `Application.RequestedTheme` can only be assigned during startup, so the saved appearance is read
   before the first window and a runtime switch moves the root `FrameworkElement.RequestedTheme`
   instead. `Application.Current.Resources[key]` still resolves against the startup app theme, so
-  code that caches brushes (result rows, headers) uses `ThemeService.GetBrush` with the control's
-  `ActualTheme`; XAML `ThemeResource` values update on their own.
+  **any brush read from code** (result rows, headers, flyouts, dialogs, generated rows) must use
+  `ThemeService.GetBrush` with the control's `ActualTheme`; XAML `ThemeResource` values update on
+  their own. A code-built surface that keeps its brushes must also re-render on
+  `ActualThemeChanged`.
 - `AppWindow.Resize` takes physical pixels; size in DIPs and scale by `GetDpiForWindow`.
 - Mica: transparent chrome (rail, toolbar, status bar), real surfaces on Fluent card brushes,
   solid fallback when `MicaController.IsSupported()` is false.
