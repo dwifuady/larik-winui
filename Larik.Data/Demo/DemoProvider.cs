@@ -16,6 +16,8 @@ public sealed class DemoProvider : IDatabaseProvider
 
     public string Dialect => "mssql";
 
+    public IReadOnlyStatementPolicy? ReadOnlyPolicy => DemoReadOnlyPolicy.Instance;
+
     public string? DescribeIdentity(ConnectionProfile profile) => "Demo session";
 
     public IReadOnlyList<ProviderSetting> Settings { get; } =

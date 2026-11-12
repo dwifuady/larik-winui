@@ -19,7 +19,12 @@ public static class AppInfo
 
     private static string ReadVersion()
     {
-        var informational = typeof(AppInfo).Assembly
+        // The entry assembly carries the release workflow's version stamp. AppInfo lives in
+        // Larik.Core, whose own assembly version is meaningless to the user, so prefer the process
+        // that started it: Larik.exe for the app, Larik.Mcp.exe for the MCP server.
+        var assembly = Assembly.GetEntryAssembly() ?? typeof(AppInfo).Assembly;
+
+        var informational = assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion;
 
@@ -30,7 +35,7 @@ public static class AppInfo
             return buildMetadata > 0 ? informational[..buildMetadata] : informational;
         }
 
-        var assemblyVersion = typeof(AppInfo).Assembly.GetName().Version;
+        var assemblyVersion = assembly.GetName().Version;
         return assemblyVersion is null
             ? string.Empty
             : $"{assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build}";

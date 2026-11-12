@@ -620,6 +620,81 @@ function Wait-ForText {
     throw "Timed out waiting for '$Text'"
 }
 
+# Fixed sleeps lose races on a busy desktop (a workspace switch, a re-render). Poll the observable
+# outcome instead, so a slow machine reschedules rather than fails.
+function Wait-Until {
+    param([scriptblock]$Condition, [string]$Message, [int]$Seconds = 8)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (& $Condition) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "Timed out waiting for $Message"
+}
+
+# ---------------------------------------------------------------- MCP server process
+# The agent surface is a separate EXE speaking JSON-RPC over stdio. The checks below drive the real
+# process, because the interesting behaviour (an approval that blocks a caller) only exists across
+# the two processes.
+
+function Get-McpServerExe {
+    $exe = Join-Path $PSScriptRoot 'Larik.Mcp\bin\Debug\net10.0\Larik.Mcp.exe'
+    if (-not (Test-Path $exe)) {
+        & dotnet build (Join-Path $PSScriptRoot 'Larik.Mcp\Larik.Mcp.csproj') -v q --nologo | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exe)) {
+            throw 'Larik.Mcp.exe was not built; run dotnet build Larik.slnx first'
+        }
+    }
+
+    return $exe
+}
+
+function Start-McpSession {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = Get-McpServerExe
+    # Windows PowerShell 5.1 has no ProcessStartInfo.ArgumentList; the suite runs under it.
+    $psi.Arguments = "--state `"$(Split-Path -Parent (Get-StateDatabasePath))`""
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    $null = Invoke-McpRpc $process 1 'initialize' @{
+        protocolVersion = '2025-06-18'
+        capabilities    = @{}
+        clientInfo      = @{ name = 'ui-tests'; version = '0.0.1' }
+    }
+    $process.StandardInput.WriteLine((@{ jsonrpc = '2.0'; method = 'notifications/initialized' } | ConvertTo-Json -Compress))
+    $process.StandardInput.Flush()
+    return $process
+}
+
+function Invoke-McpRpc {
+    param($Process, [int]$Id, [string]$Method, $Params = $null, [int]$TimeoutSeconds = 90)
+
+    $message = @{ jsonrpc = '2.0'; id = $Id; method = $Method }
+    if ($null -ne $Params) { $message.params = $Params }
+    $Process.StandardInput.WriteLine(($message | ConvertTo-Json -Depth 12 -Compress))
+    $Process.StandardInput.Flush()
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $line = $Process.StandardOutput.ReadLine()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $reply = $line | ConvertFrom-Json
+        if ($null -ne $reply.id -and $reply.id -ne 0) { return $reply }
+    }
+
+    throw "the MCP server did not answer '$Method' in $TimeoutSeconds s"
+}
+
+function Stop-McpSession {
+    param($Process)
+    try { $Process.StandardInput.Close() } catch { }
+    if (-not $Process.WaitForExit(5000)) { $Process.Kill() }
+}
+
 if ($From) {
     $resumeChecks = @(
         'a tab can be grouped',
@@ -925,11 +1000,9 @@ try {
         Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'indicator does not show the active workspace'
         Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -gt 0) 'indicator does not show every workspace'
         Click-Element 'Workspace Local SQL Server'
-        Start-Sleep -Milliseconds 800
-        Assert-True ((Get-EditorText) -match 'sys.databases') 'the indicator did not switch workspaces'
+        Wait-Until { (Get-EditorText) -match 'sys.databases' } 'the SQL Server workspace content' 10
         Click-Element 'Workspace Staging'
-        Start-Sleep -Milliseconds 800
-        Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the indicator did not switch back'
+        Wait-ForText 'Customer totals' 10
     }
 
     Test-UI 'a horizontal trackpad swipe over the rail switches workspaces' {
@@ -1438,11 +1511,10 @@ try {
         Click-Element 'Switch workspace'
         Start-Sleep -Milliseconds 500
         Click-Element 'Local SQL Server'
-        Start-Sleep -Milliseconds 900
+        Wait-ForText 'Disconnected' 10
         Assert-True ((Find-Element 'SQL Server').matchCount -gt 0) 'status bar still shows the old provider'
         Assert-True ((Find-Element 'Databases').matchCount -gt 0) 'mssql tab missing'
         Assert-True ((Get-EditorText) -match 'sys.databases') 'tab content not loaded'
-        Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'new workspace did not start disconnected'
     }
 
     Test-UI 'SQL Server provider connects, lists databases and returns rows' {
@@ -2418,6 +2490,135 @@ try {
         Assert-True ((Find-Element 'Installed').matchCount -gt 0) 'the installed section is missing'
         Assert-True ((Find-Element 'Available').matchCount -gt 0) 'the available section is missing'
 
+        Click-Element 'Back'
+        Wait-ForText 'Switch workspace' 10
+    }
+
+    Test-UI 'settings can expose workspaces to AI agents' {
+        # MCP is a security decision, so the check asserts the observable consequences of the
+        # switch: nothing is listed while it is off, the exposed workspaces and the onboarding
+        # command appear when it is on, and the choice is written to the store.
+        Click-Element 'Settings'
+        Wait-ForText 'Snippets' 10
+
+        Focus-App
+        Invoke-Ui @('click', 'AgentsNavItem') | Out-Null
+        Wait-ForText 'Allow AI agents' 10
+
+        Assert-True ((Find-Element 'Workspaces agents may use').matchCount -eq 0) 'the workspace list is visible while agents are off'
+
+        Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-on') | Out-Null
+        Wait-ForText 'Workspaces agents may use' 10
+
+        $rows = @((Find-Element 'agent access').matches)
+        Assert-True ($rows.Count -gt 0) 'no workspace rows appeared after switching agents on'
+        Assert-True ((Get-StudioStateText) -match 'mcp_enabled') 'the agent switch was not saved'
+
+        # The onboarding snippet names a command an agent can run, and carries no secret: stdio
+        # servers have no token to leak.
+        $command = (Get-UiJson @('get-value', 'AgentCommandText', '--json')).text
+        Assert-True ($command -match '(?i)larik[.\-]mcp') "the agent command does not name the MCP server: $command"
+        Assert-True ($command -notmatch '(?i)token|password') 'the agent command carries a secret'
+
+        Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-off') | Out-Null
+        Wait-ForText 'no agent can connect' 10
+        Assert-True ((Find-Element 'Workspaces agents may use').matchCount -eq 0) 'the workspace list stayed visible while agents are off'
+
+        Click-Element 'Back'
+        Wait-ForText 'Switch workspace' 10
+    }
+
+    Test-UI 'an agent write waits for approval in the studio' {
+        # A write from an agent must block on a dialog in this window. The check drives the real
+        # MCP server process, so the approval round trip happens exactly as an agent sees it.
+        Click-Element 'Settings'
+        Wait-ForText 'Snippets' 10
+        Focus-App
+        Invoke-Ui @('click', 'AgentsNavItem') | Out-Null
+        Wait-ForText 'Allow AI agents' 10
+
+        Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-on') | Out-Null
+        Wait-ForText 'Workspaces agents may use' 10
+
+        $combo = @((Find-Element 'agent access').matches | Where-Object { $_.type -eq 'ComboBox' } | Select-Object -First 1)
+        Assert-True ($null -ne $combo) 'no workspace can be exposed to an agent'
+
+        Focus-App
+        Invoke-Ui @('invoke', $combo.selector, '--action', 'expand') | Out-Null
+        Start-Sleep -Milliseconds 500
+        $write = @((Find-Element 'Read and write').matches | Where-Object { $_.type -eq 'ListItem' } | Select-Object -First 1)
+        Assert-True ($null -ne $write) 'the read-and-write level is missing'
+        Invoke-Ui @('invoke', $write.selector) | Out-Null
+        Start-Sleep -Milliseconds 700
+
+        $session = Start-McpSession
+        try {
+            $listed = Invoke-McpRpc $session 2 'tools/call' @{ name = 'list_connections'; arguments = @{} }
+            Assert-True ($null -ne $listed.result) "list_connections failed: $($listed | ConvertTo-Json -Depth 8 -Compress)"
+            $connections = $listed.result.content[0].text | ConvertFrom-Json
+            $target = @($connections | Where-Object { $_.access -eq 'write' }) | Select-Object -First 1
+            Assert-True ($null -ne $target) 'the MCP server does not see the workspace as writable'
+
+            $message = @{
+                jsonrpc = '2.0'
+                id      = 3
+                method  = 'tools/call'
+                params  = @{ name = 'run_query'; arguments = @{ connection = $target.id; query = 'select 1 as one' } }
+            }
+            $session.StandardInput.WriteLine(($message | ConvertTo-Json -Depth 12 -Compress))
+            $session.StandardInput.Flush()
+
+            # Nothing may execute before a human answers.
+            Wait-ForText 'An agent wants to run this in' 20
+            Start-Sleep -Milliseconds 500
+
+            Click-Element 'Run it'
+
+            $reply = $null
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline -and $null -eq $reply) {
+                $line = $session.StandardOutput.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $candidate = $line | ConvertFrom-Json
+                if ($candidate.id -eq 3) { $reply = $candidate }
+            }
+
+            Assert-True ($null -ne $reply) 'the agent call never returned after approval'
+            Assert-True ($null -ne $reply.result) "the approved call failed: $($reply | ConvertTo-Json -Depth 8 -Compress)"
+            $text = $reply.result.content[0].text
+            Assert-True ($text -notmatch 'denied|not provably|no approval channel') "approval did not let the statement through: $text"
+
+            # The audit row is the requirement; assert it in the store, where window size cannot
+            # hide it. The statement text is what proves this call, not just any call.
+            Assert-True ((Get-StudioStateText) -match 'select 1 as one') 'the approved statement was not audited'
+
+            # The activity card can sit below the fold in a small window, and its list refreshes on a
+            # timer; give it a beat, then force a render the way a user would.
+            try { Invoke-Ui @('scroll', 'Recent agent activity', '--to', 'bottom') | Out-Null } catch { }
+
+            $showsRow = {
+                ((Find-Element 'Delivered').matchCount + (Find-Element 'Failed').matchCount) -gt 0
+            }
+
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and -not (& $showsRow)) { Start-Sleep -Milliseconds 300 }
+
+            if (-not (& $showsRow)) {
+                Click-Element 'About'
+                Start-Sleep -Milliseconds 400
+                Invoke-Ui @('click', 'AgentsNavItem') | Out-Null
+                Wait-ForText 'Recent agent activity' 10
+                Start-Sleep -Milliseconds 800
+            }
+
+            Assert-True ((& $showsRow)) 'the activity list did not record the approved call'
+        }
+        finally {
+            Stop-McpSession $session
+        }
+
+        Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-off') | Out-Null
+        Start-Sleep -Milliseconds 500
         Click-Element 'Back'
         Wait-ForText 'Switch workspace' 10
     }

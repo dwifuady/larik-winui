@@ -23,6 +23,8 @@ public sealed class PostgresProvider : IDatabaseProvider
 
     public IEditorLanguage? EditorLanguage => PostgresDialect.Instance;
 
+    public IReadOnlyStatementPolicy? ReadOnlyPolicy => PostgresReadOnlyPolicy.Instance;
+
     public string? DescribeEndpoint(ConnectionProfile profile)
     {
         var host = profile.Get("host");
@@ -672,23 +674,54 @@ internal sealed class PostgresConnection : IDatabaseConnection
 
             var results = new List<QueryResult>(statements.Count);
 
-            foreach (var span in statements)
+            // Read-only exposure (an agent reading through a saved connection): a server-side
+            // read-only transaction makes PostgreSQL itself reject writes and DDL, so the statement
+            // gate run by the host is the second line rather than the only one. It is rolled back
+            // in the finally and never committed.
+            var readOnly = options.ReadOnly == true;
+            try
             {
-                var statement = sql.Substring(span.Start, span.Length);
-                var result = await ExecuteStatementAsync(
-                    session,
-                    statement,
-                    database,
-                    options,
-                    stopwatch,
-                    cancellationToken);
-
-                results.Add(result);
-                ApplyTransactionCommand(session, statement, succeeded: !result.IsError);
-
-                if (result.IsError)
+                if (readOnly)
                 {
-                    break;
+                    await using var begin = session.Connection.CreateCommand();
+                    begin.CommandText = "BEGIN TRANSACTION READ ONLY";
+                    await begin.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                foreach (var span in statements)
+                {
+                    var statement = sql.Substring(span.Start, span.Length);
+                    var result = await ExecuteStatementAsync(
+                        session,
+                        statement,
+                        database,
+                        options,
+                        stopwatch,
+                        cancellationToken);
+
+                    results.Add(result);
+                    ApplyTransactionCommand(session, statement, succeeded: !result.IsError);
+
+                    if (result.IsError)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                if (readOnly)
+                {
+                    try
+                    {
+                        await using var rollback = session.Connection.CreateCommand();
+                        rollback.CommandText = "ROLLBACK";
+                        await rollback.ExecuteNonQueryAsync(CancellationToken.None);
+                    }
+                    catch
+                    {
+                        // A connection that already died ended the transaction server-side.
+                    }
                 }
             }
 

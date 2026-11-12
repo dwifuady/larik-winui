@@ -74,6 +74,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Larik.Core\Larik.Core.csproj" />
     <ProjectReference Include="..\Larik.Data\Larik.Data.csproj" />
     <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
@@ -118,4 +119,44 @@
     <PublishTrimmed>false</PublishTrimmed>
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
+
+  <!--
+    The MCP server is a second apphost, not a library: agents launch it themselves. It is built
+    before this project's layout and copied beside Larik.exe, which is what lets the packaged build
+    declare an execution alias and what makes the Settings snippet a real path in a developer build.
+    Publish repeats the copy from a self-contained build (see PublishMcpServer) so an installed copy
+    needs no .NET runtime of its own.
+  -->
+  <Target Name="BuildMcpServerLayout" BeforeTargets="CopyMcpServer">
+    <MSBuild
+      Projects="$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj"
+      Targets="Build"
+      Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="CopyMcpServer" AfterTargets="Build" Condition="'$(NoBuild)' != 'true'">
+    <ItemGroup>
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.dll" />
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.exe" />
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.json" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(McpServerFile)"
+      DestinationFolder="$(OutDir)"
+      SkipUnchangedFiles="true" />
+    <!-- The packaged layout is a copy of the output made by the MSIX tooling; the alias in
+         Package.appxmanifest points at Larik.Mcp.exe inside it, so it has to be there too. -->
+    <Copy
+      Condition="Exists('$(OutDir)AppX')"
+      SourceFiles="@(McpServerFile)"
+      DestinationFolder="$(OutDir)AppX"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublishMcpServer" AfterTargets="Publish">
+    <MSBuild
+      Projects="$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj"
+      Targets="Publish"
+      Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishDir=$(PublishDir)" />
+  </Target>
 </Project>

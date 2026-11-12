@@ -6,14 +6,6 @@ using Windows.UI.ViewManagement;
 
 namespace Larik.Services;
 
-/// <summary>The user's theme choice; <see cref="System"/> follows Windows and is the default.</summary>
-public enum AppTheme
-{
-    System,
-    Light,
-    Dark,
-}
-
 /// <summary>
 /// Owns the app's appearance preference and applies it to the live window. The saved preference is
 /// set through <see cref="Initialize"/> before the first window exists (Application.RequestedTheme
@@ -46,21 +38,9 @@ public static class ThemeService
             _ => ElementTheme.Default,
         };
 
-    public static AppTheme Parse(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "light" => AppTheme.Light,
-            "dark" => AppTheme.Dark,
-            _ => AppTheme.System,
-        };
+    public static AppTheme Parse(string? value) => AppThemeText.Parse(value);
 
-    public static string ToStorage(AppTheme theme) =>
-        theme switch
-        {
-            AppTheme.Light => "light",
-            AppTheme.Dark => "dark",
-            _ => "system",
-        };
+    public static string ToStorage(AppTheme theme) => AppThemeText.ToStorage(theme);
 
     /// <summary>
     /// Called once from <see cref="App"/> before the first window is created, because the WinUI

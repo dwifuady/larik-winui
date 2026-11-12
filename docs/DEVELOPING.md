@@ -9,6 +9,8 @@ provider contracts in [`PROVIDERS.md`](PROVIDERS.md); add-on distribution in [`A
 ```
 Larik.slnx                     solution (app + provider assemblies + tests)
 Larik/                         WinUI 3 app: shell, editor surface, completion, views, services
+Larik.Core/                    shared, WinUI-free: local store (SQLite), secrets, paths, diagnostics
+Larik.Mcp/                     MCP server EXE (stdio) that agents launch; shares Larik.Core
 Larik.Data/                    provider contracts, editor-language seam, catalog, Demo provider
 Larik.Data.SqlServer/          SQL Server provider on Microsoft.Data.SqlClient
 Larik.Data.Postgres/           PostgreSQL provider on Npgsql
@@ -22,6 +24,42 @@ docs/                          provider/add-on handbooks, feature detail, this f
 `Larik.Data` is the dependency-free core (`net10.0`, no packages, no WinUI types). The app owns the
 UI and composition root; providers own everything engine-specific. The shell never branches on a
 provider — `DatabaseProviderCatalog` loads them from referenced assemblies and Plugins folders.
+
+`Larik.Core` is the half both processes need: the SQLite store (`StudioStore`), Windows Credential
+Manager secrets, state paths and the diagnostics log. It targets plain `net10.0` so the MCP EXE, a
+provider assembly and the unit tests can reference it — which is why package detection there is a
+kernel32 call rather than `Windows.Storage.ApplicationData`. Files keep their historical
+`Larik.Services` / `Larik.Models` namespaces: the assembly is the seam, not the namespace.
+
+`Larik.Mcp` is a console EXE speaking MCP over stdio. MCP clients start it themselves, so there is no
+port, no token and no listener; it reads the same store and secrets as the app, one
+`IDatabaseConnection` per tool call. It never references WinUI, and the app never references it.
+
+**Packaging.** `Larik.csproj` builds the MCP project and copies its EXE and dependencies beside
+`Larik.exe` (`CopyMcpServer`); `dotnet publish` repeats it from a self-contained build
+(`PublishMcpServer`) so an installed copy needs no .NET runtime of its own.
+`Package.appxmanifest` declares a second `Application` with a `uap5:ExecutionAlias` for
+**`larik-mcp.exe`**, so agents run the command with no path at all. Two caveats: the debug layout
+`winapp run` generates rebuilds its `AppX` folder and drops the copied EXE (the alias dangles until a
+real package is installed), and the Store build's generated manifest must keep the second
+`Application` entry — check `obj\store\Package.appxmanifest` before a Store submission.
+
+### Driving the MCP server by hand
+
+The server is a normal stdio process: send newline-delimited JSON-RPC on stdin and read replies on
+stdout (logs go to stderr, never stdout). A packaged studio keeps its store inside the package, so
+name the folder explicitly when the EXE is started from outside the package:
+
+```powershell
+dotnet build Larik.Mcp\Larik.Mcp.csproj
+$env:LARIK_STATE_DIR = "$env:LOCALAPPDATA\Larik WinUI"   # or the machine's packaged LocalState
+'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.1"}}}' |
+    Larik.Mcp\bin\Debug\net10.0\Larik.Mcp.exe --state $env:LARIK_STATE_DIR
+```
+
+In the released layout the EXE sits beside `Larik.exe` and a packaged build aliases it as
+`larik-mcp`, so clients need neither the path nor `--state`. Settings → AI agents renders the exact
+command for each client with this build's real paths.
 
 ## Build and run
 

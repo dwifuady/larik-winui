@@ -75,6 +75,10 @@ public partial class App : Application
         // The notice is useful only once the shell is on screen; checking before Activate would
         // race the first layout and could show a bar over a window that is not there yet.
         ((MainWindow)Window).StartUpdateCheck();
+
+        // Agents can ask this window for a write approval while it runs; the channel is silent
+        // when the app is closed, and Larik.Mcp then refuses instead of guessing.
+        McpApprovalService.Start();
     }
 
     /// <summary>

@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The shared half of the product: local state, secrets and diagnostics, used by the WinUI app and
+    by Larik.Mcp (the MCP server EXE). Targets plain net10.0 on purpose — no WinUI, no Windows App
+    SDK — so a console host, a provider assembly and the unit tests can all reference it. That is
+    why package detection here is a kernel32 P/Invoke rather than Windows.Storage.ApplicationData.
+
+    The files keep their historical namespaces (Larik.Services, Larik.Models): the assembly is the
+    seam, and leaving the names alone keeps ~50 call sites in the app untouched.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Larik</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="*" />
+  </ItemGroup>
+</Project>

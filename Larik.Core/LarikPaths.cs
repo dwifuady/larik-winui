@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Text;
+
 namespace Larik.Services;
 
 /// <summary>
@@ -16,9 +19,57 @@ public static class LarikPaths
 
     /// <summary>
     /// The package's <c>LocalState</c> folder for a packaged run, otherwise null. Resolved once:
-    /// <c>ApplicationData.Current</c> throws when the process has no package identity.
+    /// package identity cannot change while the process runs.
     /// </summary>
     private static readonly string? PackageStateDirectory = ResolvePackageStateDirectory();
+
+    /// <summary>
+    /// The package's <c>LocalState</c> folder for a packaged run, otherwise null.
+    /// </summary>
+    /// <remarks>
+    /// Resolved with a kernel32 call instead of <c>Windows.Storage.ApplicationData</c>: this
+    /// assembly is plain net10.0 (the MCP console host and the unit tests reference it), and the
+    /// WinRT API would pull the Windows App SDK in. For a packaged process the OS places
+    /// <c>LocalState</c> at the documented path below, which is exactly what
+    /// <c>ApplicationData.Current.LocalFolder</c> reports.
+    /// </remarks>
+    private static string? ResolvePackageStateDirectory()
+    {
+        try
+        {
+            // The first call returns ERROR_INSUFFICIENT_BUFFER with the required length including
+            // the terminator; 15700 (APPMODEL_ERROR_NO_PACKAGE) is the ordinary unpackaged case.
+            var length = 0;
+            if (GetCurrentPackageFamilyName(ref length, null) != ErrorInsufficientBuffer || length <= 1)
+            {
+                return null;
+            }
+
+            var familyName = new StringBuilder(length);
+            if (GetCurrentPackageFamilyName(ref length, familyName) != 0)
+            {
+                return null;
+            }
+
+            // Not checked for existence: a first launch has no LocalState yet, and the store
+            // creates it. Falling back to the portable folder would split the two editions' state.
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Packages",
+                familyName.ToString(),
+                "LocalState");
+        }
+        catch
+        {
+            // No package identity, or the API is unavailable: an unpackaged run is not an error.
+            return null;
+        }
+    }
+
+    private const int ErrorInsufficientBuffer = 122;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetCurrentPackageFamilyName(ref int packageFamilyNameLength, StringBuilder? packageFamilyName);
 
     /// <summary>True when this process runs from an MSIX package (Store, or the debug identity).</summary>
     public static bool IsPackaged => PackageStateDirectory is not null;
@@ -102,20 +153,6 @@ public static class LarikPaths
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Larik WinUI");
-    }
-
-    private static string? ResolvePackageStateDirectory()
-    {
-        try
-        {
-            var local = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
-            return string.IsNullOrEmpty(local) ? null : local;
-        }
-        catch
-        {
-            // No package identity, or the API is unavailable: an unpackaged run is not an error.
-            return null;
-        }
     }
 
     private static string? ResolveLegacyDatabasePath()

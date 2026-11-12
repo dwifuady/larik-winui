@@ -43,16 +43,6 @@ public sealed class ColumnReference
     public string? VirtualReferenceId { get; init; }
 }
 
-/// <summary>Local storage for user-defined references; the shell supplies the real store.</summary>
-public interface IVirtualReferenceStore
-{
-    IReadOnlyList<VirtualReferenceRecord> GetVirtualReferences(string spaceId, string databaseName);
-
-    bool SaveVirtualReference(VirtualReferenceRecord reference);
-
-    bool DeleteVirtualReference(string id);
-}
-
 /// <summary>One result column's source table and resolved reference, if any.</summary>
 public sealed record ColumnResolution(ReferenceSource Source, ColumnReference? Reference);
 

@@ -169,9 +169,9 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// instead of failing the launch. Provider-declared password fields are never written.
 /// </para>
 /// </summary>
-public sealed class StudioStore : IVirtualReferenceStore
+public sealed partial class StudioStore : IVirtualReferenceStore
 {
-    private const int SchemaVersion = 6;
+    private const int SchemaVersion = 7;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -210,7 +210,7 @@ public sealed class StudioStore : IVirtualReferenceStore
         try
         {
             using var connection = Open();
-            return ThemeService.Parse(ReadState(connection, "theme"));
+            return AppThemeText.Parse(ReadState(connection, "theme"));
         }
         catch
         {
@@ -486,17 +486,52 @@ public sealed class StudioStore : IVirtualReferenceStore
             CREATE INDEX IF NOT EXISTS idx_archived_tabs_archived_at ON archived_tabs(archived_at DESC);
             CREATE INDEX IF NOT EXISTS idx_virtual_references_scope
                 ON virtual_references(space_id, database_name);
+
+            -- Version 7: MCP exposure. The audit table is written by both the app and Larik.Mcp,
+            -- which is why it lives in the same store (one audit list, one source of truth).
+            CREATE TABLE IF NOT EXISTS mcp_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                tool TEXT NOT NULL,
+                space_id TEXT,
+                space_name TEXT,
+                provider_id TEXT,
+                access_level TEXT NOT NULL,
+                statement TEXT,
+                status TEXT NOT NULL,
+                reason TEXT,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                rows_returned INTEGER NOT NULL DEFAULT 0,
+                decision_surface TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mcp_log_recorded_at ON mcp_log(recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS mcp_approvals (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                space_id TEXT NOT NULL,
+                space_name TEXT NOT NULL,
+                statement TEXT NOT NULL,
+                status TEXT NOT NULL,
+                decided_at TEXT,
+                surface TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mcp_approvals_status ON mcp_approvals(status, created_at);
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
         // workspace icon. Version 4 adds the rail visibility flag. Version 5 adds tab groups and
-        // the archive's group name. Version 6 adds user-defined reference metadata.
+        // the archive's group name. Version 6 adds user-defined reference metadata. Version 7 adds
+        // the MCP exposure level and the MCP audit/approval tables.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");
         EnsureColumn(connection, transaction, "archived_tabs", "group_name", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "icon", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "hidden", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, transaction, "spaces", "mcp_access", "TEXT NOT NULL DEFAULT 'off'");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();
@@ -789,7 +824,7 @@ public sealed class StudioStore : IVirtualReferenceStore
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
-        SetState(connection, transaction, "theme", ThemeService.ToStorage(ThemeService.Parse(state.Theme)));
+        SetState(connection, transaction, "theme", AppThemeText.ToStorage(AppThemeText.Parse(state.Theme)));
         SetState(connection, transaction, "check_for_updates", state.CheckForUpdates ? "true" : "false");
         if (state.ResultsPaneHeight is { } resultsHeight)
         {

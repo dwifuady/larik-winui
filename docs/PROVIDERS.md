@@ -113,6 +113,30 @@ Therefore:
 `Larik.Data.Tests/EditorLanguageTests.cs` contains compatibility guards for the record constructor
 and the new default-null properties. Keep them.
 
+### Read-only exposure (MCP)
+
+An agent reading through a saved connection must be held to a policy the provider owns, never to a
+branch on the provider id in the shell:
+
+- `IDatabaseProvider.ReadOnlyPolicy` (default `null`) returns an `IReadOnlyStatementPolicy?`. A null
+  policy makes the MCP server **refuse** read-mode queries on that provider — fail closed, so every
+  add-on built before this member existed stays safe without a change.
+- `IReadOnlyStatementPolicy.IsProvenRead(sql)` must be fail-closed: true only when every statement in
+  the batch is provably a read. `Larik.Data/ReadOnlySql.cs` provides the shared scanner (string
+  literals, comments and quoted identifiers are stripped before the `;` split) and the keyword-list
+  rules; the provider supplies its own lists (`TSqlReadOnlyPolicy`, `PostgresReadOnlyPolicy`,
+  `DemoReadOnlyPolicy`).
+- `QueryExecutionOptions.ReadOnly` (default `null`) asks for engine-level enforcement inside
+  `ExecuteAsync`/`ExecuteBatchAsync`. SQL Server wraps the batch in a transaction that is always
+  rolled back; PostgreSQL runs it inside `BEGIN TRANSACTION READ ONLY`. Providers that cannot honour
+  it must not pretend: the statement gate already covers them.
+
+Both members are additive: an older plugin keeps loading, and an older host ignores them.
+
+`ExecuteAsync`/`ExecuteBatchAsync` must honour the `CancellationToken`: the MCP server cancels a
+statement after two minutes and reports that to the agent, and `Stop` in the studio cancels the same
+way. A provider that ignores the token makes both promises false.
+
 ---
 
 ## 3. The editor-language seam
