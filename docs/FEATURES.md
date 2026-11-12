@@ -278,10 +278,13 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   filters on the columns present in the result. The link button toggles value/reference for the same
   cell, and the resolver only previews a reference when the source table is unambiguous. A small link
   icon in the column header marks a foreign-key column (tooltip names the target) and opens the same
-  preview. JSON and XML values are
-  auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector overrides the guess
-  (invalid input falls back to the raw text with a note), Copy takes the formatted value, and the
-  panel's left edge can be dragged between 240 and 720 px while the grid keeps a usable width.
+  preview. JSON and XML values are auto-detected and pretty-printed, an **Auto / JSON / XML /
+  Plain** selector overrides the guess (invalid input falls back to the raw text with a note), Copy
+  takes the formatted value, and the panel's left edge can be dragged between 240 and 720 px while
+  the grid keeps a usable width. JSON and XML are syntax-coloured with the editor's token brushes,
+  and **Ctrl+F** opens a find-as-you-type bar over the value with a match count; Enter / Shift+Enter
+  (or F3 / Shift+F3) steps matches, and **Esc** closes find before the pane. The query re-runs as the
+  focused cell changes, so arrowing down a JSON column keeps the same key highlighted.
   Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
   context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
