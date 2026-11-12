@@ -240,6 +240,15 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   `ApplicationData.Current.LocalFolder` when the process has package identity, so an uninstall takes
   the data with it and the Store and GitHub editions never share a database. Packaged builds do not
   import the old `%LOCALAPPDATA%\Larik` store; that carry-over belongs to the unpackaged edition.
+- **Diagnostics log**: every launch writes one local log file beside the state database
+  (`logs\larik-<date>-<time>-<pid>.log`) and Settings → About shows the folder with an **Open
+  folder** button. The log records version, OS, loaded providers and add-on load errors, query and
+  cell-preview breadcrumbs (lengths, row counts, timings) and full exception stacks for unhandled
+  UI-thread, app-domain and task exceptions. It stays on the machine and never includes SQL text,
+  cell values or credentials. A marker detects a previous session that crashed or was killed; ten
+  sessions are kept, for at most 14 days, and a session that grows past 4 MB continues in a new
+  file, so retention is automatic and nothing needs deleting. This is the file to attach to a bug
+  report.
 - **Result tabs and grid**: results start collapsed so the editor owns the window; the first run
   reveals the pane with a short slide from below, at the height you last dragged. **Ctrl+R** toggles
   the pane, and running a query while it is hidden opens it again. Closing the only result hides the
@@ -256,8 +265,10 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
   header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
-  **cell preview** beside the grid with the full, untruncated value (the grid ellipsizes cells),
-  the column type and row number, explicit NULL/empty states and a copy button. Arrow keys keep it
+  **cell preview** beside the grid with the full, untruncated value, the column type and row
+  number, explicit NULL/empty states and a copy button. The grid itself reads at most 2,048
+  characters per cell (tooltip 512) so a whole-document cell cannot make scrolling expensive; it
+  shows an ellipsis where it cut the text, and the preview always has everything. Arrow keys keep it
   in step with the focused cell; it stays open while switching result or query tabs (showing the
   active cell in the new context, and returning to the cell you left), and Esc or its close button
   turns it off until you open it again. **Shift+Space** opens the foreign-key reference instead: for a
@@ -330,6 +341,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect`/`PostgresDialect` today). |
 | Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; PostgreSQL adds dollar-quoted bodies, `E'...'` strings, quoted identifiers and nested comments. Semicolons inside parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and nested `BEGIN/END` awareness still need the same AST work as completion. |
+| A native crash leaves breadcrumbs, not a dump | The diagnostics log catches managed exceptions and writes the action in progress, so a provider that dies natively (access violation, stack overflow) still shows the last operation. There is no minidump or crash-upload path yet; adding `MiniDumpWriteDump` behind an opt-in setting is the next step if driver crashes keep showing up. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | File settings browse existing files only | **Browse…** opens a file open picker. Creating a new database file is done by typing the path (the provider's create-if-missing setting decides what happens next); a save picker would add a "new vs open" decision to a form that does not need one until users ask. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |

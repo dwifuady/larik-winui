@@ -215,6 +215,9 @@ public sealed partial class ResultsGrid : UserControl
 
         if (result.Columns.Count == 0 || result.Rows.Count == 0)
         {
+            AppLog.Info(
+                "results",
+                $"show: no grid ({result.Columns.Count:N0} column(s), {result.Rows.Count:N0} row(s), {result.Messages.Count:N0} message(s))");
             Clear();
             _result = result;
 
@@ -229,6 +232,12 @@ public sealed partial class ResultsGrid : UserControl
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
+
+        // The last line before rows are realized is the one that explains a crash inside the row
+        // template: a provider that ignores the row cap and returns megabyte cells shows up here.
+        AppLog.Info(
+            "results",
+            $"show: {result.Rows.Count:N0} row(s) x {result.Columns.Count:N0} column(s), largest cell {LargestCellLength(result):N0} characters");
 
         _result = result;
         _layout = GetOrBuildLayout(result);
@@ -368,6 +377,24 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         return new ResultLayout { Columns = columns };
+    }
+
+    /// <summary>Largest cell length in the result; a length check only, so this allocates nothing.</summary>
+    private static int LargestCellLength(QueryResult result)
+    {
+        var largest = 0;
+        foreach (var row in result.Rows)
+        {
+            foreach (var cell in row)
+            {
+                if (cell is { Length: > 0 } && cell.Length > largest)
+                {
+                    largest = cell.Length;
+                }
+            }
+        }
+
+        return largest;
     }
 
     private static List<ResultRow> BuildRows(QueryResult result, ResultLayout layout)
@@ -1009,8 +1036,17 @@ public sealed partial class ResultsGrid : UserControl
             return;
         }
 
+        AppLog.Info(
+            "preview",
+            $"open: '{layout.Name}' ({layout.DataType ?? "unknown type"}), {value.Length:N0} characters, mode {_previewFormat}");
+
         var formatted = CellContentFormatter.Format(value, _previewFormat);
         _previewCopyText = formatted.Text;
+
+        AppLog.Info(
+            "preview",
+            $"formatted: {formatted.Kind}, {formatted.Text.Length:N0} characters"
+                + (formatted.Error is null ? string.Empty : $", note '{formatted.Error}'"));
 
         CellPreviewSubtitle.Text = formatted.Kind is CellFormat.Json or CellFormat.Xml
             ? $"{subtitle} · {formatted.Kind.ToString().ToUpperInvariant()}"
@@ -1024,6 +1060,9 @@ public sealed partial class ResultsGrid : UserControl
 
         CellPreviewValue.Text = display;
         CellPreviewValue.Foreground = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, StudioColors.Muted);
+
+        // The line that separates "the formatter worked" from "WinUI died laying out the text".
+        AppLog.Info("preview", $"rendered: {display.Length:N0} characters in the panel");
 
         var footer = formatted.Text.Length > PreviewCharacterLimit
             ? $"Showing first {PreviewCharacterLimit:N0} of {formatted.Text.Length:N0} characters — Copy copies all"
@@ -1301,6 +1340,7 @@ public sealed partial class ResultsGrid : UserControl
     private void SetPreviewFormat(CellFormat format)
     {
         _previewFormat = format;
+        AppLog.Info("preview", $"format: {format}");
         PreviewFormatLabel.Text = format switch
         {
             CellFormat.Json => "JSON",

@@ -83,7 +83,7 @@ public static class ThemeService
         catch (Exception ex)
         {
             // A late assignment is an API restriction, not a reason to fail the launch.
-            System.Diagnostics.Debug.WriteLine($"Could not set the startup theme: {ex.Message}");
+            AppLog.Warning("theme", "could not set the startup theme", ex);
         }
     }
 
@@ -130,7 +130,7 @@ public static class ThemeService
         catch (Exception ex)
         {
             // The title bar is cosmetic and unavailable on some host configurations.
-            System.Diagnostics.Debug.WriteLine($"Could not set the title bar theme: {ex.Message}");
+            AppLog.Warning("theme", "could not set the title bar theme", ex);
         }
 
         // The XAML backdrop captures the window theme when it connects. Recreating it after a
@@ -144,7 +144,7 @@ public static class ThemeService
             catch (Exception ex)
             {
                 // A backdrop that refuses to reconnect is cosmetic; the content theme still works.
-                System.Diagnostics.Debug.WriteLine($"Could not refresh Mica: {ex.Message}");
+                AppLog.Warning("theme", "could not refresh Mica", ex);
             }
         }
     }

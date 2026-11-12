@@ -13,6 +13,13 @@ namespace Larik.Controls;
 /// </summary>
 public sealed class ResultRowView : Grid
 {
+    // A cell can hold a whole document (MongoDB is the obvious case). The TextBlock keeps its own
+    // copy and the row is realized again on every scroll, so a multi-megabyte value turns simple
+    // scrolling into layout work. The grid only ever shows what fits in the column; Space opens
+    // the cell preview with the full value.
+    private const int MaxCellTextLength = 2_048;
+    private const int MaxTooltipLength = 512;
+
     private static readonly SolidColorBrush Transparent = new(Microsoft.UI.Colors.Transparent);
 
     private readonly StackPanel _cellsPanel;
@@ -186,12 +193,12 @@ public sealed class ResultRowView : Grid
             cell.Background = Transparent;
 
             var text = _cells[index];
-            text.Text = value ?? "NULL";
+            text.Text = Truncate(value, MaxCellTextLength) ?? "NULL";
             text.TextAlignment = column.Numeric ? TextAlignment.Right : TextAlignment.Left;
             text.Foreground = value is null
                 ? _mutedBrush
                 : index == 0 ? _secondaryBrush : _primaryBrush;
-            ToolTipService.SetToolTip(text, value);
+            ToolTipService.SetToolTip(text, Truncate(value, MaxTooltipLength));
         }
 
         UpdateSelection();
@@ -226,6 +233,21 @@ public sealed class ResultRowView : Grid
                     ? _activeCellBrush
                     : _selectionBrush;
         }
+    }
+
+    /// <summary>
+    /// Cuts a long value to a bounded slice and marks the cut, keeping a surrogate pair whole so
+    /// truncation cannot hand WinUI an invalid UTF-16 string.
+    /// </summary>
+    private static string? Truncate(string? value, int limit)
+    {
+        if (value is null || value.Length <= limit)
+        {
+            return value;
+        }
+
+        var cut = char.IsHighSurrogate(value[limit - 1]) ? limit - 1 : limit;
+        return value[..cut] + "…";
     }
 
     private static ResultsGrid? FindAncestor(DependencyObject? node)
