@@ -474,20 +474,97 @@
                         </Button>
                     </Grid>
 
-                    <ScrollViewer
-                        x:Name="ValueView"
-                        Grid.Row="1"
-                        Padding="12,4,12,10"
-                        HorizontalScrollBarVisibility="Disabled"
-                        VerticalScrollBarVisibility="Auto">
-                        <TextBlock
-                            x:Name="CellPreviewValue"
-                            FontFamily="{StaticResource StudioMonoFont}"
-                            FontSize="12"
-                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
-                            IsTextSelectionEnabled="True"
-                            TextWrapping="Wrap" />
-                    </ScrollViewer>
+                    <Grid x:Name="ValueView" Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!--  Find-as-you-type for long JSON/XML values (Ctrl+F).  -->
+                        <Grid
+                            x:Name="PreviewFindBar"
+                            Padding="12,4,8,0"
+                            ColumnSpacing="4"
+                            Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBox
+                                x:Name="PreviewFindBox"
+                                Grid.Column="0"
+                                Height="28"
+                                Padding="8,2"
+                                VerticalContentAlignment="Center"
+                                AutomationProperties.Name="Find in cell value"
+                                FontSize="12"
+                                KeyDown="PreviewFindBox_KeyDown"
+                                PlaceholderText="Find"
+                                TextChanged="PreviewFindBox_TextChanged" />
+
+                            <TextBlock
+                                x:Name="PreviewFindStatus"
+                                Grid.Column="1"
+                                MinWidth="58"
+                                VerticalAlignment="Center"
+                                AutomationProperties.LiveSetting="Polite"
+                                FontSize="11"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                TextAlignment="Right" />
+
+                            <Button
+                                Grid.Column="2"
+                                Width="24"
+                                Height="24"
+                                AutomationProperties.Name="Previous match"
+                                Click="PreviewFindPrevious_Click"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Previous match (Shift+Enter)">
+                                <FontIcon FontSize="9" Glyph="&#xE70E;" />
+                            </Button>
+
+                            <Button
+                                Grid.Column="3"
+                                Width="24"
+                                Height="24"
+                                AutomationProperties.Name="Next match"
+                                Click="PreviewFindNext_Click"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Next match (Enter)">
+                                <FontIcon FontSize="9" Glyph="&#xE70D;" />
+                            </Button>
+
+                            <Button
+                                Grid.Column="4"
+                                Width="24"
+                                Height="24"
+                                AutomationProperties.Name="Close find"
+                                Click="PreviewFindClose_Click"
+                                Style="{StaticResource StudioIconButtonStyle}"
+                                ToolTipService.ToolTip="Close (Esc)">
+                                <FontIcon FontSize="9" Glyph="&#xE711;" />
+                            </Button>
+                        </Grid>
+
+                        <ScrollViewer
+                            x:Name="PreviewValueScroller"
+                            Grid.Row="1"
+                            Padding="12,4,12,10"
+                            HorizontalScrollBarVisibility="Disabled"
+                            VerticalScrollBarVisibility="Auto">
+                            <RichTextBlock
+                                x:Name="CellPreviewValue"
+                                FontFamily="{StaticResource StudioMonoFont}"
+                                FontSize="12"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                IsTextSelectionEnabled="True"
+                                TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </Grid>
 
                     <Grid
                         x:Name="ReferenceView"

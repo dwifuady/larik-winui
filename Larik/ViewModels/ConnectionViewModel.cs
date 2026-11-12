@@ -105,6 +105,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         }
         catch (Exception ex)
         {
+            AppLog.Error("connection", $"connect failed: {ProviderName} ({ProviderId})", ex);
             LastError = ex.Message;
             State = ConnectionState.Faulted;
             throw;

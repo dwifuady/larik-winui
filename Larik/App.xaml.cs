@@ -44,6 +44,11 @@ public partial class App : Application
     {
         InitializeComponent();
 
+        // Diagnostics start first: everything below (state migration, theme, providers) is a
+        // plausible crash site, and a log opened later would miss it.
+        AppLog.Initialize();
+        HookDiagnostics();
+
         // Runs before the workspace store is constructed: the WinUI build keeps its own database
         // beside the Tauri app's, and carries over only its own pre-separation file.
         LarikPaths.MigrateLegacyState();
@@ -70,5 +75,39 @@ public partial class App : Application
         // The notice is useful only once the shell is on screen; checking before Activate would
         // race the first layout and could show a bar over a window that is not there yet.
         ((MainWindow)Window).StartUpdateCheck();
+    }
+
+    /// <summary>
+    /// Records exceptions the app would otherwise take to the grave. The handlers only log and
+    /// flush: swallowing a UI-thread exception here would leave the shell alive in a state WinUI
+    /// cannot recover, and the log is there to explain the crash, not to pretend it did not happen.
+    /// </summary>
+    private void HookDiagnostics()
+    {
+        UnhandledException += (_, args) =>
+        {
+            AppLog.Error("crash", "unhandled exception on the UI thread", args.Exception);
+            AppLog.Flush();
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            AppLog.Error(
+                "crash",
+                $"unhandled exception (terminating: {args.IsTerminating})",
+                args.ExceptionObject as Exception);
+            AppLog.Flush();
+        };
+
+        // Not terminating by default, but a swallowed task failure is still a bug worth a stack.
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            AppLog.Error("crash", "unobserved task exception", args.Exception);
+            AppLog.Flush();
+        };
+
+        // Normal close path, including Application.Exit() from the updater. The window also calls
+        // this on close, so the marker is removed even when ProcessExit does not run.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => AppLog.Shutdown("process exit");
     }
 }

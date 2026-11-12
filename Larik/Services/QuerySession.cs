@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Larik.Data;
 
 namespace Larik.Services;
@@ -55,6 +56,11 @@ public sealed class QuerySession
             _runCancellation = linked;
             SetRunning(true);
 
+            // Counts and timings only: the log must be safe to paste into an issue, so the SQL
+            // text and every cell value stay out of it.
+            var started = Stopwatch.StartNew();
+            AppLog.Info("query", $"batch start: {sql.Length:N0} characters, row cap {options.MaxRows:N0}");
+
             try
             {
                 var results = await session.ExecuteBatchAsync(sql, database, options, linked.Token);
@@ -67,7 +73,23 @@ public sealed class QuerySession
                     throw new OperationCanceledException(linked.Token);
                 }
 
+                var rows = results.Sum(result => result.Rows.Count);
+                AppLog.Info(
+                    "query",
+                    $"batch end: {results.Count:N0} result(s), {rows:N0} row(s), {started.ElapsedMilliseconds:N0} ms");
+
                 return results;
+            }
+            catch (OperationCanceledException)
+            {
+                AppLog.Info("query", $"batch cancelled after {started.ElapsedMilliseconds:N0} ms");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The shell turns this into a one-line status; the stack belongs in the log.
+                AppLog.Error("query", $"batch failed after {started.ElapsedMilliseconds:N0} ms", ex);
+                throw;
             }
             finally
             {
@@ -262,7 +284,21 @@ public sealed class QuerySession
     private async Task<IDatabaseConnection> EnsureOpenCoreAsync(CancellationToken cancellationToken)
     {
         var session = EnsureSession();
-        await session.OpenAsync(cancellationToken);
+        try
+        {
+            await session.OpenAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // A cancelled connect is a user action, not a failure worth a stack.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("session", "connection open failed", ex);
+            throw;
+        }
+
         return session;
     }
 

@@ -37,6 +37,7 @@ public static class DriverRuntime
                     new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
                 ]);
 
+            LogCatalogue();
             return;
         }
 
@@ -54,6 +55,26 @@ public static class DriverRuntime
             scan.Errors,
             Path.Combine(AppContext.BaseDirectory, "Plugins"),
             LarikPaths.PluginsDirectory);
+
+        LogCatalogue();
+    }
+
+    /// <summary>
+    /// Writes the provider catalogue and add-on load failures to the diagnostics log. A driver that
+    /// fails to load usually only shows as a missing workspace option, so the ids and errors are the
+    /// first thing a bug report needs.
+    /// </summary>
+    private static void LogCatalogue()
+    {
+        var providers = DatabaseProviderCatalog.Providers;
+        AppLog.Info(
+            "providers",
+            $"{providers.Count} loaded: {string.Join(", ", providers.Select(provider => $"{provider.DisplayName} [{provider.Id}]"))}");
+
+        foreach (var error in DatabaseProviderCatalog.LoadErrors)
+        {
+            AppLog.Warning("providers", $"load error: {error}");
+        }
     }
 
     /// <summary>
