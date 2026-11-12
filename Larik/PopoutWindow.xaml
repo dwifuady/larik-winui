@@ -1,0 +1,426 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="Larik.PopoutWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Larik.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:Larik.ViewModels"
+    mc:Ignorable="d">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Root" Background="Transparent">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!--  The window's own drag region: same title bar control as the shell, minus the rail toggle.  -->
+        <TitleBar
+            x:Name="AppTitleBar"
+            Grid.Row="0"
+            IsBackButtonVisible="False"
+            IsPaneToggleButtonVisible="False">
+            <TitleBar.IconSource>
+                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
+            </TitleBar.IconSource>
+            <TitleBar.Content>
+                <Ellipse
+                    Width="8"
+                    Height="8"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Fill="{x:Bind Tab.Space.AccentBrush, Mode=OneWay}" />
+            </TitleBar.Content>
+            <TitleBar.RightHeader>
+                <Button
+                    x:Name="PinButton"
+                    Width="36"
+                    Height="32"
+                    Padding="0"
+                    AutomationProperties.Name="Pin window on top"
+                    Click="PinButton_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Always on top. Click to unpin">
+                    <FontIcon
+                        x:Name="PinIcon"
+                        FontSize="12"
+                        Glyph="&#xE840;" />
+                </Button>
+            </TitleBar.RightHeader>
+        </TitleBar>
+
+        <!--  Query toolbar: one run decision, plus the two window-level verbs.  -->
+        <Grid
+            Grid.Row="1"
+            Padding="12,2,12,6"
+            ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="8">
+                <Button
+                    x:Name="RunButton"
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    AutomationProperties.Name="Run query"
+                    Background="{x:Bind Tab.Space.AccentBrush, Mode=OneWay}"
+                    Click="RunButton_Click"
+                    CornerRadius="6"
+                    Foreground="{ThemeResource StudioOnAccentBrush}"
+                    ToolTipService.ToolTip="Run statement (Ctrl+Enter) - F5 runs all">
+                    <FontIcon FontSize="11" Glyph="&#xE768;" />
+                </Button>
+
+                <Button
+                    x:Name="StopButton"
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    AutomationProperties.Name="Stop query"
+                    Click="StopButton_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Stop the running query"
+                    Visibility="Collapsed">
+                    <FontIcon
+                        FontSize="11"
+                        Foreground="{ThemeResource StudioDangerBrush}"
+                        Glyph="&#xE71A;" />
+                </Button>
+
+                <Button
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    AutomationProperties.Name="Format query"
+                    Click="FormatButton_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Format query">
+                    <FontIcon FontSize="12" Glyph="&#xE8D2;" />
+                </Button>
+
+                <ProgressRing
+                    x:Name="RunProgressRing"
+                    Width="14"
+                    Height="14"
+                    Margin="2,0,0,0"
+                    Foreground="{ThemeResource StudioAccentBrush}"
+                    IsActive="False"
+                    Visibility="Collapsed" />
+            </StackPanel>
+
+            <StackPanel
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="6">
+                <Button
+                    x:Name="CollapseButton"
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    AutomationProperties.Name="Hide the editor"
+                    Click="CollapseButton_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Hide the editor so the results fill the window (Ctrl+R)">
+                    <FontIcon
+                        x:Name="CollapseIcon"
+                        FontSize="11"
+                        Glyph="&#xE70E;" />
+                </Button>
+
+                <Button
+                    Width="32"
+                    Height="28"
+                    Padding="0"
+                    AutomationProperties.Name="Dock back"
+                    Click="DockButton_Click"
+                    CornerRadius="6"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Dock the tab back into the main window (Ctrl+W)">
+                    <FontIcon FontSize="12" Glyph="&#xE73F;" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!--  One live query surface for the tab: editor and results, never both fighting for height.  -->
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="EditorRow" Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="ResultsRow" Height="0" />
+            </Grid.RowDefinitions>
+
+            <controls:SqlEditorView
+                x:Name="Editor"
+                Grid.Row="0"
+                Margin="12,0,12,0" />
+
+            <!--  Collapsed editor: one line of the query; click to bring the editor back.  -->
+            <Button
+                x:Name="CollapsedQueryButton"
+                Grid.Row="1"
+                Margin="12,0,12,6"
+                Padding="9,5"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Left"
+                AutomationProperties.Name="Show the editor"
+                Background="{ThemeResource HairlineSubtleBrush}"
+                BorderThickness="0"
+                Click="CollapseButton_Click"
+                CornerRadius="6"
+                ToolTipService.ToolTip="Show the editor (Ctrl+R)"
+                Visibility="Collapsed">
+                <TextBlock
+                    x:Name="CollapsedQueryText"
+                    FontFamily="Consolas"
+                    FontSize="11"
+                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis" />
+            </Button>
+
+            <Grid
+                x:Name="ResultsPane"
+                Grid.Row="2"
+                Margin="12,0,12,8"
+                RowSpacing="6"
+                Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid
+                    Grid.Row="0"
+                    Padding="4,0,4,0"
+                    ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <TextBlock
+                            CharacterSpacing="120"
+                            FontSize="10"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="RESULTS" />
+                        <TextBlock
+                            x:Name="ResultMessageText"
+                            FontSize="11"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+
+                    <TextBlock
+                        x:Name="ResultSummaryText"
+                        Grid.Column="1"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}" />
+
+                    <Button
+                        x:Name="ResultCloseButton"
+                        Grid.Column="2"
+                        Width="24"
+                        Height="22"
+                        Padding="0"
+                        AutomationProperties.Name="Close result"
+                        Click="ResultHeaderClose_Click"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Close result">
+                        <FontIcon FontSize="9" Glyph="&#xE711;" />
+                    </Button>
+                </Grid>
+
+                <!--  Result tabs appear only for a batch; renaming and reordering stay in the main window.  -->
+                <ListView
+                    x:Name="ResultTabsList"
+                    Grid.Row="1"
+                    Padding="0"
+                    AutomationProperties.Name="Result tabs"
+                    IsItemClickEnabled="True"
+                    ItemClick="ResultTab_ItemClick"
+                    ItemsSource="{x:Bind Tab.Results}"
+                    SelectionMode="None"
+                    ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                    ScrollViewer.HorizontalScrollMode="Enabled"
+                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                    ScrollViewer.VerticalScrollMode="Disabled"
+                    Visibility="Collapsed">
+                    <ListView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ListView.ItemsPanel>
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="MinWidth" Value="0" />
+                            <Setter Property="MinHeight" Value="0" />
+                            <Setter Property="HorizontalContentAlignment" Value="Left" />
+                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ResultSetViewModel">
+                            <Border
+                                MinHeight="28"
+                                Margin="0,0,2,0"
+                                AutomationProperties.Name="{x:Bind Title, Mode=OneWay}"
+                                Background="{x:Bind TabBackground, Mode=OneWay}"
+                                CornerRadius="4"
+                                ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel
+                                        Padding="9,4"
+                                        VerticalAlignment="Center"
+                                        Orientation="Horizontal"
+                                        Spacing="6">
+                                        <TextBlock
+                                            FontSize="11"
+                                            FontWeight="{x:Bind TitleWeight, Mode=OneWay}"
+                                            Foreground="{x:Bind TitleBrush, Mode=OneWay}"
+                                            Text="{x:Bind Title, Mode=OneWay}" />
+                                        <TextBlock
+                                            MaxWidth="140"
+                                            FontSize="10"
+                                            Foreground="{x:Bind DetailBrush, Mode=OneWay}"
+                                            Text="{x:Bind Detail, Mode=OneWay}"
+                                            TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+
+                                    <Button
+                                        Grid.Column="1"
+                                        Padding="6,3"
+                                        AutomationProperties.Name="{x:Bind CloseName, Mode=OneWay}"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Click="ResultTabClose_Click"
+                                        Opacity="{x:Bind CloseOpacity, Mode=OneWay}"
+                                        ToolTipService.ToolTip="Close result">
+                                        <FontIcon FontSize="9" Glyph="&#xE711;" />
+                                    </Button>
+
+                                    <Rectangle
+                                        Grid.ColumnSpan="2"
+                                        Height="2"
+                                        Margin="4,0"
+                                        HorizontalAlignment="Stretch"
+                                        VerticalAlignment="Bottom"
+                                        Fill="{x:Bind AccentBrush, Mode=OneWay}"
+                                        IsHitTestVisible="False"
+                                        Opacity="{x:Bind ActiveStripOpacity, Mode=OneWay}" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Border
+                    Grid.Row="2"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <controls:ResultsGrid
+                        x:Name="ResultsGrid"
+                        StatusChanged="ResultsGrid_StatusChanged" />
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!--  Status and the tab's own transaction: committing from a pop-out must stay possible.  -->
+        <Grid
+            Grid.Row="3"
+            Padding="14,5,14,7"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0"
+            ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock
+                x:Name="StatusTextBlock"
+                VerticalAlignment="Center"
+                FontSize="11"
+                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                TextTrimming="CharacterEllipsis" />
+
+            <StackPanel
+                x:Name="TransactionPanel"
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="6"
+                Visibility="Collapsed">
+                <Ellipse
+                    x:Name="TransactionDot"
+                    Width="6"
+                    Height="6"
+                    VerticalAlignment="Center" />
+                <TextBlock
+                    x:Name="TransactionText"
+                    VerticalAlignment="Center"
+                    FontSize="11" />
+                <Button
+                    x:Name="CommitButton"
+                    Padding="8,2"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Commit transaction"
+                    Click="CommitButton_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Commit the open transaction">
+                    <TextBlock FontSize="11" Text="Commit" />
+                </Button>
+                <Button
+                    x:Name="RollbackButton"
+                    Padding="8,2"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Roll back transaction"
+                    Click="RollbackButton_Click"
+                    Style="{StaticResource StudioIconButtonStyle}"
+                    ToolTipService.ToolTip="Roll back the open transaction">
+                    <TextBlock FontSize="11" Text="Roll back" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="W" Modifiers="Control" Invoked="DockAccelerator_Invoked" />
+            <KeyboardAccelerator Key="O" Modifiers="Control,Menu" Invoked="DockAccelerator_Invoked" />
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="ToggleEditorAccelerator_Invoked" />
+            <KeyboardAccelerator Key="Enter" Modifiers="Control" Invoked="RunStatementAccelerator_Invoked" />
+            <KeyboardAccelerator Key="F5" Invoked="RunAllAccelerator_Invoked" />
+        </Grid.KeyboardAccelerators>
+    </Grid>
+</Window>

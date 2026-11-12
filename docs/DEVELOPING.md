@@ -172,6 +172,17 @@ the culprit.
 - A packaged (MSIX) run keeps its state in the package's `LocalState`
   (`%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState`); an unpackaged run uses the real
   `%LOCALAPPDATA%\Larik WinUI`. State checks must look in both places.
+- **A pop-out tab is a second XAML tree in the same process, not a second instance.** `App.Popouts`
+  (`PopoutManager`) owns one `PopoutWindow` per tab; the window renders the same `TabViewModel` and
+  `QuerySession` as the shell, so results, transactions and SQL are shared and no IPC/payload copy is
+  needed. The shell keeps the rail row and selection but swaps the editor for a placeholder, because
+  two live editors on one document would fight over text and the grid. Each window needs its own
+  `TitleBar`/`Window.SetTitleBar`, `ThemeService.Attach(this)`, and `ResultsGrid.OwnerWindow` so the
+  CSV/JSON picker opens over the window it belongs to. Closing the main window (`AppWindow.Closing`)
+  closes all pop-outs; closing a tab or deleting its workspace raises `StudioViewModel.TabClosing`
+  so its window closes without docking. In `ui-tests.ps1`, `Focus-App` picks the largest window of the
+  process and the pop-out helpers target its HWND with `-w`, since `-a <pid>` keeps selecting the
+  shell.
 
 ## Releasing
 

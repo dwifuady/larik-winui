@@ -50,6 +50,9 @@ public sealed partial class MainWindow : Window
         RestoreBounds(mainPage?.ViewModel.WindowBounds);
         TrackBounds(mainPage);
 
+        // A pop-out is a view of a tab the main window owns, so it cannot outlive the shell.
+        AppWindow.Closing += (_, _) => App.Popouts.CloseAll();
+
         // The last edits may still be inside the debounce window; flush them on close. The frame
         // may be showing Settings when the window closes, so keep the shell page itself.
         Closed += (_, _) =>

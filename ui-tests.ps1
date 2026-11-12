@@ -484,8 +484,11 @@ public class LarikWin32 {
 
 function Focus-App {
     $windows = @(Get-UiJson @('list-windows', '--json'))
+    # A popped-out tab is a second window of the same process, and it is smaller than the shell.
+    # The largest window is the shell, so the helpers keep targeting it after a pop-out opens.
     $window = $windows |
         Where-Object { $_.processId -eq $AppPid -and [double]$_.width -ge 400 -and [double]$_.height -ge 400 } |
+        Sort-Object { [double]$_.width * [double]$_.height } -Descending |
         Select-Object -First 1
     if (-not $window) {
         $window = $windows | Where-Object { $_.processId -eq $AppPid } | Select-Object -First 1
@@ -501,6 +504,48 @@ function Focus-App {
         [LarikWin32]::SetForegroundWindow($handle) | Out-Null
     }
     Start-Sleep -Milliseconds 400
+}
+# A tab window is a second HWND of the same process; -a would keep picking the shell, so the
+# pop-out helpers target its handle explicitly (the app filter would hide it from the tree).
+function Invoke-PopoutUi {
+    param([string[]]$Arguments, [string]$Hwnd)
+    Invoke-WinAppChecked (@('ui') + $Arguments + $ScopeArgs + @('-w', $Hwnd))
+}
+function Get-PopoutJson {
+    param([string[]]$Arguments, [string]$Hwnd)
+    $data = (Invoke-PopoutUi $Arguments $Hwnd) -join "`n" | ConvertFrom-Json
+    if ($data -is [System.Array]) { return $data }
+    return $data
+}
+function Focus-Popout {
+    param([string]$Hwnd)
+    $handle = [IntPtr]([int64]$Hwnd)
+    [LarikWin32]::ShowWindow($handle, 9) | Out-Null
+    if ([LarikWin32]::GetForegroundWindow() -ne $handle) {
+        [LarikWin32]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+        [LarikWin32]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 120
+        [LarikWin32]::SetForegroundWindow($handle) | Out-Null
+    }
+    Start-Sleep -Milliseconds 300
+}
+function Send-PopoutKeys {
+    param([string]$Keys, [string]$Hwnd, [switch]$Literal)
+    Focus-Popout $Hwnd
+    Invoke-PopoutUi (@('send-keys', $Keys, '--via', 'send-input') + $(if ($Literal) { @('--verbatim') } else { @() })) $Hwnd | Out-Null
+}
+# The shell's own hwnd (not a pop-out): the largest window of the process.
+function Get-PopoutWindow {
+    param([int]$Seconds = 8)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $window = @(Get-UiJson @('list-windows', '--json')) |
+            Where-Object { $_.processId -eq $AppPid -and $_.label -eq 'window' -and [string]$_.hwnd -ne $script:MainWindow } |
+            Select-Object -First 1
+        if ($window) { return $window }
+        Start-Sleep -Milliseconds 300
+    }
+    return $null
 }
 function Find-Element {
     param([string]$Text)
@@ -625,6 +670,7 @@ if ($From) {
         'a tab can be grouped',
         'Group by database is one action with undo',
         'a group can be pinned and survives a workspace switch',
+        'a tab pops out into its own window and docks back',
         'transactions belong to the query tab that opened them',
         'F5 splits GO batches',
         'a running query can be stopped',
@@ -2163,6 +2209,64 @@ try {
         Switch-Workspace 'Staging'
         Switch-Workspace 'Local SQL Server'
         Assert-True ((Find-Element 'tempdb, 2 tabs, expanded').matchCount -gt 0) 'the group was not restored with the workspace'
+    }
+
+    Test-UI 'a tab pops out into its own window and docks back' {
+        # Anchor on Query 2 so the title and the editor text the check compares are the same tab.
+        Click-Element 'Query 2'
+        Start-Sleep -Milliseconds 600
+        $before = (Invoke-Ui @('get-value', 'Editor', '--json')) -join "`n" | ConvertFrom-Json
+        Assert-True ($before.text -match 'select top 1000') 'Query 2 is not the active editor'
+
+        Focus-App
+        Send-Keys 'ctrl+alt+o'
+
+        $popout = Get-PopoutWindow
+        Assert-True ($null -ne $popout) 'the pop-out window did not open'
+        Assert-True ([string]$popout.title -eq 'Query 2') "the pop-out is titled '$($popout.title)'"
+
+        # The shell keeps the tab and its rail row, but hands the editor and results over.
+        Focus-App
+        Wait-ForText 'This tab is open in its own window'
+        Assert-True ((Find-Element 'Open in its own window').matchCount -gt 0) 'the rail does not mark the popped-out tab'
+
+        try {
+            # The window renders the same tab: same text, and typing there reaches the shell's model.
+            $loaded = Get-PopoutJson @('get-value', 'Editor', '--json') ([string]$popout.hwnd)
+            Assert-True ($loaded.text -eq $before.text) 'the pop-out did not load the tab content'
+
+            Send-PopoutKeys 'ctrl+end' ([string]$popout.hwnd)
+            Send-PopoutKeys ' -- popped out' ([string]$popout.hwnd) -Literal
+            Start-Sleep -Milliseconds 500
+            $typed = Get-PopoutJson @('get-value', 'Editor', '--json') ([string]$popout.hwnd)
+            Assert-True ($typed.text -match '-- popped out') 'typing in the pop-out did not reach its editor'
+
+            # Ctrl+W docks the tab back; the shell's editor returns with the pop-out's edit.
+            Send-PopoutKeys 'ctrl+w' ([string]$popout.hwnd)
+        }
+        finally {
+            # A failed assertion above must not leave a second window for the rest of the scenario.
+            $open = @(Get-UiJson @('list-windows', '--json')) |
+                Where-Object { $_.processId -eq $AppPid -and $_.label -eq 'window' }
+            if ($open.Count -gt 1) {
+                try { Send-PopoutKeys 'ctrl+w' ([string]$popout.hwnd) } catch { }
+                Start-Sleep -Milliseconds 800
+            }
+        }
+
+        $deadline = (Get-Date).AddSeconds(8)
+        while ((Get-Date) -lt $deadline) {
+            $remaining = @(Get-UiJson @('list-windows', '--json')) |
+                Where-Object { $_.processId -eq $AppPid -and $_.label -eq 'window' }
+            if ($remaining.Count -eq 1) { break }
+            Start-Sleep -Milliseconds 300
+        }
+        Assert-True ($remaining.Count -eq 1) 'the pop-out window did not close'
+
+        Focus-App
+        Assert-True ((Find-Element 'This tab is open in its own window').matchCount -eq 0) 'the placeholder stayed after docking'
+        $after = (Invoke-Ui @('get-value', 'Editor', '--json')) -join "`n" | ConvertFrom-Json
+        Assert-True ($after.text -match '-- popped out') 'the docked editor lost the pop-out edit'
     }
 
     Test-UI 'transactions belong to the query tab that opened them' {

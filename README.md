@@ -40,7 +40,8 @@ The Store edition updates through the Store instead.
   Workspaces start disconnected and connect from the rail, wear a colour and Fluent icon, and can
   be hidden from the rail or reordered. Deleting one archives its SQL first.
 - **Arc-style tabs.** Vertical query tabs with collapsible groups, pinned folders, drag reorder,
-  inline rename, and non-destructive close into an archive with optional auto-archive.
+  inline rename, and non-destructive close into an archive with optional auto-archive. **Pop a tab
+  into its own always-on-top window** (Ctrl+Alt+O) and dock it back with Ctrl+W.
 - **A real editor.** Provider-driven syntax highlighting, line numbers, find/replace with visible
   match highlighting, snippet expansion on Tab, and clause-aware completion for tables, columns,
   aliases, joins, CTEs, variables, databases and procedure calls. `Ctrl+K` opens a schema peek that
