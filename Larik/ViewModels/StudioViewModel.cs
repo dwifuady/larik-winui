@@ -1480,13 +1480,21 @@ public partial class StudioViewModel : ObservableObject
             return null;
         }
 
+        var database = result.Database
+            ?? (ActiveTab is { } activeTab && ActiveSpace is { } activeSpace
+                ? DatabaseNameFor(activeSpace, activeTab)
+                : null);
+
         return new CellReferenceController(
             result,
             string.IsNullOrWhiteSpace(result.Statement) ? ActiveTab?.Content : result.Statement,
             Tables,
             dialect,
             RunCellReferenceQueryAsync,
-            EstimateRowCountAsync);
+            EstimateRowCountAsync,
+            _store,
+            ActiveSpace?.Id,
+            database);
     }
 
     /// <summary>

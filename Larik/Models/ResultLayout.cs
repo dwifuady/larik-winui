@@ -7,6 +7,9 @@ public sealed class ResultColumnLayout
 {
     public required string Name { get; init; }
 
+    /// <summary>Position of this column in the provider's original cell array.</summary>
+    public required int SourceIndex { get; init; }
+
     /// <summary>Provider-reported type (e.g. "nvarchar"), shown in the cell preview.</summary>
     public string? DataType { get; init; }
 
@@ -19,7 +22,8 @@ public sealed class ResultColumnLayout
 /// <summary>The column layout of one result. Rows reference it instead of copying cell metadata.</summary>
 public sealed class ResultLayout
 {
-    public required IReadOnlyList<ResultColumnLayout> Columns { get; init; }
+    /// <summary>Display order. <see cref="ResultColumnLayout.SourceIndex"/> maps back to the provider's cell order.</summary>
+    public required List<ResultColumnLayout> Columns { get; init; }
 
     public double TotalWidth => Columns.Sum(column => column.Width);
 }

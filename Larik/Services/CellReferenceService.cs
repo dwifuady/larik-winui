@@ -1,9 +1,18 @@
 using Larik.Data;
+using Larik.Models;
 
 namespace Larik.Services;
 
 /// <summary>One column pair of a (possibly composite) foreign key.</summary>
 public sealed record ColumnReferencePair(string SourceColumn, string TargetColumn);
+
+/// <summary>The table + column a result-set column came from, present even when no reference exists.</summary>
+public sealed record ReferenceSource(string Schema, string Table, string Column)
+{
+    public string Label => string.IsNullOrWhiteSpace(Schema)
+        ? $"{Table}.{Column}"
+        : $"{Schema}.{Table}.{Column}";
+}
 
 /// <summary>
 /// A resolved foreign key for one result-set column: where the value points and every column of
@@ -26,7 +35,26 @@ public sealed class ColumnReference
     public required string TargetColumn { get; init; }
 
     public required IReadOnlyList<ColumnReferencePair> Pairs { get; init; }
+
+    /// <summary>True when this comes from a user-defined reference rather than the database.</summary>
+    public bool IsVirtual { get; init; }
+
+    /// <summary>The backing user-defined reference, so the UI can edit or remove it.</summary>
+    public string? VirtualReferenceId { get; init; }
 }
+
+/// <summary>Local storage for user-defined references; the shell supplies the real store.</summary>
+public interface IVirtualReferenceStore
+{
+    IReadOnlyList<VirtualReferenceRecord> GetVirtualReferences(string spaceId, string databaseName);
+
+    bool SaveVirtualReference(VirtualReferenceRecord reference);
+
+    bool DeleteVirtualReference(string id);
+}
+
+/// <summary>One result column's source table and resolved reference, if any.</summary>
+public sealed record ColumnResolution(ReferenceSource Source, ColumnReference? Reference);
 
 /// <summary>The data one reference preview needs, already resolved into a query result.</summary>
 public sealed record CellReferenceSnapshot(
@@ -61,6 +89,21 @@ public interface ICellReferenceController
     /// <summary>Human-readable target for a column header icon, or null when there is no reference.</summary>
     string? Describe(int columnIndex);
 
+    /// <summary>The source table for a column, even when no reference exists; null when unknown.</summary>
+    ReferenceSource? GetSource(int columnIndex);
+
+    /// <summary>The resolved (real or custom) reference for a column, if any.</summary>
+    ColumnReference? GetReference(int columnIndex);
+
+    /// <summary>Tables offered as a target when the user defines a custom reference.</summary>
+    IReadOnlyList<TableSchema> Tables { get; }
+
+    /// <summary>Stores a custom reference for the source column and re-resolves the result.</summary>
+    bool SaveReference(ReferenceSource source, TableSchema target, string targetColumn);
+
+    /// <summary>Removes the custom reference for a column.</summary>
+    bool DeleteReference(int columnIndex);
+
     Task<CellReferenceSnapshot> PreviewAsync(
         int rowIndex,
         int columnIndex,
@@ -75,15 +118,16 @@ public interface ICellReferenceController
 /// </summary>
 public static class CellReferenceResolver
 {
-    public static IReadOnlyDictionary<int, ColumnReference> Resolve(
+    public static IReadOnlyDictionary<int, ColumnResolution> Resolve(
         QueryResult result,
         string? statement,
-        IReadOnlyList<TableSchema> tables)
+        IReadOnlyList<TableSchema> tables,
+        IReadOnlyList<VirtualReferenceRecord>? virtualReferences = null)
     {
-        var references = new Dictionary<int, ColumnReference>();
+        var resolutions = new Dictionary<int, ColumnResolution>();
         if (result.Columns.Count == 0 || string.IsNullOrWhiteSpace(statement) || tables.Count == 0)
         {
-            return references;
+            return resolutions;
         }
 
         // FindTableReferences works from a caret; a trailing terminator would put the caret in a
@@ -96,14 +140,14 @@ public static class CellReferenceResolver
 
         if (text.Length == 0)
         {
-            return references;
+            return resolutions;
         }
 
         // A batch can contain several statements but QueryResult.Statement is batch-scoped. Mapping
         // columns across them could pick the wrong table, so only a single-statement text is safe.
         if (text.Contains(';'))
         {
-            return references;
+            return resolutions;
         }
 
         var knownTables = CompletionEngine
@@ -115,7 +159,7 @@ public static class CellReferenceResolver
 
         if (knownTables.Count == 0)
         {
-            return references;
+            return resolutions;
         }
 
         for (var index = 0; index < result.Columns.Count; index++)
@@ -127,14 +171,13 @@ public static class CellReferenceResolver
                 continue;
             }
 
-            var reference = FindReference(source, column);
-            if (reference is not null)
-            {
-                references[index] = reference;
-            }
+            var resolution = new ReferenceSource(source.Schema ?? string.Empty, source.Name, column);
+            resolutions[index] = new ColumnResolution(
+                resolution,
+                FindReference(source, column, virtualReferences));
         }
 
-        return references;
+        return resolutions;
     }
 
     private static TableSchema? FindSourceTable(IReadOnlyList<TableSchema> tables, string column)
@@ -150,7 +193,10 @@ public static class CellReferenceResolver
         return candidates.Count == 1 ? candidates[0] : null;
     }
 
-    private static ColumnReference? FindReference(TableSchema table, string column)
+    private static ColumnReference? FindReference(
+        TableSchema table,
+        string column,
+        IReadOnlyList<VirtualReferenceRecord>? virtualReferences)
     {
         var groups = table.ForeignKeys
             .GroupBy(key => key.Constraint, StringComparer.OrdinalIgnoreCase)
@@ -161,7 +207,7 @@ public static class CellReferenceResolver
 
         if (groups.Count == 0)
         {
-            return null;
+            return FindVirtualReference(table, column, virtualReferences);
         }
 
         var pairs = groups[0];
@@ -178,6 +224,42 @@ public static class CellReferenceResolver
             Pairs = pairs
                 .Select(key => new ColumnReferencePair(key.Column, key.ReferencedColumn))
                 .ToList(),
+        };
+    }
+
+    /// <summary>A custom reference applies only when the database declares no FK for the column.</summary>
+    private static ColumnReference? FindVirtualReference(
+        TableSchema table,
+        string column,
+        IReadOnlyList<VirtualReferenceRecord>? virtualReferences)
+    {
+        if (virtualReferences is null || virtualReferences.Count == 0)
+        {
+            return null;
+        }
+
+        var match = virtualReferences.FirstOrDefault(reference =>
+            Equal(reference.SourceSchema, table.Schema)
+            && Equal(reference.SourceTable, table.Name)
+            && Equal(reference.SourceColumn, column));
+
+        if (match is null)
+        {
+            return null;
+        }
+
+        return new ColumnReference
+        {
+            Constraint = "Custom reference",
+            SourceSchema = match.SourceSchema,
+            SourceTable = match.SourceTable,
+            SourceColumn = match.SourceColumn,
+            TargetSchema = match.TargetSchema,
+            TargetTable = match.TargetTable,
+            TargetColumn = match.TargetColumn,
+            Pairs = [new ColumnReferencePair(match.SourceColumn, match.TargetColumn)],
+            IsVirtual = true,
+            VirtualReferenceId = match.Id,
         };
     }
 
@@ -198,10 +280,16 @@ public sealed class CellReferenceController : ICellReferenceController
     private const int LookupLimit = 25;
 
     private readonly QueryResult _result;
-    private readonly IReadOnlyDictionary<int, ColumnReference> _references;
+    private readonly string? _statement;
+    private readonly IReadOnlyList<TableSchema> _tables;
+    private IReadOnlyDictionary<int, ColumnResolution> _resolutions;
+    private IReadOnlyList<VirtualReferenceRecord> _virtualReferences;
     private readonly ISqlDialect _dialect;
     private readonly Func<string, int, CancellationToken, Task<QueryResult>> _execute;
     private readonly Func<string?, string, CancellationToken, Task<long?>> _estimate;
+    private readonly IVirtualReferenceStore? _store;
+    private readonly string? _spaceId;
+    private readonly string? _database;
 
     public CellReferenceController(
         QueryResult result,
@@ -209,30 +297,116 @@ public sealed class CellReferenceController : ICellReferenceController
         IReadOnlyList<TableSchema> tables,
         ISqlDialect dialect,
         Func<string, int, CancellationToken, Task<QueryResult>> execute,
-        Func<string?, string, CancellationToken, Task<long?>> estimate)
+        Func<string?, string, CancellationToken, Task<long?>> estimate,
+        IVirtualReferenceStore? store = null,
+        string? spaceId = null,
+        string? database = null)
     {
         _result = result;
+        _statement = statement;
+        _tables = tables;
         _dialect = dialect;
         _execute = execute;
         _estimate = estimate;
-        _references = CellReferenceResolver.Resolve(result, statement, tables);
+        _store = store;
+        _spaceId = spaceId;
+        _database = database;
+        _virtualReferences = LoadVirtualReferences();
+        _resolutions = CellReferenceResolver.Resolve(result, statement, tables, _virtualReferences);
     }
 
-    public bool CanPreview(int columnIndex) => _references.ContainsKey(columnIndex);
+    /// <summary>The tables the picker offers when the user defines a custom reference.</summary>
+    public IReadOnlyList<TableSchema> Tables => _tables;
 
-    public string? Describe(int columnIndex) =>
-        _references.TryGetValue(columnIndex, out var reference)
-            ? string.IsNullOrWhiteSpace(reference.TargetSchema)
-                ? $"References {reference.TargetTable}.{reference.TargetColumn}"
-                : $"References {reference.TargetSchema}.{reference.TargetTable}.{reference.TargetColumn}"
-            : null;
+    public ReferenceSource? GetSource(int columnIndex) =>
+        _resolutions.TryGetValue(columnIndex, out var resolution) ? resolution.Source : null;
+
+    public ColumnReference? GetReference(int columnIndex) =>
+        _resolutions.TryGetValue(columnIndex, out var resolution) ? resolution.Reference : null;
+
+    public bool CanPreview(int columnIndex) => GetReference(columnIndex) is not null;
+
+    public string? Describe(int columnIndex)
+    {
+        var reference = GetReference(columnIndex);
+        if (reference is null)
+        {
+            return null;
+        }
+
+        var target = string.IsNullOrWhiteSpace(reference.TargetSchema)
+            ? $"{reference.TargetTable}.{reference.TargetColumn}"
+            : $"{reference.TargetSchema}.{reference.TargetTable}.{reference.TargetColumn}";
+        return reference.IsVirtual ? $"Custom reference → {target}" : $"References {target}";
+    }
+
+    /// <summary>
+    /// Saves the user's choice for a column and re-resolves the result. The database's own foreign
+    /// key always wins, so a custom reference only fills a gap.
+    /// </summary>
+    public bool SaveReference(ReferenceSource source, TableSchema target, string targetColumn)
+    {
+        if (_store is null || string.IsNullOrWhiteSpace(_spaceId) || string.IsNullOrWhiteSpace(_database))
+        {
+            return false;
+        }
+
+        var record = new VirtualReferenceRecord
+        {
+            Id = Guid.NewGuid().ToString("n"),
+            SpaceId = _spaceId,
+            DatabaseName = _database,
+            SourceSchema = source.Schema,
+            SourceTable = source.Table,
+            SourceColumn = source.Column,
+            TargetSchema = target.Schema ?? string.Empty,
+            TargetTable = target.Name,
+            TargetColumn = targetColumn,
+        };
+
+        if (!_store.SaveVirtualReference(record))
+        {
+            return false;
+        }
+
+        ReloadReferences();
+        return true;
+    }
+
+    public bool DeleteReference(int columnIndex)
+    {
+        if (_store is null || GetReference(columnIndex)?.VirtualReferenceId is not { } id)
+        {
+            return false;
+        }
+
+        if (!_store.DeleteVirtualReference(id))
+        {
+            return false;
+        }
+
+        ReloadReferences();
+        return true;
+    }
+
+    private IReadOnlyList<VirtualReferenceRecord> LoadVirtualReferences() =>
+        _store is null || string.IsNullOrWhiteSpace(_spaceId) || string.IsNullOrWhiteSpace(_database)
+            ? []
+            : _store.GetVirtualReferences(_spaceId, _database);
+
+    private void ReloadReferences()
+    {
+        _virtualReferences = LoadVirtualReferences();
+        _resolutions = CellReferenceResolver.Resolve(_result, _statement, _tables, _virtualReferences);
+    }
 
     public async Task<CellReferenceSnapshot> PreviewAsync(
         int rowIndex,
         int columnIndex,
         CancellationToken cancellationToken)
     {
-        if (!_references.TryGetValue(columnIndex, out var reference))
+        var reference = GetReference(columnIndex);
+        if (reference is null)
         {
             return CellReferenceSnapshot.Empty();
         }

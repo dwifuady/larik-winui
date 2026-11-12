@@ -137,6 +137,9 @@ public sealed class ResultRowView : Grid
         }
     }
 
+    /// <summary>Rebuilds cell values in the layout's new display order after a column drag.</summary>
+    public void Reload() => UpdateCells();
+
     private void UpdateCells()
     {
         if (DataContext is not ResultRow row)
@@ -185,7 +188,8 @@ public sealed class ResultRowView : Grid
             }
 
             var column = row.Layout.Columns[index];
-            var value = index < row.Cells.Count ? row.Cells[index] : null;
+            var sourceIndex = column.SourceIndex;
+            var value = sourceIndex < row.Cells.Count ? row.Cells[sourceIndex] : null;
 
             cell.Visibility = Visibility.Visible;
             cell.Width = column.Width;

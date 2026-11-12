@@ -73,7 +73,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   switcher, whose chip shows the workspace name; the line beneath carries the connection state (dot
   **and** `Connected`/`Disconnected`) and the one action for it, so **spaces start disconnected**
   and the way to connect is beside the workspace rather than in the status bar. Running a query
-  while disconnected is refused with an explicit message. The database row under it is a picker for
+  while disconnected is refused with an explicit message. While a statement runs, a **Running…**
+  pill with a progress ring sits in the toolbar (beside Stop) and a full-width indeterminate bar
+  under the toolbar keeps the state visible even when the editor has focus. The database row under it is a picker for
   the active tab, filled from the provider once connected, and it is absent while disconnected
   instead of showing a dead "not connected" control. Switching
   database updates that tab (and the space while it is active): the rail, toolbar badge, status bar,
@@ -227,7 +229,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   height / cell-preview width**, so the next launch opens where you left it. Workspace order and
   the **hidden-from-rail** flag also survive. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
-  columns/tables in place; v3 adds the workspace icon; v4 adds the rail visibility flag); a
+  columns/tables in place; v3 adds the workspace icon; v4 adds the rail visibility flag; v5 adds
+  tab groups; v6 adds custom reference metadata); a
   pre-SQLite `studio.json` is imported once. Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
   SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
@@ -263,7 +266,10 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   virtualized — a `ListView` realizes only
   the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
-  header/row/column rules and a sticky header. Click a cell or move with the arrow keys; Shift
+  header/row/column rules and a sticky header. A sticky **row-number gutter** stays put while the
+  columns scroll vertically with the rows and narrows to the digit count; clicking a number selects
+  the whole row (Shift extends the row range), and a right-click inside a selected block keeps that
+  block without requiring Shift. Click a cell or move with the arrow keys; Shift
   extends the selection; Ctrl+Space selects a column; Ctrl+A selects everything. **Space** opens a
   **cell preview** beside the grid with the full, untruncated value, the column type and row
   number, explicit NULL/empty states and a copy button. The grid itself reads at most 2,048
@@ -278,21 +284,27 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   filters on the columns present in the result. The link button toggles value/reference for the same
   cell, and the resolver only previews a reference when the source table is unambiguous. A small link
   icon in the column header marks a foreign-key column (tooltip names the target) and opens the same
-  preview. JSON and XML values are auto-detected and pretty-printed, an **Auto / JSON / XML /
-  Plain** selector overrides the guess (invalid input falls back to the raw text with a note), Copy
-  takes the formatted value, and the panel's left edge can be dragged between 240 and 720 px while
-  the grid keeps a usable width. JSON and XML are syntax-coloured with the editor's token brushes,
+  preview. Columns without a declared FK can get a **custom reference** from the grid's context menu
+  (pick the target table and key column in a draggable picker); it is stored in Larik's local
+  database for that workspace and database, never on the server, and a real foreign key still wins.
+  JSON and XML values are auto-detected and pretty-printed, an **Auto / JSON / XML / Plain** selector
+  overrides the guess (invalid input falls back to the raw text with a note), Copy takes the
+  formatted value, and the panel's left edge can be dragged between 240 and 720 px while the grid
+  keeps a usable width. JSON and XML are syntax-coloured with the editor's token brushes,
   and **Ctrl+F** opens a find-as-you-type bar over the value with a match count; Enter / Shift+Enter
   (or F3 / Shift+F3) steps matches, and **Esc** closes find before the pane. The query re-runs as the
   focused cell changes, so arrowing down a JSON column keeps the same key highlighted.
   Ctrl+C copies the
   selected range as TSV (spreadsheet-friendly), Ctrl+Shift+C includes column headers, and the
-  context menu offers Copy / Copy with headers / Select all. **Export results…** in the same menu
+  context menu offers Copy / Copy with headers / **Copy as INSERT** (a SQL `VALUES` list, the whole
+  row when a single cell is right-clicked) / **Copy as IN clause** / Select all, formatted as
+  provider-typed SQL literals. **Export results…** in the same menu
   writes the whole result (not the selection) through the Windows save picker, where the file type
   *is* the format choice: CSV (RFC 4180, CRLF, header row, NULL as an empty field, UTF-8 with BOM
   so Excel reads non-ASCII) or JSON (array of row objects, real `null`s, duplicate column names
   suffixed). The status bar reports the row count and file name. Drag a header edge to resize a column;
-  widths persist with that result set. Each result also remembers its vertical/horizontal scroll
+  drag the header body to reorder columns (cell values, selection, reference lookups and copy all
+  follow the visual order); widths persist with that result set. Each result also remembers its vertical/horizontal scroll
   offset and active cell, so switching to another result or query tab and back returns to the same
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
@@ -300,14 +312,17 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 - **Find and replace**: Ctrl+F opens a compact bar over the top of the editor (Ctrl+H opens it with
   the replace row revealed); the bar counts matches (`3 of 12`, `No results`) and Enter / Shift+Enter
   or F3 / Shift+F3 walk them with wrap-around. A selection seeds the query, so select a word and
-  Ctrl+F to find the next occurrence. Matches are shown as real selections, which keeps them on the
-  theme's selection brush (including HighContrast) instead of fighting the syntax colours. Replace
+  Ctrl+F to find the next occurrence. Matches are painted with character-background tints; the
+  current match is much stronger and underlined, so it stays obvious while the find box holds
+  focus and the editor hides its selection. The selection still drives accessibility, and its brush
+  follows the theme (including HighContrast). Replace
   and **Replace all** are one undo step each, Esc (or the close button) returns to the text, and
   switching tabs closes the bar because it belongs to the editor, not the document.
 - **Syntax highlighting**: the active provider's `IEditorLanguage` classifies keywords, functions,
   strings, numbers, variables and comments live with theme-aware tokens (`StudioSyntax*Brush`,
   HighContrast falls back to the system text colour). The editor tokenizes on a 140 ms debounce so
-  typing never waits for a repaint. Character formatting is kept out of the undo stack: the surface
+  typing never waits for a repaint. A **line-number gutter** matches the RichEdit line boxes, sizes
+  itself to the line count and scrolls with the document. Character formatting is kept out of the undo stack: the surface
   owns text snapshots, so Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,

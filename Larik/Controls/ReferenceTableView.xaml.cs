@@ -161,6 +161,7 @@ public sealed partial class ReferenceTableView : UserControl
             columns.Add(new ResultColumnLayout
             {
                 Name = name,
+                SourceIndex = columnIndex,
                 DataType = result.Columns[columnIndex].DataType,
                 Width = Math.Clamp((maxLength * 7.2) + 24, MinColumnWidth, MaxColumnWidth),
                 Numeric = numeric,

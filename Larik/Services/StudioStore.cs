@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Larik.Models;
 using Microsoft.Data.Sqlite;
 
 namespace Larik.Services;
@@ -168,9 +169,9 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// instead of failing the launch. Provider-declared password fields are never written.
 /// </para>
 /// </summary>
-public sealed class StudioStore
+public sealed class StudioStore : IVirtualReferenceStore
 {
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 6;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -229,6 +230,123 @@ public sealed class StudioStore
         catch
         {
             // Persistence must never take the studio down.
+        }
+    }
+
+    // ---------------------------------------------------------------- custom references
+
+    /// <summary>User-defined references for one workspace + database, oldest first.</summary>
+    public IReadOnlyList<VirtualReferenceRecord> GetVirtualReferences(string spaceId, string databaseName)
+    {
+        try
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id, space_id, database_name,
+                       source_schema, source_table, source_column,
+                       target_schema, target_table, target_column
+                FROM virtual_references
+                WHERE space_id = $space AND database_name = $database COLLATE NOCASE
+                ORDER BY source_table, source_column;
+                """;
+            command.Parameters.AddWithValue("$space", spaceId);
+            command.Parameters.AddWithValue("$database", databaseName);
+
+            var references = new List<VirtualReferenceRecord>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                references.Add(new VirtualReferenceRecord
+                {
+                    Id = reader.GetString(0),
+                    SpaceId = reader.GetString(1),
+                    DatabaseName = reader.GetString(2),
+                    SourceSchema = reader.GetString(3),
+                    SourceTable = reader.GetString(4),
+                    SourceColumn = reader.GetString(5),
+                    TargetSchema = reader.GetString(6),
+                    TargetTable = reader.GetString(7),
+                    TargetColumn = reader.GetString(8),
+                });
+            }
+
+            return references;
+        }
+        catch
+        {
+            // A broken reference store must not hide query results or the grid.
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Saves a reference, replacing any existing one for the same source column. Source identifiers
+    /// are compared case-insensitively, matching how the schema reports them.
+    /// </summary>
+    public bool SaveVirtualReference(VirtualReferenceRecord reference)
+    {
+        try
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            Execute(
+                connection,
+                transaction,
+                """
+                DELETE FROM virtual_references
+                WHERE space_id = $space
+                  AND database_name = $database COLLATE NOCASE
+                  AND source_schema = $sourceSchema COLLATE NOCASE
+                  AND source_table = $sourceTable COLLATE NOCASE
+                  AND source_column = $sourceColumn COLLATE NOCASE;
+                """,
+                ("$space", reference.SpaceId),
+                ("$database", reference.DatabaseName),
+                ("$sourceSchema", reference.SourceSchema),
+                ("$sourceTable", reference.SourceTable),
+                ("$sourceColumn", reference.SourceColumn));
+
+            Execute(
+                connection,
+                transaction,
+                """
+                INSERT INTO virtual_references
+                    (id, space_id, database_name, source_schema, source_table, source_column,
+                     target_schema, target_table, target_column)
+                VALUES ($id, $space, $database, $sourceSchema, $sourceTable, $sourceColumn,
+                        $targetSchema, $targetTable, $targetColumn);
+                """,
+                ("$id", reference.Id),
+                ("$space", reference.SpaceId),
+                ("$database", reference.DatabaseName),
+                ("$sourceSchema", reference.SourceSchema),
+                ("$sourceTable", reference.SourceTable),
+                ("$sourceColumn", reference.SourceColumn),
+                ("$targetSchema", reference.TargetSchema),
+                ("$targetTable", reference.TargetTable),
+                ("$targetColumn", reference.TargetColumn));
+
+            transaction.Commit();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool DeleteVirtualReference(string id)
+    {
+        try
+        {
+            using var connection = Open();
+            return Execute(connection, null, "DELETE FROM virtual_references WHERE id = $id;", ("$id", id)) > 0;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -347,15 +465,32 @@ public sealed class StudioStore
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS virtual_references (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL,
+                database_name TEXT NOT NULL,
+                source_schema TEXT NOT NULL DEFAULT '',
+                source_table TEXT NOT NULL,
+                source_column TEXT NOT NULL,
+                target_schema TEXT NOT NULL DEFAULT '',
+                target_table TEXT NOT NULL,
+                target_column TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_spaces_sort_order ON spaces(sort_order);
             CREATE INDEX IF NOT EXISTS idx_tabs_space_id ON tabs(space_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_tab_groups_space_id ON tab_groups(space_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_archived_tabs_archived_at ON archived_tabs(archived_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_virtual_references_scope
+                ON virtual_references(space_id, database_name);
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
         // workspace icon. Version 4 adds the rail visibility flag. Version 5 adds tab groups and
-        // the archive's group name. Existing rows keep their data; new columns are added in place.
+        // the archive's group name. Version 6 adds user-defined reference metadata.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");

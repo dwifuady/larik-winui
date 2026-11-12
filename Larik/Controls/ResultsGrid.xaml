@@ -36,10 +36,48 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!--  Row-number gutter mirrors the row list's vertical scroll; each item is one row.  -->
+        <Style x:Key="RowNumberItemStyle" TargetType="ListViewItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <Border Background="{TemplateBinding Background}">
+                            <ContentPresenter
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate x:Key="RowNumberTemplate">
+            <TextBlock
+                Margin="0,0,10,0"
+                VerticalAlignment="Center"
+                FontFamily="{StaticResource StudioMonoFont}"
+                FontSize="10"
+                Foreground="{ThemeResource StudioTextMutedBrush}"
+                Text="{Binding}"
+                TextAlignment="Right" />
+        </DataTemplate>
     </UserControl.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
@@ -49,24 +87,57 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
+        <!--  Empty corner above the row-number gutter, aligned with the column header.  -->
+        <Border
+            x:Name="RowNumberHeader"
+            Grid.Row="0"
+            Grid.Column="0"
+            Width="28"
+            Height="30"
+            Background="{ThemeResource HairlineSubtleBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,0,1,0"
+            Visibility="Collapsed">
+            <TextBlock
+                Margin="0,0,10,0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                FontFamily="{StaticResource StudioMonoFont}"
+                FontSize="10"
+                Foreground="{ThemeResource StudioTextMutedBrush}"
+                Text="#" />
+        </Border>
+
         <!--  Sticky column header; its horizontal offset follows the row scroller.  -->
         <ScrollViewer
             x:Name="HeaderScroller"
+            Grid.Row="0"
+            Grid.Column="1"
             HorizontalContentAlignment="Left"
             HorizontalScrollBarVisibility="Hidden"
             HorizontalScrollMode="Enabled"
             VerticalScrollBarVisibility="Disabled"
             VerticalScrollMode="Disabled"
             ViewChanged="HeaderScroller_ViewChanged">
-            <StackPanel
-                x:Name="HeaderHost"
-                HorizontalAlignment="Left"
-                Orientation="Horizontal" />
+            <Grid x:Name="HeaderContent" HorizontalAlignment="Left">
+                <StackPanel
+                    x:Name="HeaderHost"
+                    HorizontalAlignment="Left"
+                    Orientation="Horizontal" />
+                <Border
+                    x:Name="ColumnDropIndicator"
+                    Width="2"
+                    HorizontalAlignment="Left"
+                    Background="{ThemeResource StudioAccentBrush}"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed" />
+            </Grid>
         </ScrollViewer>
 
         <Border
             x:Name="AccentRule"
             Grid.Row="0"
+            Grid.ColumnSpan="2"
             Height="2"
             VerticalAlignment="Bottom"
             Opacity="0.7" />
@@ -75,6 +146,7 @@
         <Border
             x:Name="GeneratedQueryBar"
             Grid.Row="1"
+            Grid.ColumnSpan="2"
             Padding="12,2"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
             BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
@@ -156,10 +228,33 @@
             </Grid>
         </Border>
 
+        <!--  Row numbers are sticky horizontally and scroll with the rows vertically.  -->
+        <ListView
+            x:Name="RowNumberList"
+            Grid.Row="2"
+            Grid.Column="0"
+            Width="28"
+            Padding="0"
+            AutomationProperties.Name="Row numbers"
+            Background="Transparent"
+            ContainerContentChanging="RowNumberList_ContainerContentChanging"
+            IsTabStop="False"
+            ItemContainerStyle="{StaticResource RowNumberItemStyle}"
+            ItemTemplate="{StaticResource RowNumberTemplate}"
+            Loaded="RowNumberList_Loaded"
+            SelectionMode="None"
+            ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+            ScrollViewer.HorizontalScrollMode="Disabled"
+            ScrollViewer.IsDeferredScrollingEnabled="False"
+            ScrollViewer.VerticalScrollBarVisibility="Hidden"
+            ScrollViewer.VerticalScrollMode="Enabled"
+            Visibility="Collapsed" />
+
         <!--  Virtualized rows: only visible rows have TextBlocks.  -->
         <ListView
             x:Name="RowsList"
             Grid.Row="2"
+            Grid.Column="1"
             Padding="0"
             AutomationProperties.HelpText="Use the arrow keys to move between cells, Ctrl+C to copy, Ctrl+Shift+C to copy with headers."
             AutomationProperties.Name="Query results"
@@ -173,12 +268,24 @@
             ScrollViewer.VerticalScrollBarVisibility="Auto"
             ScrollViewer.VerticalScrollMode="Enabled">
             <ListView.ContextFlyout>
-                <MenuFlyout>
+                <MenuFlyout Opening="ResultsMenu_Opening">
                     <MenuFlyoutItem
                         Click="PreviewCell_Click"
                         AutomationProperties.Name="Preview cell"
                         KeyboardAcceleratorTextOverride="Space"
                         Text="Preview cell" />
+                    <MenuFlyoutItem
+                        x:Name="SetReferenceMenuItem"
+                        Click="SetReference_Click"
+                        AutomationProperties.Name="Set custom reference"
+                        Text="Set custom reference…"
+                        Visibility="Collapsed" />
+                    <MenuFlyoutItem
+                        x:Name="RemoveReferenceMenuItem"
+                        Click="RemoveReference_Click"
+                        AutomationProperties.Name="Remove custom reference"
+                        Text="Remove custom reference"
+                        Visibility="Collapsed" />
                     <MenuFlyoutItem
                         Click="Export_Click"
                         AutomationProperties.Name="Export results"
@@ -192,6 +299,14 @@
                         Click="CopyWithHeaders_Click"
                         KeyboardAcceleratorTextOverride="Ctrl+Shift+C"
                         Text="Copy with headers" />
+                    <MenuFlyoutItem
+                        Click="CopyAsInsert_Click"
+                        AutomationProperties.Name="Copy as INSERT"
+                        Text="Copy as INSERT" />
+                    <MenuFlyoutItem
+                        Click="CopyAsInClause_Click"
+                        AutomationProperties.Name="Copy as IN clause"
+                        Text="Copy as IN clause" />
                     <MenuFlyoutSeparator />
                     <MenuFlyoutItem
                         Click="SelectAll_Click"
@@ -204,6 +319,7 @@
         <TextBlock
             x:Name="EmptyText"
             Grid.Row="2"
+            Grid.Column="1"
             Margin="14,12,14,12"
             FontSize="12"
             Foreground="{ThemeResource StudioTextMutedBrush}"
@@ -214,6 +330,7 @@
         <ScrollViewer
             x:Name="MessagesScroll"
             Grid.Row="2"
+            Grid.Column="1"
             Padding="14,12"
             HorizontalScrollBarVisibility="Auto"
             HorizontalScrollMode="Auto"
@@ -233,7 +350,7 @@
         <Grid
             x:Name="PreviewHost"
             Grid.RowSpan="3"
-            Grid.Column="1"
+            Grid.Column="2"
             Visibility="Collapsed">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="10" />

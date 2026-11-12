@@ -15,42 +15,78 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1"
             CornerRadius="8">
-            <RichEditBox
-                x:Name="Editor"
-                Padding="14,12,14,12"
-                AcceptsReturn="True"
-                AutomationProperties.Name="SQL editor"
-                Background="Transparent"
-                BorderThickness="0"
-                DisabledFormattingAccelerators="All"
-                FontFamily="{StaticResource StudioMonoFont}"
-                FontSize="13"
-                IsSpellCheckEnabled="False"
-                IsTextPredictionEnabled="False"
-                LostFocus="Editor_LostFocus"
-                PlaceholderText="Type SQL — try  sel  then Tab"
-                PreviewKeyDown="Editor_PreviewKeyDown"
-                ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                ScrollViewer.VerticalScrollBarVisibility="Auto"
-                SelectionChanged="Editor_SelectionChanged"
-                SelectionHighlightColor="{ThemeResource EditorSelectionBrush}"
-                TextChanged="Editor_TextChanged"
-                TextWrapping="NoWrap">
-                <!--
-                    The control template paints its own fill on top of the card, including a
-                    different fill when focused. Let the card surface own the background instead.
-                -->
-                <RichEditBox.Resources>
-                    <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent" />
-                </RichEditBox.Resources>
-            </RichEditBox>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!--  Line numbers scroll with the editor; the gutter is decoration, not a tab stop.  -->
+                <Border
+                    Grid.Column="0"
+                    Background="{ThemeResource HairlineSubtleBrush}"
+                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                    BorderThickness="0,0,1,0"
+                    CornerRadius="8,0,0,8">
+                    <ScrollViewer
+                        x:Name="LineNumberScroller"
+                        Width="20"
+                        HorizontalScrollBarVisibility="Disabled"
+                        HorizontalScrollMode="Disabled"
+                        IsHitTestVisible="False"
+                        VerticalScrollBarVisibility="Hidden"
+                        VerticalScrollMode="Enabled">
+                        <TextBlock
+                            x:Name="LineNumbers"
+                            Margin="0,12,6,12"
+                            FontFamily="{StaticResource StudioMonoFont}"
+                            FontSize="13"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            LineStackingStrategy="BlockLineHeight"
+                            Text="1"
+                            TextAlignment="Right"
+                            TextWrapping="NoWrap" />
+                    </ScrollViewer>
+                </Border>
+
+                <RichEditBox
+                    x:Name="Editor"
+                    Grid.Column="1"
+                    Padding="14,12,14,12"
+                    AcceptsReturn="True"
+                    AutomationProperties.Name="SQL editor"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    DisabledFormattingAccelerators="All"
+                    FontFamily="{StaticResource StudioMonoFont}"
+                    FontSize="13"
+                    IsSpellCheckEnabled="False"
+                    IsTextPredictionEnabled="False"
+                    LostFocus="Editor_LostFocus"
+                    PlaceholderText="Type SQL — try  sel  then Tab"
+                    PreviewKeyDown="Editor_PreviewKeyDown"
+                    ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                    SelectionChanged="Editor_SelectionChanged"
+                    SelectionHighlightColor="{ThemeResource EditorSelectionBrush}"
+                    TextChanged="Editor_TextChanged"
+                    TextWrapping="NoWrap">
+                    <!--
+                        The control template paints its own fill on top of the card, including a
+                        different fill when focused. Let the card surface own the background instead.
+                    -->
+                    <RichEditBox.Resources>
+                        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent" />
+                    </RichEditBox.Resources>
+                </RichEditBox>
+            </Grid>
         </Border>
 
         <!--

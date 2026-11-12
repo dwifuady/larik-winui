@@ -13,6 +13,7 @@ using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.System;
@@ -40,7 +41,9 @@ public sealed partial class ResultsGrid : UserControl
     private QueryResult? _result;
     private ResultLayout? _layout;
     private IReadOnlyList<ResultRow> _rows = [];
+    private IReadOnlyList<int> _rowNumbers = [];
     private ScrollViewer? _listScroller;
+    private ScrollViewer? _rowNumberScroller;
     private bool _syncingScroll;
     private bool _hasSelection;
     private int _anchorRow;
@@ -52,6 +55,11 @@ public sealed partial class ResultsGrid : UserControl
     private int _resizeColumnIndex;
     private double _resizeStartX;
     private double _resizeStartWidth;
+
+    private int _dragColumn = -1;
+    private double _dragStartX;
+    private bool _dragMoved;
+    private int _dropIndex = -1;
 
     private string _accentHex = StudioColors.Palette[0];
     private Brush _selectionBrush = null!;
@@ -147,6 +155,19 @@ public sealed partial class ResultsGrid : UserControl
             new PointerEventHandler(RowsList_PointerPressed),
             handledEventsToo: true);
 
+        // The row-number list's own scroller consumes the wheel before a normal handler runs.
+        RowNumberList.AddHandler(
+            UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler(RowNumberList_PointerWheelChanged),
+            handledEventsToo: true);
+
+        // ListViewItem marks pointer presses handled for its selection bookkeeping; listen for
+        // handled events or clicking a row number would never select the row.
+        RowNumberList.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler(RowNumberList_PointerPressed),
+            handledEventsToo: true);
+
         // The results pane can start collapsed, when ActualWidth is still 0. Apply the stored
         // preview width once the control has real space, and re-clamp it when the window changes.
         Loaded += (_, _) =>
@@ -169,18 +190,18 @@ public sealed partial class ResultsGrid : UserControl
     private void EnsureListScroller()
     {
         var scroller = FindDescendant<ScrollViewer>(RowsList);
-        if (scroller is null || ReferenceEquals(scroller, _listScroller))
+        if (scroller is not null && !ReferenceEquals(scroller, _listScroller))
         {
-            return;
+            if (_listScroller is not null)
+            {
+                _listScroller.ViewChanged -= RowsList_ViewChanged;
+            }
+
+            _listScroller = scroller;
+            _listScroller.ViewChanged += RowsList_ViewChanged;
         }
 
-        if (_listScroller is not null)
-        {
-            _listScroller.ViewChanged -= RowsList_ViewChanged;
-        }
-
-        _listScroller = scroller;
-        _listScroller.ViewChanged += RowsList_ViewChanged;
+        _rowNumberScroller = FindDescendant<ScrollViewer>(RowNumberList) ?? _rowNumberScroller;
     }
 
     private void ApplyPreviewWidth()
@@ -277,6 +298,14 @@ public sealed partial class ResultsGrid : UserControl
 
         EmptyText.Visibility = Visibility.Collapsed;
         RowsList.ItemsSource = _rows;
+        _rowNumbers = Enumerable.Range(1, _rows.Count).ToList();
+        RowNumberList.ItemsSource = _rowNumbers;
+        var rowNumberWidth = RowNumberWidth(_rows.Count);
+        RowNumberHeader.Width = rowNumberWidth;
+        RowNumberList.Width = rowNumberWidth;
+        RowNumberHeader.Visibility = Visibility.Visible;
+        RowNumberList.Visibility = Visibility.Visible;
+        RowNumberList.UpdateLayout();
         RowsList.UpdateLayout();
         EnsureListScroller();
         AccentRule.Background = StudioColors.Brush(accentHex);
@@ -301,10 +330,15 @@ public sealed partial class ResultsGrid : UserControl
         _result = null;
         _layout = null;
         _rows = [];
+        _rowNumbers = [];
         _hasSelection = false;
         IsTabStop = false;
         RowsList.ItemsSource = null;
+        RowNumberList.ItemsSource = null;
+        RowNumberHeader.Visibility = Visibility.Collapsed;
+        RowNumberList.Visibility = Visibility.Collapsed;
         HeaderHost.Children.Clear();
+        HeaderContent.Width = double.NaN;
         _headerContainers.Clear();
         _headerSurfaces.Clear();
         HeaderHost.Width = double.NaN;
@@ -393,6 +427,7 @@ public sealed partial class ResultsGrid : UserControl
             columns.Add(new ResultColumnLayout
             {
                 Name = result.Columns[c].Name,
+                SourceIndex = c,
                 DataType = result.Columns[c].DataType,
                 Width = Math.Clamp(24 + (longest * 7.2), 72, 360),
                 Numeric = numeric,
@@ -444,11 +479,13 @@ public sealed partial class ResultsGrid : UserControl
         _headerContainers.Clear();
         _headerSurfaces.Clear();
         HeaderHost.Width = layout.TotalWidth;
+        HeaderContent.Width = layout.TotalWidth;
+        ColumnDropIndicator.Visibility = Visibility.Collapsed;
 
         for (var index = 0; index < layout.Columns.Count; index++)
         {
             var column = layout.Columns[index];
-            var referenceLabel = ReferenceController?.Describe(index);
+            var referenceLabel = ReferenceController?.Describe(column.SourceIndex);
             var container = new Grid
             {
                 Width = column.Width,
@@ -480,8 +517,20 @@ public sealed partial class ResultsGrid : UserControl
             surface.PointerPressed += (_, args) =>
             {
                 SelectColumn(headerIndex, IsShiftDown());
+                BeginHeaderDrag(headerIndex, args);
                 args.Handled = true;
             };
+            surface.PointerMoved += HeaderSurface_PointerMoved;
+            surface.PointerReleased += HeaderSurface_PointerReleased;
+            surface.PointerCaptureLost += (_, _) => EndHeaderDrag();
+            var canSetReference = referenceLabel is null
+                && ReferenceController?.GetSource(column.SourceIndex) is not null;
+            AutomationProperties.SetName(surface, $"Reorder {column.Name} column");
+            ToolTipService.SetToolTip(
+                surface,
+                canSetReference
+                    ? "Click to select · drag to reorder · right-click to set a custom reference"
+                    : "Click to select · drag to reorder");
 
             container.Children.Add(surface);
 
@@ -533,6 +582,311 @@ public sealed partial class ResultsGrid : UserControl
 
         UpdateHeaderSelection();
     }
+
+    // ---------------------------------------------------------------- column reorder
+
+    private void BeginHeaderDrag(int index, PointerRoutedEventArgs e)
+    {
+        if (index < 0 || index >= _headerSurfaces.Count)
+        {
+            return;
+        }
+
+        _dragColumn = index;
+        _dragStartX = e.GetCurrentPoint(HeaderHost).Position.X;
+        _dragMoved = false;
+        _dropIndex = index;
+        _headerSurfaces[index].CapturePointer(e.Pointer);
+    }
+
+    private void HeaderSurface_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (_dragColumn < 0
+            || _layout is null
+            || _dragColumn >= _headerSurfaces.Count
+            || !ReferenceEquals(sender, _headerSurfaces[_dragColumn]))
+        {
+            return;
+        }
+
+        var x = e.GetCurrentPoint(HeaderHost).Position.X;
+        if (!_dragMoved && Math.Abs(x - _dragStartX) < 6)
+        {
+            return;
+        }
+
+        _dragMoved = true;
+        _dropIndex = DropIndexAt(x);
+        ShowDropIndicator(_dropIndex);
+        e.Handled = true;
+    }
+
+    private void HeaderSurface_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_dragColumn < 0 || !ReferenceEquals(sender, _headerSurfaces[_dragColumn]))
+        {
+            return;
+        }
+
+        var from = _dragColumn;
+        var moved = _dragMoved;
+        var drop = _dropIndex;
+        EndHeaderDrag();
+
+        if (moved && drop >= 0)
+        {
+            ReorderColumn(from, drop);
+        }
+
+        e.Handled = true;
+    }
+
+    private void EndHeaderDrag()
+    {
+        var dragged = _dragColumn;
+        _dragColumn = -1;
+        _dragMoved = false;
+        _dropIndex = -1;
+        ColumnDropIndicator.Visibility = Visibility.Collapsed;
+
+        if (dragged >= 0 && dragged < _headerSurfaces.Count)
+        {
+            _headerSurfaces[dragged].ReleasePointerCaptures();
+        }
+    }
+
+    /// <summary>The insertion index for a pointer x in header content coordinates.</summary>
+    private int DropIndexAt(double x)
+    {
+        if (_layout is null)
+        {
+            return -1;
+        }
+
+        var left = 0d;
+        for (var index = 0; index < _layout.Columns.Count; index++)
+        {
+            var width = _layout.Columns[index].Width;
+            if (x < left + (width / 2))
+            {
+                return index;
+            }
+
+            left += width;
+        }
+
+        return _layout.Columns.Count;
+    }
+
+    private void ShowDropIndicator(int index)
+    {
+        if (_layout is null || index < 0)
+        {
+            ColumnDropIndicator.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var left = 0d;
+        for (var i = 0; i < Math.Min(index, _layout.Columns.Count); i++)
+        {
+            left += _layout.Columns[i].Width;
+        }
+
+        ColumnDropIndicator.Height = HeaderHeight;
+        ColumnDropIndicator.Margin = new Thickness(left, 0, 0, 0);
+        ColumnDropIndicator.Visibility = Visibility.Visible;
+    }
+
+    private void ReorderColumn(int from, int insertionIndex)
+    {
+        if (_layout is null || from < 0 || from >= _layout.Columns.Count)
+        {
+            return;
+        }
+
+        // Removing the dragged column first means dropping to its right lands after the neighbour.
+        var target = insertionIndex > from ? insertionIndex - 1 : insertionIndex;
+        target = Math.Clamp(target, 0, _layout.Columns.Count - 1);
+        if (target == from)
+        {
+            return;
+        }
+
+        var column = _layout.Columns[from];
+        _layout.Columns.RemoveAt(from);
+        _layout.Columns.Insert(target, column);
+
+        _anchorColumn = MapColumnAfterReorder(_anchorColumn, from, target);
+        _focusColumn = MapColumnAfterReorder(_focusColumn, from, target);
+
+        BuildHeader(_layout);
+        foreach (var row in FindDescendants<ResultRowView>(RowsList))
+        {
+            row.Reload();
+        }
+
+        UpdateSelectionVisuals();
+    }
+
+    private static int MapColumnAfterReorder(int index, int from, int to)
+    {
+        if (index == from)
+        {
+            return to;
+        }
+
+        if (from < index && index <= to)
+        {
+            return index - 1;
+        }
+
+        if (to <= index && index < from)
+        {
+            return index + 1;
+        }
+
+        return index;
+    }
+
+    // ---------------------------------------------------------------- row numbers
+
+    private static double RowNumberWidth(int rowCount)
+    {
+        var digits = Math.Max(1, rowCount.ToString().Length);
+        return Math.Clamp(16 + (digits * 8), 28, 56);
+    }
+
+    private void RowNumberList_Loaded(object sender, RoutedEventArgs e)
+    {
+        EnsureListScroller();
+        if (_listScroller is not null && _rowNumberScroller is not null)
+        {
+            _rowNumberScroller.ChangeView(
+                null,
+                _listScroller.VerticalOffset,
+                null,
+                disableAnimation: true);
+        }
+    }
+
+    private void RowNumberList_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (_rows.Count == 0)
+        {
+            return;
+        }
+
+        var point = e.GetCurrentPoint(RowNumberList);
+        if (point.Properties.IsRightButtonPressed)
+        {
+            return;
+        }
+
+        var row = -1;
+        if (e.OriginalSource is DependencyObject source
+            && FindAncestor<ListViewItem>(source) is { } item)
+        {
+            row = RowNumberList.IndexFromContainer(item);
+        }
+
+        if (row < 0)
+        {
+            var offset = _rowNumberScroller?.VerticalOffset ?? 0;
+            row = (int)Math.Floor((point.Position.Y + offset) / RowHeight);
+        }
+
+        if (row < 0 || row >= _rows.Count)
+        {
+            return;
+        }
+
+        SelectRow(row);
+        e.Handled = true;
+    }
+
+    private void RowNumberList_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        if (_listScroller is null)
+        {
+            return;
+        }
+
+        var delta = e.GetCurrentPoint(RowNumberList).Properties.MouseWheelDelta;
+        var target = Math.Max(0, _listScroller.VerticalOffset - delta);
+        _listScroller.ChangeView(null, target, null, disableAnimation: true);
+        e.Handled = true;
+    }
+
+    private void RowNumberList_ContainerContentChanging(
+        ListViewBase sender,
+        ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer is ListViewItem item)
+        {
+            item.Background = IsRowSelected(args.ItemIndex)
+                ? _selectionBrush
+                : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        }
+    }
+
+    private void SelectRow(int row)
+    {
+        if (!_hasSelection || _layout is null || row < 0 || row >= _rows.Count)
+        {
+            return;
+        }
+
+        if (!IsShiftDown())
+        {
+            _anchorRow = row;
+        }
+
+        _focusRow = row;
+        _anchorColumn = 0;
+        _focusColumn = _layout.Columns.Count - 1;
+
+        RowsList.ScrollIntoView(_rows[row], ScrollIntoViewAlignment.Default);
+        Focus(FocusState.Programmatic);
+        UpdateSelectionVisuals();
+    }
+
+    private bool IsRowSelected(int row)
+    {
+        if (!_hasSelection)
+        {
+            return false;
+        }
+
+        var min = Math.Min(_anchorRow, _focusRow);
+        var max = Math.Max(_anchorRow, _focusRow);
+        return row >= min && row <= max;
+    }
+
+    private void UpdateRowNumberSelection()
+    {
+        if (_rowNumbers.Count == 0 || RowNumberList.ItemsSource is null)
+        {
+            return;
+        }
+
+        var offset = _rowNumberScroller?.VerticalOffset ?? 0;
+        var first = Math.Max(0, (int)(offset / RowHeight));
+        var last = Math.Min(
+            _rowNumbers.Count - 1,
+            first + (int)(RowNumberList.ActualHeight / RowHeight) + 2);
+
+        for (var index = first; index <= last; index++)
+        {
+            if (RowNumberList.ContainerFromIndex(index) is ListViewItem item)
+            {
+                item.Background = IsRowSelected(index)
+                    ? _selectionBrush
+                    : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- resize
 
     private void ResizeHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
@@ -676,13 +1030,18 @@ public sealed partial class ResultsGrid : UserControl
         var x = e.GetCurrentPoint(rowView).Position.X;
         var column = ColumnAt(x);
         var extend = IsShiftDown();
+        var preserveSelection = point.Properties.IsRightButtonPressed
+            && !extend
+            && IsCellInSelection(row.Index, column);
 
-        if (!extend)
+        if (!extend && !preserveSelection)
         {
             _anchorRow = row.Index;
             _anchorColumn = column;
         }
 
+        // Right-clicking inside an existing selection keeps that selection (and target contract)
+        // while making the clicked cell active. Requiring Shift to keep the block was a bug.
         _focusRow = row.Index;
         _focusColumn = column;
         _hasSelection = true;
@@ -694,6 +1053,20 @@ public sealed partial class ResultsGrid : UserControl
         {
             e.Handled = true;
         }
+    }
+
+    private bool IsCellInSelection(int row, int column)
+    {
+        if (!_hasSelection)
+        {
+            return false;
+        }
+
+        var minRow = Math.Min(_anchorRow, _focusRow);
+        var maxRow = Math.Max(_anchorRow, _focusRow);
+        var minColumn = Math.Min(_anchorColumn, _focusColumn);
+        var maxColumn = Math.Max(_anchorColumn, _focusColumn);
+        return row >= minRow && row <= maxRow && column >= minColumn && column <= maxColumn;
     }
 
     private void ResultsGrid_KeyDown(object sender, KeyRoutedEventArgs e)
@@ -864,6 +1237,12 @@ public sealed partial class ResultsGrid : UserControl
         return _layout.Columns.Count - 1;
     }
 
+    /// <summary>Maps a display column to the provider's original cell index after a drag reorder.</summary>
+    private int SourceIndexFor(int displayColumn) =>
+        _layout is not null && displayColumn >= 0 && displayColumn < _layout.Columns.Count
+            ? _layout.Columns[displayColumn].SourceIndex
+            : displayColumn;
+
     private void UpdateSelectionVisuals()
     {
         if (!_hasSelection)
@@ -877,6 +1256,7 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         UpdateHeaderSelection();
+        UpdateRowNumberSelection();
         RefreshPreviewIfOpen();
     }
 
@@ -1002,7 +1382,7 @@ public sealed partial class ResultsGrid : UserControl
             return;
         }
 
-        var mode = reference && ReferenceController?.CanPreview(_focusColumn) == true
+        var mode = reference && ReferenceController?.CanPreview(SourceIndexFor(_focusColumn)) == true
             ? PreviewMode.Reference
             : PreviewMode.Value;
 
@@ -1022,7 +1402,7 @@ public sealed partial class ResultsGrid : UserControl
             return;
         }
 
-        if (mode == PreviewMode.Reference && ReferenceController?.CanPreview(column) != true)
+        if (mode == PreviewMode.Reference && ReferenceController?.CanPreview(SourceIndexFor(column)) != true)
         {
             mode = PreviewMode.Value;
         }
@@ -1044,7 +1424,7 @@ public sealed partial class ResultsGrid : UserControl
         _previewMode = mode;
         PreviewHost.Visibility = Visibility.Visible;
 
-        var canPreviewReference = ReferenceController?.CanPreview(column) == true;
+        var canPreviewReference = ReferenceController?.CanPreview(SourceIndexFor(column)) == true;
         ReferenceToggleButton.Visibility = canPreviewReference ? Visibility.Visible : Visibility.Collapsed;
         ToolTipService.SetToolTip(
             ReferenceToggleButton,
@@ -1076,7 +1456,8 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         var layout = _layout.Columns[column];
-        var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
+        var sourceIndex = layout.SourceIndex;
+        var value = sourceIndex < _rows[row].Cells.Count ? _rows[row].Cells[sourceIndex] : null;
         var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
             ? $"row {_rows[row].Index + 1}"
             : $"{layout.DataType} · row {_rows[row].Index + 1}";
@@ -1518,7 +1899,7 @@ public sealed partial class ResultsGrid : UserControl
 
         try
         {
-            var snapshot = await controller.PreviewAsync(row, column, cancellation.Token);
+            var snapshot = await controller.PreviewAsync(row, SourceIndexFor(column), cancellation.Token);
             if (cancellation.IsCancellationRequested
                 || !_previewOpen
                 || _previewMode != PreviewMode.Reference
@@ -1711,6 +2092,341 @@ public sealed partial class ResultsGrid : UserControl
     private void PreviewCell_Click(object sender, RoutedEventArgs e) =>
         ShowCellPreview(_focusRow, _focusColumn);
 
+    // ---------------------------------------------------------------- custom references
+
+    private void ResultsMenu_Opening(object sender, object e)
+    {
+        var sourceIndex = SourceIndexFor(_focusColumn);
+        var reference = ReferenceController?.GetReference(sourceIndex);
+        var hasSource = ReferenceController?.GetSource(sourceIndex) is not null;
+        var isCustom = reference?.IsVirtual == true;
+
+        // A real database FK always wins, so offering a custom reference there would be a lie.
+        SetReferenceMenuItem.Visibility = hasSource && reference is not { IsVirtual: false }
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SetReferenceMenuItem.Text = isCustom ? "Edit custom reference…" : "Set custom reference…";
+        AutomationProperties.SetName(
+            SetReferenceMenuItem,
+            isCustom ? "Edit custom reference" : "Set custom reference");
+
+        RemoveReferenceMenuItem.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void SetReference_Click(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceController is not { } controller || _layout is null)
+        {
+            return;
+        }
+
+        var sourceIndex = SourceIndexFor(_focusColumn);
+        if (controller.GetSource(sourceIndex) is not { } source)
+        {
+            return;
+        }
+
+        var existing = controller.GetReference(sourceIndex);
+        var choice = await ShowReferenceEditorAsync(source.Label, controller.Tables, existing);
+        if (choice is null)
+        {
+            return;
+        }
+
+        if (!controller.SaveReference(source, choice.Table, choice.Column))
+        {
+            StatusChanged?.Invoke(this, "Could not save the custom reference.");
+            return;
+        }
+
+        ApplyReferenceChange(
+            $"Custom reference saved · {source.Label} → {choice.Table.Schema}.{choice.Table.Name}.{choice.Column}");
+    }
+
+    private sealed record ReferenceEditorChoice(TableSchema Table, string Column);
+
+    /// <summary>
+    /// A ContentDialog cannot be moved, which hides the rows the user is comparing against. This
+    /// card is a small draggable overlay instead: the window-darkening scrim blocks the page, and
+    /// its title strip moves the card anywhere over the whole window.
+    /// </summary>
+    private async Task<ReferenceEditorChoice?> ShowReferenceEditorAsync(
+        string sourceLabel,
+        IReadOnlyList<TableSchema> tables,
+        ColumnReference? existing)
+    {
+        if (XamlRoot is not { } xamlRoot)
+        {
+            return null;
+        }
+
+        var editor = new ReferenceEditorDialog(
+            sourceLabel,
+            tables,
+            existing?.TargetSchema,
+            existing?.TargetTable,
+            existing?.TargetColumn);
+
+        var completion = new TaskCompletionSource<ReferenceEditorChoice?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var translate = new TranslateTransform();
+        var cardGrid = new Grid();
+        cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var title = new TextBlock
+        {
+            Text = existing?.IsVirtual == true ? "Edit custom reference" : "Set custom reference",
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var closeButton = new Button
+        {
+            Width = 28,
+            Height = 28,
+            Padding = new Thickness(0),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE711", FontSize = 11 },
+        };
+        AutomationProperties.SetName(closeButton, "Close custom reference");
+
+        var headerGrid = new Grid { ColumnSpacing = 8 };
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerGrid.Children.Add(title);
+        Grid.SetColumn(closeButton, 1);
+        headerGrid.Children.Add(closeButton);
+
+        var header = new MoveHandle
+        {
+            Padding = new Thickness(16, 10, 8, 10),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+        };
+        header.Children.Add(headerGrid);
+        AutomationProperties.SetName(header, "Drag custom reference");
+
+        var cancelButton = new Button
+        {
+            Content = "Cancel",
+            Padding = new Thickness(12, 5, 12, 5),
+            CornerRadius = new CornerRadius(6),
+        };
+        AutomationProperties.SetName(cancelButton, "Cancel custom reference");
+
+        var saveButton = new Button
+        {
+            Content = "Save reference",
+            Padding = new Thickness(12, 5, 12, 5),
+            CornerRadius = new CornerRadius(6),
+            IsEnabled = editor.CanSave,
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+        };
+        AutomationProperties.SetName(saveButton, "Save custom reference");
+
+        var footer = new Grid
+        {
+            Padding = new Thickness(16, 4, 16, 14),
+            ColumnSpacing = 8,
+        };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(cancelButton, 1);
+        Grid.SetColumn(saveButton, 2);
+        footer.Children.Add(cancelButton);
+        footer.Children.Add(saveButton);
+
+        editor.Margin = new Thickness(16, 0, 16, 0);
+        cardGrid.Children.Add(header);
+        cardGrid.Children.Add(editor);
+        cardGrid.Children.Add(footer);
+        Grid.SetRow(editor, 1);
+        Grid.SetRow(footer, 2);
+
+        var popupTheme = ActualTheme switch
+        {
+            ElementTheme.Light => ElementTheme.Light,
+            ElementTheme.Dark => ElementTheme.Dark,
+            _ => ThemeService.CurrentTheme == ElementTheme.Dark ? ElementTheme.Dark : ElementTheme.Light,
+        };
+
+        var card = new Border
+        {
+            Width = 592,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ThemeService.GetBrush(
+                "ElevatedSurfaceBrush",
+                popupTheme,
+                new SolidColorBrush(popupTheme == ElementTheme.Dark
+                    ? Windows.UI.Color.FromArgb(0xFF, 0x23, 0x23, 0x26)
+                    : Windows.UI.Color.FromArgb(0xFF, 0xF0, 0xF0, 0xF0))),
+            BorderBrush = ThemeService.GetBrush(
+                "HairlineBrush",
+                popupTheme,
+                new SolidColorBrush(Microsoft.UI.Colors.Gray)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            RenderTransform = translate,
+            RequestedTheme = popupTheme,
+            Child = cardGrid,
+        };
+        AutomationProperties.SetName(card, "Custom reference");
+
+        var overlay = new Grid
+        {
+            Width = xamlRoot.Size.Width,
+            Height = xamlRoot.Size.Height,
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0, 0, 0)),
+            IsTabStop = true,
+            RequestedTheme = popupTheme,
+        };
+        overlay.Children.Add(card);
+
+        var popup = new Popup
+        {
+            XamlRoot = xamlRoot,
+            Child = overlay,
+            IsLightDismissEnabled = false,
+            ShouldConstrainToRootBounds = false,
+            HorizontalOffset = 0,
+            VerticalOffset = 0,
+        };
+
+        void Complete(ReferenceEditorChoice? choice)
+        {
+            if (!completion.Task.IsCompleted)
+            {
+                completion.TrySetResult(choice);
+            }
+        }
+
+        void ResizeForRoot()
+        {
+            overlay.Width = xamlRoot.Size.Width;
+            overlay.Height = xamlRoot.Size.Height;
+        }
+
+        void RootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ResizeForRoot();
+
+        editor.SelectionChanged += (_, _) => saveButton.IsEnabled = editor.CanSave;
+        closeButton.Click += (_, _) => Complete(null);
+        cancelButton.Click += (_, _) => Complete(null);
+        saveButton.Click += (_, _) =>
+        {
+            if (editor.SelectedTable is { } table && editor.SelectedColumn is { Length: > 0 } column)
+            {
+                Complete(new ReferenceEditorChoice(table, column));
+            }
+        };
+
+        overlay.KeyDown += (_, args) =>
+        {
+            if (args.Key == VirtualKey.Escape)
+            {
+                Complete(null);
+                args.Handled = true;
+            }
+        };
+
+        var escape = new KeyboardAccelerator { Key = VirtualKey.Escape };
+        escape.Invoked += (_, args) =>
+        {
+            Complete(null);
+            args.Handled = true;
+        };
+        overlay.KeyboardAccelerators.Add(escape);
+
+        var dragging = false;
+        Point dragStart = default;
+        double dragStartX = 0;
+        double dragStartY = 0;
+
+        header.PointerPressed += (_, args) =>
+        {
+            dragging = true;
+            dragStart = args.GetCurrentPoint(overlay).Position;
+            dragStartX = translate.X;
+            dragStartY = translate.Y;
+            header.CapturePointer(args.Pointer);
+            args.Handled = true;
+        };
+
+        header.PointerMoved += (_, args) =>
+        {
+            if (!dragging)
+            {
+                return;
+            }
+
+            var position = args.GetCurrentPoint(overlay).Position;
+            var maxX = Math.Max(0, ((overlay.Width - card.ActualWidth) / 2) - 8);
+            var maxY = Math.Max(0, ((overlay.Height - card.ActualHeight) / 2) - 8);
+            translate.X = Math.Clamp(dragStartX + (position.X - dragStart.X), -maxX, maxX);
+            translate.Y = Math.Clamp(dragStartY + (position.Y - dragStart.Y), -maxY, maxY);
+            args.Handled = true;
+        };
+
+        header.PointerReleased += (_, args) =>
+        {
+            dragging = false;
+            header.ReleasePointerCapture(args.Pointer);
+            args.Handled = true;
+        };
+
+        header.PointerCaptureLost += (_, _) => dragging = false;
+
+        xamlRoot.Changed += RootChanged;
+        popup.Opened += (_, _) => DispatcherQueue.TryEnqueue(editor.FocusSearch);
+
+        try
+        {
+            popup.IsOpen = true;
+            return await completion.Task;
+        }
+        finally
+        {
+            popup.IsOpen = false;
+            popup.Child = null;
+            xamlRoot.Changed -= RootChanged;
+        }
+    }
+
+
+    private void RemoveReference_Click(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceController is not { } controller)
+        {
+            return;
+        }
+
+        var sourceIndex = SourceIndexFor(_focusColumn);
+        var source = controller.GetSource(sourceIndex);
+        if (!controller.DeleteReference(sourceIndex))
+        {
+            StatusChanged?.Invoke(this, "Could not remove the custom reference.");
+            return;
+        }
+
+        ApplyReferenceChange(source is null ? "Custom reference removed" : $"Custom reference removed · {source.Label}");
+    }
+
+    private void ApplyReferenceChange(string status)
+    {
+        if (_layout is not null)
+        {
+            BuildHeader(_layout);
+        }
+
+        UpdateSelectionVisuals();
+        StatusChanged?.Invoke(this, status);
+    }
+
     private void CopyPreview_Click(object sender, RoutedEventArgs e)
     {
         if (!_previewOpen)
@@ -1832,6 +2548,137 @@ public sealed partial class ResultsGrid : UserControl
 
     private void SelectAll_Click(object sender, RoutedEventArgs e) => SelectAll();
 
+    private void CopyAsInsert_Click(object sender, RoutedEventArgs e) => CopyAsSql(insert: true);
+
+    private void CopyAsInClause_Click(object sender, RoutedEventArgs e) => CopyAsSql(insert: false);
+
+    /// <summary>
+    /// Mirrors the desktop app: Copy as INSERT copies a VALUES list and Copy as IN copies a
+    /// parenthesised list, both formatted as SQL literals for the provider's column types.
+    /// </summary>
+    private void CopyAsSql(bool insert)
+    {
+        if (!TryGetSelection(out var top, out var left, out var bottom, out var right) || _layout is null)
+        {
+            return;
+        }
+
+        // A right-click on one cell means "this row" for INSERT, like the desktop app; a real
+        // multi-cell selection is respected as the chosen column range.
+        if (insert && top == bottom && left == right)
+        {
+            left = 0;
+            right = _layout.Columns.Count - 1;
+        }
+
+        var columns = _layout.Columns.Skip(left).Take(right - left + 1).ToList();
+        var rows = new List<string>();
+        var values = new List<string>();
+
+        for (var row = top; row <= bottom; row++)
+        {
+            var cells = _rows[row].Cells;
+            var rowValues = new List<string>(columns.Count);
+            foreach (var column in columns)
+            {
+                var value = column.SourceIndex < cells.Count ? cells[column.SourceIndex] : null;
+                var literal = FormatSqlLiteral(value, column.DataType);
+                rowValues.Add(literal);
+                values.Add(literal);
+            }
+
+            rows.Add($"({string.Join(", ", rowValues)})");
+        }
+
+        var text = insert
+            ? $"VALUES {string.Join(",\n       ", rows)}"
+            : $"IN ({string.Join(", ", values)})";
+
+        CopyText(text, insert
+            ? $"Copied {rows.Count} row{(rows.Count == 1 ? string.Empty : "s")} as INSERT"
+            : $"Copied {values.Count} value{(values.Count == 1 ? string.Empty : "s")} as IN clause");
+    }
+
+    private void CopyText(string text, string status)
+    {
+        var package = new DataPackage();
+        package.SetText(text);
+
+        try
+        {
+            Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke(this, $"Copy failed: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            // Another process can briefly hold the clipboard open; the content is already set.
+            Clipboard.Flush();
+        }
+        catch
+        {
+            // Best effort.
+        }
+
+        StatusChanged?.Invoke(this, status);
+    }
+
+    /// <summary>Formats one provider-formatted cell as a SQL literal, using the column's type.</summary>
+    internal static string FormatSqlLiteral(string? value, string? dataType)
+    {
+        if (value is null)
+        {
+            return "NULL";
+        }
+
+        var type = (dataType ?? string.Empty).Trim().ToLowerInvariant();
+        var escaped = value.Replace("'", "''");
+
+        if (type.Contains("binary") || type.Contains("image"))
+        {
+            return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? value
+                : $"'{escaped}'";
+        }
+
+        if (type is "bit" or "boolean" or "bool")
+        {
+            if (value is "1" or "0")
+            {
+                return value;
+            }
+
+            if (bool.TryParse(value, out var flag))
+            {
+                return flag ? "1" : "0";
+            }
+        }
+
+        var numeric = type.Contains("int")
+            || type.Contains("decimal")
+            || type.Contains("numeric")
+            || type.Contains("float")
+            || type.Contains("real")
+            || type.Contains("money")
+            || type.Contains("double");
+        if (numeric
+            && decimal.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            return value;
+        }
+
+        if (type.Contains("nvarchar") || type.Contains("nchar") || type.Contains("ntext"))
+        {
+            return $"N'{escaped}'";
+        }
+
+        return $"'{escaped}'";
+    }
+
     private void CopySelection(bool withHeaders)
     {
         if (!TryGetSelection(out var top, out var left, out var bottom, out var right) || _layout is null)
@@ -1841,22 +2688,19 @@ public sealed partial class ResultsGrid : UserControl
 
         var columnCount = right - left + 1;
         var rowCount = bottom - top + 1;
+        var columns = _layout.Columns.Skip(left).Take(columnCount).ToList();
         var lines = new List<string>(rowCount + 1);
 
         if (withHeaders)
         {
-            lines.Add(string.Join('\t', _layout.Columns
-                .Skip(left)
-                .Take(columnCount)
-                .Select(column => Escape(column.Name))));
+            lines.Add(string.Join('\t', columns.Select(column => Escape(column.Name))));
         }
 
         for (var row = top; row <= bottom; row++)
         {
-            lines.Add(string.Join('\t', _rows[row].Cells
-                .Skip(left)
-                .Take(columnCount)
-                .Select(value => Escape(value ?? string.Empty))));
+            var cells = _rows[row].Cells;
+            lines.Add(string.Join('\t', columns.Select(column =>
+                Escape(column.SourceIndex < cells.Count ? cells[column.SourceIndex] ?? string.Empty : string.Empty))));
         }
 
         var package = new DataPackage();
@@ -1927,6 +2771,13 @@ public sealed partial class ResultsGrid : UserControl
         _syncingScroll = true;
         HeaderScroller.ChangeView(_listScroller.HorizontalOffset, null, null, disableAnimation: true);
         _syncingScroll = false;
+
+        if (_rowNumberScroller is not null)
+        {
+            _rowNumberScroller.ChangeView(null, _listScroller.VerticalOffset, null, disableAnimation: true);
+        }
+
+        UpdateRowNumberSelection();
     }
 
     private void HeaderScroller_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
@@ -1977,6 +2828,7 @@ public sealed partial class ResultsGrid : UserControl
                 state.VerticalOffset,
                 null,
                 disableAnimation: true);
+            _rowNumberScroller?.ChangeView(null, state.VerticalOffset, null, disableAnimation: true);
         }
 
         // Give the new item source a layout pass so the scroll extent exists before restoring.
