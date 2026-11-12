@@ -237,6 +237,12 @@ public sealed partial class ResultsGrid : UserControl
     /// </summary>
     public ICellReferenceController? ReferenceController { get; set; }
 
+    /// <summary>
+    /// The window that owns dialogs the grid opens (the export picker). A pop-out must not route
+    /// them through the main window, whose handle is the app-wide default.
+    /// </summary>
+    public Window? OwnerWindow { get; set; }
+
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
     {
@@ -1329,7 +1335,9 @@ public sealed partial class ResultsGrid : UserControl
             picker.FileTypeChoices.Add("CSV file", [ResultExport.CsvExtension]);
             picker.FileTypeChoices.Add("JSON file", [ResultExport.JsonExtension]);
 
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.WindowHandle);
+            WinRT.Interop.InitializeWithWindow.Initialize(
+                picker,
+                OwnerWindow is { } owner ? WinRT.Interop.WindowNative.GetWindowHandle(owner) : App.WindowHandle);
 
             var file = await picker.PickSaveFileAsync();
             if (file is null)

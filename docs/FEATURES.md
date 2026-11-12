@@ -48,6 +48,18 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   connection exists, and the toolbar badge repeats the database only while the rail is collapsed —
   it opens the same workspace panel, so connecting and switching stay reachable with the rail shut.
   The picker puts databases the login can open first, then the rest alphabetically.
+- **Pop-out tab windows** (parity with the Tauri app): **Ctrl+Alt+O** or a tab's context menu
+  **Pop out window** moves that tab's editor and results into its own always-on-top window, sized
+  and positioned over the shell. The rail keeps the row (marked with a window glyph) and the
+  selection; the content area shows *This tab is open in its own window* with **Show window** and
+  **Dock back**. The window carries Run/Stop, Format, a pin toggle, **Ctrl+R** to collapse the
+  editor so the results fill the window, and **Ctrl+W** (or its close button) to dock the tab back
+  with its SQL, results and session intact. It renders the same `TabViewModel` and `QuerySession`
+  as the shell, so nothing is copied, `BEGIN TRAN`/temp tables still belong to the tab, and closing
+  the tab or its workspace closes the window. The state is not persisted: a restart opens every tab
+  docked. Deliberate differences from the Tauri window: result tabs can be selected and closed
+  there but renamed/reordered in the shell only, and the editor's undo history starts fresh (the
+  surface is rebuilt from the tab's saved SQL, exactly as the Tauri pop-out reloads from storage).
 - **New-tab command palette**: the New tab row opens a searchable palette instead of a modal
   database picker. Type to filter the workspace's databases, use Up/Down, and press Enter to open
   the tab (Esc or the backdrop cancels). Databases the login can open lead the list, alphabetically,
