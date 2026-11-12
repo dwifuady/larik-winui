@@ -33,6 +33,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private bool _applyingHighlight;
     private bool _restoringHistory;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _highlightTimer;
+    private ScrollViewer? _editorScroller;
+    private double _lineHeight = 18;
+    private int _lineNumberCount = -1;
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
 
@@ -65,6 +68,13 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
         // Theme resources change while the app runs; token colours must follow.
         ActualThemeChanged += (_, _) => ApplyHighlighting();
+
+        // The gutter and the RichEdit scroller only exist once the template is applied.
+        Loaded += (_, _) =>
+        {
+            EnsureEditorScroller();
+            UpdateLineNumbers();
+        };
     }
 
     public event EventHandler? TextChanged;
@@ -310,6 +320,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         try
         {
             var text = GetText();
+            UpdateLineNumbers(text);
             if (text.Length == 0)
             {
                 return;
@@ -321,6 +332,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
 
             // Reset the whole story first so a deleted keyword does not leave its colour behind.
             SetForeground(0, text.Length, TokenColor(null));
+            SetBackground(0, text.Length, Microsoft.UI.Colors.Transparent);
+            SetUnderline(0, text.Length, Microsoft.UI.Text.UnderlineType.None);
 
             foreach (var token in EditorLanguage.Tokenize(text))
             {
@@ -332,6 +345,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
                 }
             }
 
+            ApplyFindHighlights(text.Length);
             selection.SetRange(selectionStart, selectionEnd);
         }
         catch (Exception)
@@ -346,6 +360,127 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
     }
 
+    // ---------------------------------------------------------------- line numbers
+
+    private void EnsureEditorScroller()
+    {
+        var scroller = FindDescendant<ScrollViewer>(Editor);
+        if (scroller is null || ReferenceEquals(scroller, _editorScroller))
+        {
+            return;
+        }
+
+        if (_editorScroller is not null)
+        {
+            _editorScroller.ViewChanged -= EditorScroller_ViewChanged;
+        }
+
+        _editorScroller = scroller;
+        _editorScroller.ViewChanged += EditorScroller_ViewChanged;
+    }
+
+    private void EditorScroller_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (_editorScroller is null)
+        {
+            return;
+        }
+
+        LineNumberScroller.ChangeView(
+            null,
+            _editorScroller.VerticalOffset,
+            null,
+            disableAnimation: true);
+    }
+
+    /// <summary>
+    /// Numbers use one line per RichEdit paragraph. RichEdit separates paragraphs with CR, but a
+    /// pasted document can still contain LF, so both count exactly like <see cref="ComputeCaret"/>.
+    /// </summary>
+    private void UpdateLineNumbers(string? text = null)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        text ??= GetText();
+        var count = 1;
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] == '\n'
+                || (text[index] == '\r' && (index + 1 >= text.Length || text[index + 1] != '\n')))
+            {
+                count++;
+            }
+        }
+
+        if (count == _lineNumberCount)
+        {
+            return;
+        }
+
+        _lineNumberCount = count;
+        var digits = count.ToString().Length;
+        LineNumberScroller.Width = Math.Clamp(12 + (digits * 8), 20, 52);
+
+        var numbers = new StringBuilder(count * 4);
+        for (var line = 1; line <= count; line++)
+        {
+            if (line > 1)
+            {
+                numbers.Append('\n');
+            }
+
+            numbers.Append(line);
+        }
+
+        LineNumbers.Text = numbers.ToString();
+        MeasureLineHeight();
+    }
+
+    /// <summary>Matches the gutter's line pitch to the actual RichEdit line box.</summary>
+    private void MeasureLineHeight()
+    {
+        try
+        {
+            var length = GetText().Length;
+            var range = Editor.Document.GetRange(0, Math.Min(1, length));
+            range.GetRect(PointOptions.ClientCoordinates, out var rect, out _);
+            if (rect.Height > 4)
+            {
+                _lineHeight = rect.Height;
+            }
+        }
+        catch (Exception)
+        {
+            // A not-yet-laid-out document keeps the previous/fallback pitch.
+        }
+
+        LineNumbers.LineHeight = _lineHeight;
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T target)
+            {
+                return target;
+            }
+
+            if (FindDescendant<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     private void SetForeground(int start, int end, Color color)
     {
         // Follow the documented pattern: mutate the format object, then assign it back.
@@ -354,6 +489,72 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         var format = range.CharacterFormat;
         format.ForegroundColor = color;
         range.CharacterFormat = format;
+    }
+
+    private void SetBackground(int start, int end, Color color)
+    {
+        var range = Editor.Document.GetRange(start, end);
+        var format = range.CharacterFormat;
+        format.BackgroundColor = color;
+        range.CharacterFormat = format;
+    }
+
+    private void SetUnderline(int start, int end, Microsoft.UI.Text.UnderlineType underline)
+    {
+        var range = Editor.Document.GetRange(start, end);
+        var format = range.CharacterFormat;
+        format.Underline = underline;
+        range.CharacterFormat = format;
+    }
+
+    /// <summary>
+    /// RichEdit hides its selection while focus is in another control, which made Ctrl+F look like
+    /// it found nothing until the find bar closed. Painting the matches as character backgrounds
+    /// keeps every hit visible while the user types in the find box; the selection still drives
+    /// accessibility and the caret position.
+    /// </summary>
+    private void ApplyFindHighlights(int textLength)
+    {
+        if (textLength == 0 || FindBar.Visibility != Visibility.Visible || FindQuery.Length == 0)
+        {
+            return;
+        }
+
+        EnsureMatches();
+        if (_matches.Count == 0)
+        {
+            return;
+        }
+
+        var matchColor = ColorOf("StudioAccentSoftBrush");
+        var selectionColor = ColorOf("EditorSelectionBrush");
+        var currentColor = Windows.UI.Color.FromArgb(
+            0xA0,
+            selectionColor.R,
+            selectionColor.G,
+            selectionColor.B);
+
+        for (var index = 0; index < _matches.Count; index++)
+        {
+            var start = Math.Clamp(_matches[index], 0, textLength);
+            var end = Math.Clamp(start + FindQuery.Length, start, textLength);
+            if (end <= start)
+            {
+                continue;
+            }
+
+            if (index == _matchIndex)
+            {
+                // The current hit gets a much stronger tint and an underline: with focus in the
+                // find box the selection is hidden, so colour alone must say "you are here".
+                SetBackground(start, end, currentColor);
+                SetUnderline(start, end, Microsoft.UI.Text.UnderlineType.Single);
+            }
+            else
+            {
+                SetBackground(start, end, matchColor);
+            }
+        }
     }
 
     private Color TokenColor(QueryTokenKind? kind) =>
@@ -895,6 +1096,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         _matchesDirty = true;
         _findFeedback = null;
 
+        // The find backgrounds are character formatting; clearing them is a document repaint.
+        ApplyHighlighting();
+
         if (focusEditor)
         {
             FocusEditor();
@@ -954,6 +1158,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         if (_matches.Count == 0)
         {
             _matchIndex = -1;
+            // A query that no longer matches must clear the previous hits' backgrounds.
+            ScheduleHighlighting();
             UpdateFindCount();
             return;
         }
@@ -979,6 +1185,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             // Scrolling is cosmetic; RichEdit can reject it while the layout is settling.
         }
 
+        // Repaint the match backgrounds immediately; the selection alone is invisible while the
+        // find box holds focus.
+        ScheduleHighlighting();
         UpdateFindCount();
     }
 
@@ -990,6 +1199,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         if (_matches.Count == 0)
         {
             _matchIndex = -1;
+            ScheduleHighlighting();
             UpdateFindCount();
             return;
         }
@@ -1005,6 +1215,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         if (_matches.Count == 0)
         {
             _matchIndex = -1;
+            ScheduleHighlighting();
             UpdateFindCount();
             return;
         }

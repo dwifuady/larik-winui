@@ -41,18 +41,21 @@ The Store edition updates through the Store instead.
   be hidden from the rail or reordered. Deleting one archives its SQL first.
 - **Arc-style tabs.** Vertical query tabs with collapsible groups, pinned folders, drag reorder,
   inline rename, and non-destructive close into an archive with optional auto-archive.
-- **A real editor.** Provider-driven syntax highlighting, find/replace, snippet expansion on Tab,
-  and clause-aware completion for tables, columns, aliases, joins, CTEs, variables, databases and
-  procedure calls. `Ctrl+K` opens a schema peek that pins beside the editor.
+- **A real editor.** Provider-driven syntax highlighting, line numbers, find/replace with visible
+  match highlighting, snippet expansion on Tab, and clause-aware completion for tables, columns,
+  aliases, joins, CTEs, variables, databases and procedure calls. `Ctrl+K` opens a schema peek that
+  pins beside the editor.
 - **Real execution.** `Ctrl+Enter` runs the statement under the caret, `F5` runs the document or
-  selection and splits `GO` batches, and `Stop` cancels without closing the session. `PRINT` and
-  warnings open a Messages tab.
+  selection and splits `GO` batches, and `Stop` cancels without closing the session. A running
+  statement shows a **Running…** pill and a full-width progress bar, not just status-bar text.
+  `PRINT` and warnings open a Messages tab.
 - **One session per tab.** Temp tables, `SET` options and `BEGIN TRAN` stay on that tab; a `TXN`
   guard offers Commit and Roll back, and `USE` moves the tab, rail and completion to the new
   database.
 - **Results that hold up.** One result tab per result set — drag to reorder, double-click to rename
-  — a virtualized grid, cell preview with JSON/XML formatting, foreign-key reference previews, TSV
-  copy, and CSV/JSON export.
+  — a virtualized grid with a sticky row-number gutter, draggable columns, cell preview with
+  JSON/XML formatting, foreign-key and **custom** reference previews, copy as TSV / INSERT / IN
+  clause, and CSV/JSON export.
 - **Windows-native craft.** Mica and the system theme, Light/Dark/HighContrast, real keyboard and
   accessibility support, and no web-app chrome.
 
