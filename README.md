@@ -51,8 +51,8 @@ The Store edition updates through the Store instead.
   guard offers Commit and Roll back, and `USE` moves the tab, rail and completion to the new
   database.
 - **Results that hold up.** One result tab per result set — drag to reorder, double-click to rename
-  — a virtualized grid, cell preview with JSON/XML formatting, foreign-key reference previews, TSV
-  copy, and CSV/JSON export.
+  — a virtualized grid, syntax-coloured cell preview with JSON/XML formatting and Ctrl+F find,
+  foreign-key reference previews, TSV copy, and CSV/JSON export.
 - **Windows-native craft.** Mica and the system theme, Light/Dark/HighContrast, real keyboard and
   accessibility support, and no web-app chrome.
 

@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
@@ -64,6 +65,13 @@ public sealed partial class ResultsGrid : UserControl
     private const double MinPreviewWidth = 240;
     private const double MaxPreviewWidth = 720;
     private const double GridReserveWidth = 320;
+
+    // One Run per syntax token is the whole cost of colour, so both the painted span and the run
+    // count are capped. Values past the cap stay plain; find still searches the whole visible value.
+    private const int PreviewSyntaxCharacterLimit = 15_000;
+    private const int PreviewSyntaxTokenLimit = 1_000;
+    private const int PreviewSearchMatchLimit = 1_000;
+
     private bool _previewOpen;
     private bool _previewRequested;
     private int _previewRow = -1;
@@ -78,6 +86,20 @@ public sealed partial class ResultsGrid : UserControl
     private CancellationTokenSource? _referenceCancellation;
     private Brush _referenceMatchBrush = null!;
     private Brush _referenceBorderBrush = null!;
+
+    // Rendered value plus its find state. The document is rebuilt from these on a theme switch.
+    private string _previewText = string.Empty;
+    private IReadOnlyList<CellSyntaxToken> _previewTokens = [];
+    private bool _previewTextMuted;
+    private string _previewQuery = string.Empty;
+    private readonly List<TextRange> _previewMatches = [];
+    private int _previewMatchIndex = -1;
+    private bool _previewFindOpen;
+
+    private Brush _previewPrimaryBrush = null!;
+    private Brush _previewMutedBrush = null!;
+    private Brush _previewFindMatchBrush = null!;
+    private Dictionary<CellSyntaxTokenKind, Brush> _previewTokenBrushes = [];
 
     private enum PreviewMode
     {
@@ -113,6 +135,7 @@ public sealed partial class ResultsGrid : UserControl
         _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
         _headerBackground = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
         UpdateAccentBrushes();
+        RefreshPreviewBrushes();
 
         // Rows and headers cache brushes in code; a runtime Light/Dark switch must rebuild them.
         ActualThemeChanged += (_, _) => ApplyTheme();
@@ -648,13 +671,52 @@ public sealed partial class ResultsGrid : UserControl
 
     private void ResultsGrid_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        var control = IsKeyDown(VirtualKey.Control);
+
+        // Ctrl+F finds in the open preview; with no preview it opens the focused cell first so the
+        // shortcut never appears to do nothing.
+        if (e.Key == VirtualKey.F && control)
+        {
+            if (!_previewOpen && _hasSelection && _layout is not null && _rows.Count > 0)
+            {
+                ShowCellPreview(_focusRow, _focusColumn);
+            }
+
+            if (_previewOpen && _previewMode == PreviewMode.Value)
+            {
+                OpenPreviewFind();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        if (e.Key == VirtualKey.F3 && _previewFindOpen)
+        {
+            MovePreviewMatch(IsShiftDown() ? -1 : 1);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == VirtualKey.Escape && _previewFindOpen)
+        {
+            ClosePreviewFind();
+            e.Handled = true;
+            return;
+        }
+
+        // The find box and its buttons own typing, Space, Home/End and Ctrl+A.
+        if (IsFocusInPreviewFind())
+        {
+            return;
+        }
+
         if (!_hasSelection || _layout is null || _rows.Count == 0)
         {
             return;
         }
 
         var shift = IsKeyDown(VirtualKey.Shift);
-        var control = IsKeyDown(VirtualKey.Control);
 
         switch (e.Key)
         {
@@ -938,6 +1000,12 @@ public sealed partial class ResultsGrid : UserControl
             mode = PreviewMode.Value;
         }
 
+        if (mode == PreviewMode.Reference && _previewFindOpen)
+        {
+            // Find belongs to the value view; the reference view has its own navigation.
+            ResetPreviewFind();
+        }
+
         _referenceCancellation?.Cancel();
         _referenceCancellation?.Dispose();
         _referenceCancellation = null;
@@ -982,7 +1050,6 @@ public sealed partial class ResultsGrid : UserControl
 
         var layout = _layout.Columns[column];
         var value = column < _rows[row].Cells.Count ? _rows[row].Cells[column] : null;
-        var muted = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted);
         var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
             ? $"row {_rows[row].Index + 1}"
             : $"{layout.DataType} · row {_rows[row].Index + 1}";
@@ -993,8 +1060,7 @@ public sealed partial class ResultsGrid : UserControl
         {
             _previewCopyText = string.Empty;
             CellPreviewSubtitle.Text = subtitle;
-            CellPreviewValue.Text = "NULL";
-            CellPreviewValue.Foreground = muted;
+            SetPreviewText("NULL", CellFormat.Plain, muted: true);
             CellPreviewFooter.Text = string.Empty;
             return;
         }
@@ -1003,8 +1069,7 @@ public sealed partial class ResultsGrid : UserControl
         {
             _previewCopyText = string.Empty;
             CellPreviewSubtitle.Text = subtitle;
-            CellPreviewValue.Text = "\"\"";
-            CellPreviewValue.Foreground = muted;
+            SetPreviewText("\"\"", CellFormat.Plain, muted: true);
             CellPreviewFooter.Text = "Empty string";
             return;
         }
@@ -1016,14 +1081,13 @@ public sealed partial class ResultsGrid : UserControl
             ? $"{subtitle} · {formatted.Kind.ToString().ToUpperInvariant()}"
             : subtitle;
 
-        // A single multi-megabyte cell would make the TextBlock the slowest thing in the window;
+        // A single multi-megabyte cell would make the RichTextBlock the slowest thing in the window;
         // the copy button still hands over the whole formatted value.
         var display = formatted.Text.Length > PreviewCharacterLimit
             ? formatted.Text[..PreviewCharacterLimit]
             : formatted.Text;
 
-        CellPreviewValue.Text = display;
-        CellPreviewValue.Foreground = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, StudioColors.Muted);
+        SetPreviewText(display, formatted.Kind, muted: false);
 
         var footer = formatted.Text.Length > PreviewCharacterLimit
             ? $"Showing first {PreviewCharacterLimit:N0} of {formatted.Text.Length:N0} characters — Copy copies all"
@@ -1035,6 +1099,353 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         CellPreviewFooter.Text = footer;
+    }
+
+    /// <summary>
+    /// Replaces the preview document with <paramref name="text"/>, colouring JSON/XML tokens.
+    /// Muted text is the NULL/empty marker; everything else uses the primary text colour.
+    /// </summary>
+    private void SetPreviewText(string text, CellFormat format, bool muted)
+    {
+        _previewText = text;
+        _previewTextMuted = muted;
+        _previewTokens = format is CellFormat.Json or CellFormat.Xml
+            ? CellSyntaxTokenizer.Tokenize(text, format, PreviewSyntaxCharacterLimit)
+            : [];
+
+        RenderPreviewText();
+
+        // Arrowing between cells keeps the find bar useful: the query follows the new value.
+        if (_previewFindOpen)
+        {
+            UpdatePreviewSearch(resetIndex: true);
+        }
+    }
+
+    private void RenderPreviewText()
+    {
+        var plain = _previewTextMuted ? _previewMutedBrush : _previewPrimaryBrush;
+        var paragraph = new Paragraph();
+        var limit = SyntaxLimit();
+        var cursor = 0;
+
+        foreach (var token in _previewTokens)
+        {
+            if (token.Start >= limit)
+            {
+                break;
+            }
+
+            if (token.Start > cursor)
+            {
+                AddPreviewRun(paragraph, cursor, token.Start - cursor, plain);
+            }
+
+            var end = Math.Min(token.End, limit);
+            if (end > token.Start)
+            {
+                AddPreviewRun(paragraph, token.Start, end - token.Start, BrushFor(token.Kind));
+            }
+
+            cursor = Math.Max(cursor, end);
+        }
+
+        if (cursor < _previewText.Length)
+        {
+            AddPreviewRun(paragraph, cursor, _previewText.Length - cursor, plain);
+        }
+
+        CellPreviewValue.TextHighlighters.Clear();
+        CellPreviewValue.Blocks.Clear();
+        if (_previewText.Length > 0)
+        {
+            CellPreviewValue.Blocks.Add(paragraph);
+        }
+    }
+
+    /// <summary>
+    /// Where colour stops. The character cap keeps a pathological cell cheap; the token cap bounds
+    /// the number of <c>Run</c> objects, and colour always ends at a line boundary so the cut looks
+    /// deliberate instead of half-highlighted.
+    /// </summary>
+    private int SyntaxLimit()
+    {
+        if (_previewTokens.Count == 0)
+        {
+            return _previewText.Length;
+        }
+
+        var limit = Math.Min(_previewText.Length, PreviewSyntaxCharacterLimit);
+
+        if (_previewTokens.Count > PreviewSyntaxTokenLimit)
+        {
+            limit = Math.Min(limit, _previewTokens[PreviewSyntaxTokenLimit - 1].End);
+        }
+
+        var newline = _previewText.IndexOf('\n', Math.Min(limit, _previewText.Length));
+        return newline < 0 ? _previewText.Length : newline + 1;
+    }
+
+    private void AddPreviewRun(Paragraph paragraph, int start, int length, Brush foreground)
+    {
+        if (length <= 0)
+        {
+            return;
+        }
+
+        paragraph.Inlines.Add(new Run
+        {
+            Text = _previewText.Substring(start, length),
+            Foreground = foreground,
+        });
+    }
+
+    private Brush BrushFor(CellSyntaxTokenKind kind) =>
+        _previewTokenBrushes.TryGetValue(kind, out var brush) ? brush : _previewPrimaryBrush;
+
+    // ---------------------------------------------------------------- preview find
+
+    /// <summary>
+    /// Ctrl+F in the preview: a find-as-you-type bar over the displayed value. The current match is
+    /// selected (so it reads as the active hit) and scrolled into view; every other match carries a
+    /// quiet accent highlighter so the shape of the document stays visible.
+    /// </summary>
+    private void OpenPreviewFind()
+    {
+        if (!_previewOpen || _previewMode != PreviewMode.Value)
+        {
+            return;
+        }
+
+        // Seed from a short manual selection, the way desktop find bars do. A match selected by an
+        // earlier find is cleared when the bar closes, so this only picks up a deliberate selection.
+        if (PreviewFindBox.Text.Length == 0)
+        {
+            var selected = CellPreviewValue.SelectedText;
+            if (selected.Length is > 0 and <= 80
+                && !selected.Contains('\n')
+                && !selected.Contains('\r'))
+            {
+                PreviewFindBox.Text = selected;
+            }
+        }
+
+        _previewFindOpen = true;
+        PreviewFindBar.Visibility = Visibility.Visible;
+        UpdatePreviewSearch(resetIndex: true);
+        PreviewFindBox.Focus(FocusState.Programmatic);
+        PreviewFindBox.SelectAll();
+    }
+
+    private void ClosePreviewFind()
+    {
+        ResetPreviewFind();
+        Focus(FocusState.Programmatic);
+    }
+
+    private void ResetPreviewFind()
+    {
+        _previewFindOpen = false;
+        _previewQuery = string.Empty;
+        _previewMatches.Clear();
+        _previewMatchIndex = -1;
+        PreviewFindBar.Visibility = Visibility.Collapsed;
+        PreviewFindBox.Text = string.Empty;
+        UpdatePreviewFindStatus();
+        CellPreviewValue.TextHighlighters.Clear();
+
+        if (CellPreviewValue.Blocks.Count > 0)
+        {
+            CellPreviewValue.Select(CellPreviewValue.ContentStart, CellPreviewValue.ContentStart);
+        }
+    }
+
+    private void UpdatePreviewSearch(bool resetIndex)
+    {
+        _previewQuery = PreviewFindBox.Text;
+        _previewMatches.Clear();
+
+        if (_previewQuery.Length > 0 && _previewText.Length >= _previewQuery.Length)
+        {
+            var from = 0;
+            while (from <= _previewText.Length - _previewQuery.Length
+                && _previewMatches.Count < PreviewSearchMatchLimit)
+            {
+                var found = _previewText.IndexOf(_previewQuery, from, StringComparison.OrdinalIgnoreCase);
+                if (found < 0)
+                {
+                    break;
+                }
+
+                _previewMatches.Add(new TextRange { StartIndex = found, Length = _previewQuery.Length });
+                from = found + _previewQuery.Length;
+            }
+        }
+
+        if (resetIndex || _previewMatchIndex >= _previewMatches.Count)
+        {
+            _previewMatchIndex = _previewMatches.Count > 0 ? 0 : -1;
+        }
+
+        ApplyPreviewFindVisuals(scrollToMatch: true);
+        UpdatePreviewFindStatus();
+    }
+
+    private void ApplyPreviewFindVisuals(bool scrollToMatch)
+    {
+        CellPreviewValue.TextHighlighters.Clear();
+
+        if (_previewMatches.Count > 0)
+        {
+            var highlighter = new TextHighlighter { Background = _previewFindMatchBrush };
+            foreach (var match in _previewMatches)
+            {
+                highlighter.Ranges.Add(match);
+            }
+
+            CellPreviewValue.TextHighlighters.Add(highlighter);
+        }
+
+        if (_previewMatchIndex >= 0)
+        {
+            SelectPreviewMatch(_previewMatchIndex, scrollToMatch);
+        }
+    }
+
+    private void SelectPreviewMatch(int index, bool scroll)
+    {
+        if (index < 0 || index >= _previewMatches.Count || CellPreviewValue.Blocks.Count == 0)
+        {
+            return;
+        }
+
+        var match = _previewMatches[index];
+        var start = CellPreviewValue.ContentStart.GetPositionAtOffset(match.StartIndex, LogicalDirection.Forward);
+        var end = start?.GetPositionAtOffset(match.Length, LogicalDirection.Forward);
+        if (start is null || end is null)
+        {
+            return;
+        }
+
+        CellPreviewValue.Select(start, end);
+
+        if (!scroll)
+        {
+            return;
+        }
+
+        // The value view is the only scrollable ancestor, so bringing the character rect into view
+        // moves the pane without a second scroll viewer or a line-height guess. Jumping instead of
+        // animating keeps fast typing from queuing scroll animations and respects reduced motion.
+        CellPreviewValue.UpdateLayout();
+        var rect = start.GetCharacterRect(LogicalDirection.Forward);
+        CellPreviewValue.StartBringIntoView(new BringIntoViewOptions
+        {
+            TargetRect = rect,
+            VerticalAlignmentRatio = 0.35,
+            AnimationDesired = false,
+        });
+    }
+
+    private void UpdatePreviewFindStatus()
+    {
+        string text;
+        if (_previewQuery.Length == 0)
+        {
+            text = string.Empty;
+        }
+        else if (_previewMatches.Count == 0)
+        {
+            text = "No results";
+        }
+        else
+        {
+            var capped = _previewMatches.Count >= PreviewSearchMatchLimit ? "+" : string.Empty;
+            text = $"{_previewMatchIndex + 1} of {_previewMatches.Count:N0}{capped}";
+        }
+
+        PreviewFindStatus.Text = text;
+        // The count is the accessible feedback; keep the announced name equal to what is shown.
+        AutomationProperties.SetName(PreviewFindStatus, text.Length > 0 ? text : "Find matches");
+    }
+
+    private void MovePreviewMatch(int delta)
+    {
+        if (_previewMatches.Count == 0)
+        {
+            return;
+        }
+
+        _previewMatchIndex = (_previewMatchIndex + delta + _previewMatches.Count) % _previewMatches.Count;
+        SelectPreviewMatch(_previewMatchIndex, scroll: true);
+        UpdatePreviewFindStatus();
+    }
+
+    private bool IsFocusInPreviewFind()
+    {
+        if (!_previewFindOpen || FocusManager.GetFocusedElement(XamlRoot) is not DependencyObject focused)
+        {
+            return false;
+        }
+
+        for (var node = focused; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, PreviewFindBar))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void PreviewFindBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_previewFindOpen)
+        {
+            return;
+        }
+
+        UpdatePreviewSearch(resetIndex: true);
+    }
+
+    private void PreviewFindBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Enter)
+        {
+            MovePreviewMatch(IsShiftDown() ? -1 : 1);
+            e.Handled = true;
+        }
+    }
+
+    private void PreviewFindPrevious_Click(object sender, RoutedEventArgs e) => MovePreviewMatch(-1);
+
+    private void PreviewFindNext_Click(object sender, RoutedEventArgs e) => MovePreviewMatch(1);
+
+    private void PreviewFindClose_Click(object sender, RoutedEventArgs e) => ClosePreviewFind();
+
+    /// <summary>
+    /// Syntax colours ride the editor's existing token brushes rather than a second palette, so the
+    /// preview and the SQL editor stay visually consistent across Light, Dark and High Contrast.
+    /// </summary>
+    private void RefreshPreviewBrushes()
+    {
+        var fallback = StudioColors.Muted;
+        _previewPrimaryBrush = ThemeService.GetBrush("StudioTextPrimaryBrush", ActualTheme, fallback);
+        _previewMutedBrush = ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, fallback);
+        _previewFindMatchBrush = ThemeService.GetBrush("StudioAccentSoftBrush", ActualTheme, fallback);
+        _previewTokenBrushes = new Dictionary<CellSyntaxTokenKind, Brush>
+        {
+            [CellSyntaxTokenKind.Property] = ThemeService.GetBrush("StudioSyntaxFunctionBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.String] = ThemeService.GetBrush("StudioSyntaxStringBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Number] = ThemeService.GetBrush("StudioSyntaxNumberBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Keyword] = ThemeService.GetBrush("StudioSyntaxKeywordBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Punctuation] = ThemeService.GetBrush("StudioTextSecondaryBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Tag] = ThemeService.GetBrush("StudioSyntaxFunctionBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Attribute] = ThemeService.GetBrush("StudioSyntaxVariableBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Comment] = ThemeService.GetBrush("StudioSyntaxCommentBrush", ActualTheme, fallback),
+            [CellSyntaxTokenKind.Declaration] = ThemeService.GetBrush("StudioSyntaxKeywordBrush", ActualTheme, fallback),
+        };
     }
 
     private void ShowReferenceLoading()
@@ -1219,7 +1630,10 @@ public sealed partial class ResultsGrid : UserControl
         _previewColumn = -1;
         _previewCopyText = string.Empty;
         PreviewHost.Visibility = Visibility.Collapsed;
-        CellPreviewValue.Text = string.Empty;
+        ResetPreviewFind();
+        _previewText = string.Empty;
+        _previewTokens = [];
+        CellPreviewValue.Blocks.Clear();
         CellPreviewFooter.Text = string.Empty;
         HideReferenceViews();
         ReferenceView.Visibility = Visibility.Collapsed;
@@ -1562,12 +1976,13 @@ public sealed partial class ResultsGrid : UserControl
             row.ApplyTheme();
         }
 
-        if (_previewOpen)
+        RefreshPreviewBrushes();
+
+        if (_previewOpen && _previewMode == PreviewMode.Value)
         {
-            CellPreviewValue.Foreground = ThemeService.GetBrush(
-                "StudioTextPrimaryBrush",
-                ActualTheme,
-                StudioColors.Muted);
+            // Runs carry their own brush instances, so a Light/Dark switch has to rebuild the text.
+            RenderPreviewText();
+            ApplyPreviewFindVisuals(scrollToMatch: false);
         }
     }
 
