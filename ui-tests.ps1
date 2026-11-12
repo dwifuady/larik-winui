@@ -596,6 +596,20 @@ function Right-Click-Element {
     Invoke-Ui @('click', $matches[0].selector, '--right') -Attempts 4 | Out-Null
 }
 function Focus-Element { param([string]$Selector) Focus-App; $target = if ($script:MainWindow) { @('-w', $script:MainWindow) } else { @() }; Invoke-Ui (@('focus', $Selector) + $target) | Out-Null }
+# The diagnostics log sits beside the state database (`logs\larik-*.log`), so the check follows
+# whichever root the running build writes. The newest file belongs to this session.
+function Get-DiagnosticsLogPath {
+    $database = Get-StateDatabasePath
+    if (-not $database) { return $null }
+
+    $directory = Join-Path (Split-Path -Parent $database) 'logs'
+    if (-not (Test-Path $directory)) { return $null }
+
+    Get-ChildItem $directory -Filter 'larik-*.log' -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
+
 function Wait-ForText {
     param([string]$Text, [int]$Seconds = 8)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -2274,6 +2288,18 @@ try {
         Assert-True ($state -match 'Query 1') 'the new tab is missing from the database'
     }
 
+    Test-UI 'the diagnostics log records the session' {
+        Start-Sleep -Milliseconds 900
+        $log = Get-DiagnosticsLogPath
+        Assert-True ($null -ne $log) 'no diagnostics log was written'
+        $text = Get-Content $log.FullName -Raw
+        Assert-True ($text -match '\[INFO \] session: starting Larik') 'the log has no session header'
+        Assert-True ($text -match '\[INFO \] providers: \d+ loaded') 'the log does not name the loaded providers'
+        Assert-True ($text -match '\[INFO \] query: batch start') 'the log does not record query runs'
+        Assert-True ($text -match '\[INFO \] preview: (open|formatted):') 'the log does not record cell previews'
+        Assert-True ($text -notmatch '\[ERROR\] crash') 'the log recorded a crash in the happy path'
+    }
+
     Test-UI 'window size and position are remembered' {
         Focus-App
         $hwnd = [IntPtr]([int64]$script:MainWindow)
@@ -2362,6 +2388,15 @@ try {
             Assert-True ($storePath.name -match '\\Packages\\[^\\]+\\LocalState\\') `
                 "the packaged store is outside the package: $($storePath.name)"
         }
+
+        # The crash log is discoverable from About: the path must be the live state folder's log
+        # directory, and there must be a way to open it in Explorer.
+        $logPath = @((Find-Element 'LogPathText').matches | Where-Object { $_.type -eq 'Text' } | Select-Object -First 1)
+        Assert-True ($null -ne $logPath) 'the About page does not name the diagnostics log folder'
+        $expectedLogs = Join-Path (Split-Path -Parent (Get-StateDatabasePath)) 'logs'
+        Assert-True ($logPath.name -eq $expectedLogs) "About shows '$($logPath.name)', expected '$expectedLogs'"
+        $openLog = @((Find-Element 'Open log folder').matches | Where-Object { $_.type -eq 'Button' } | Select-Object -First 1)
+        Assert-True ($null -ne $openLog) 'the About page has no way to open the log folder'
 
         # The suite drives a packaged debug identity, and a packaged copy must never offer the
         # GitHub updater: it cannot replace files inside its package. The Store edition updates

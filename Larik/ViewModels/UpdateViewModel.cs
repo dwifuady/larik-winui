@@ -159,7 +159,7 @@ public partial class UpdateViewModel : ObservableObject
         catch (Exception exception)
         {
             // A failed check must never interrupt startup.
-            System.Diagnostics.Debug.WriteLine($"Update check failed: {exception}");
+            AppLog.Warning("update", "update check failed", exception);
             return new(UpdateCheckStatus.Failed, Error: exception.Message);
         }
         finally

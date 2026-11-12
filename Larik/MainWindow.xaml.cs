@@ -56,6 +56,9 @@ public sealed partial class MainWindow : Window
         {
             mainPage?.ViewModel.SetWindowBounds(CaptureBounds());
             mainPage?.ViewModel.SaveNow();
+
+            // Removes the crash marker so the next launch does not report a clean exit as a crash.
+            AppLog.Shutdown("window closed");
         };
     }
 
@@ -89,7 +92,7 @@ public sealed partial class MainWindow : Window
         {
             // Geometry is cosmetic; a bad saved rectangle or a projection hiccup must never stop
             // the app from opening. The window then keeps the size the constructor already set.
-            System.Diagnostics.Debug.WriteLine($"Could not restore the window rectangle: {ex}");
+            AppLog.Warning("window", "could not restore the saved rectangle", ex);
         }
     }
 

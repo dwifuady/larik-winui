@@ -725,6 +725,42 @@
                             </StackPanel>
                         </Border>
 
+                        <Border
+                            Margin="0,8,0,0"
+                            Padding="12"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="4">
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                        Text="A local log of this session helps explain a crash. It never leaves this machine and never includes your SQL, cell values or credentials."
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="LogPathText"
+                                        FontFamily="{StaticResource StudioMonoFont}"
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                        IsTextSelectionEnabled="True"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button
+                                    x:Name="OpenLogFolderButton"
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Open log folder"
+                                    Click="OpenLogFolder_Click"
+                                    Content="Open folder" />
+                            </Grid>
+                        </Border>
+
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource StudioTextMutedBrush}"

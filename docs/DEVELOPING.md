@@ -94,6 +94,32 @@ launching and restores them afterwards. Screenshots are artifacts in `ui-test-ar
 (gitignored). The app is packaged, so a second instance cannot launch while one is running; stop
 an existing instance first.
 
+## Diagnostics log
+
+`Services/AppLog.cs` writes one file per launch to `<state>\logs\larik-<date>-<time>-<pid>.log`
+(`%LOCALAPPDATA%\Larik WinUI\logs` unpackaged, the package's `LocalState\logs` when packaged).
+Settings → About shows the folder and opens it. Ten sessions (at most 14 days) are kept, oldest
+first, at startup and whenever a file rotates; a session that reaches 4 MB continues in a `-2` file,
+so nothing needs deleting by hand.
+
+The log is the app's only crash evidence — there is no telemetry or crash-reporting SDK — so it is
+written flush-on-line and deliberately records **shapes, not data**: SQL length, row/column counts,
+the largest cell in a result, preview format and character counts, timings, and full exception
+stacks. SQL text, cell values, connection strings and credentials never reach the file, and a
+secret-looking `key=value` in a provider message is scrubbed before writing.
+
+Startup writes the version, OS, runtime, state folder and the loaded provider ids (plus add-on load
+errors). Unhandled UI-thread, app-domain and unobserved-task exceptions are logged with their
+stacks. A `session.marker` file is deleted on a clean exit; when the next launch finds it, the log
+says the previous session did not shut down cleanly, and the previous session's file ends at the
+last breadcrumb before the crash. For a native crash (access violation, stack overflow) that is
+the whole story — Larik does not write minidumps.
+
+Breadcrumbs worth keeping when changing the shell: `query` (batch start/end/failure), `results`
+(row/column counts, largest cell), and `preview` (open, formatted, rendered). They bracket the
+operations most likely to die inside a provider or WinUI text layout, so the last line identifies
+the culprit.
+
 ## WinUI notes worth remembering
 
 - WinUI has no `DataGrid` and no Monaco; the editor surface is the real porting cost.

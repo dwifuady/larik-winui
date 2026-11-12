@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Larik.Data.Addons;
 using Larik.Models;
 using Larik.Services;
@@ -89,6 +90,7 @@ public sealed partial class SettingsPage : Page
     {
         App.Window.SetTitleBar(SettingsTitleBar);
         DatabasePathText.Text = LarikPaths.DatabasePath;
+        LogPathText.Text = AppLog.DirectoryPath;
 
         var version = AppInfo.HasVersion ? AppInfo.Version : "0.0.0";
         VersionText.Text = $"Version {version} · MIT licensed";
@@ -269,6 +271,28 @@ public sealed partial class SettingsPage : Page
         finally
         {
             CheckNowButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Opens the diagnostics folder in Explorer. The path is shown beside the button, so the user
+    /// can also copy it when the shell refuses to start another process.
+    /// </summary>
+    private void OpenLogFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppLog.DirectoryPath);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = AppLog.DirectoryPath,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warning("settings", "opening the log folder failed", ex);
+            OpenLogFolderButton.Content = "Couldn't open it";
         }
     }
 
