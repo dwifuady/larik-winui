@@ -512,7 +512,7 @@ function Find-Element {
 }
 function Send-Keys { param([string]$Keys, [switch]$Literal) Focus-App; Invoke-Ui (@('send-keys', $Keys, '--via', 'send-input') + $(if ($Literal) { @('--verbatim') } else { @() })) | Out-Null }
 # Switch by invoking the rail's workspace indicator: mouse clicks outside an open flyout can be
-# swallowed by its light-dismiss layer, and the indicator is the stable target above six workspaces.
+# swallowed by its light-dismiss layer, and the footer icon is the stable target.
 function Switch-Workspace {
     param([string]$Name)
     Send-Keys 'escape'
@@ -979,6 +979,43 @@ try {
         Assert-True ((Find-Element 'Query 1').matchCount -gt 0) 'the new workspace is not the active one'
         Click-Element 'Workspace Staging'
         Start-Sleep -Milliseconds 700
+    }
+
+    Test-UI 'the rail footer keeps three workspace icons and steps with chevrons' {
+        # A fourth workspace turns the strip into a window: three icons around the active one, and
+        # a chevron only on the side that still has a workspace.
+        Click-Element 'Switch workspace'
+        Start-Sleep -Milliseconds 500
+        Click-Element 'New workspace'
+        Wait-ForText 'Create & connect'
+        Click-Element 'Create & connect'
+        Start-Sleep -Milliseconds 1500
+
+        Assert-True ((Find-Element 'Workspace Space 4').matchCount -gt 0) 'the newest workspace is missing from the footer'
+        Assert-True ((Find-Element 'Workspace Space 3').matchCount -gt 0) 'the window lost the neighbour of the active workspace'
+        Assert-True ((Find-Element 'Workspace Staging').matchCount -eq 0) 'the footer shows more than three workspaces'
+        Assert-True ((Find-Element 'Previous workspace').matchCount -gt 0) 'no chevron back to the workspaces off the window'
+        Assert-True ((Find-Element 'Next workspace').matchCount -eq 0) 'a chevron points past the last workspace'
+
+        # Two steps back reach the first workspace: the window follows the active one, and the back
+        # chevron disappears because nothing is left behind it.
+        Click-Element 'Previous workspace'
+        Start-Sleep -Milliseconds 700
+        Click-Element 'Previous workspace'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'the window did not follow the active workspace'
+        Assert-True ((Find-Element 'Previous workspace').matchCount -eq 0) 'a chevron points before the first workspace'
+        Assert-True ((Find-Element 'Next workspace').matchCount -gt 0) 'no chevron towards the workspaces after the window'
+
+        # Leave the two workspaces the later checks assume.
+        Open-WorkspaceSettings 'Space 4'
+        Invoke-Element 'Delete workspace'
+        Wait-ForText 'Delete workspace?'
+        Click-Element 'Delete'
+        Start-Sleep -Milliseconds 1200
+        Close-WorkspaceManager
+        Assert-True ((Find-Element 'Workspace Space 4').matchCount -eq 0) 'the extra workspace was not deleted'
+        Switch-Workspace 'Staging'
     }
 
     Test-UI 'deleting a workspace archives its SQL and removes it from the rail' {
