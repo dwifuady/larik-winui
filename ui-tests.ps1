@@ -2623,6 +2623,30 @@ try {
         Wait-ForText 'Switch workspace' 10
     }
 
+    Test-UI 'an agent statement can be opened as a tab' {
+        # The approval check left audited statements behind; the activity list hands each one back to
+        # the editor, so the user can continue the agent's work instead of retyping it.
+        Click-Element 'Settings'
+        Wait-ForText 'Snippets' 10
+        Focus-App
+        Invoke-Ui @('click', 'AgentsNavItem') | Out-Null
+        Wait-ForText 'Allow AI agents' 10
+
+        Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-on') | Out-Null
+        Wait-ForText 'Recent agent activity' 10
+        try { Invoke-Ui @('scroll', 'Recent agent activity', '--to', 'bottom') | Out-Null } catch { }
+
+        $open = @((Find-Element 'Open the').matches |
+            Where-Object { $_.type -eq 'Button' -and $_.name -like 'Open the*as a tab' } |
+            Select-Object -First 1)
+        Assert-True ($null -ne $open) 'the activity list offers no statement to open'
+
+        Invoke-Ui @('invoke', $open.selector) | Out-Null
+        Wait-ForText 'Switch workspace' 10
+        Assert-True ((Get-EditorText) -match 'select 1 as one') `
+            "the new tab does not hold the agent's statement: '$(Get-EditorText)'"
+    }
+
     Test-UI 'the workspace switcher follows a runtime theme switch' {
         # The switcher's rows are built in code, so they must resolve their tokens from the live
         # theme. Switch to both themes and read the active row's resolved foreground: a stale

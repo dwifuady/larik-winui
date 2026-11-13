@@ -490,6 +490,7 @@ public sealed partial class SettingsPage : Page
             };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var text = new StackPanel { Spacing = 2 };
             text.Children.Add(new TextBlock
@@ -533,10 +534,51 @@ public sealed partial class SettingsPage : Page
                     },
                     StudioColors.Muted),
             };
-            Grid.SetColumn(status, 1);
+            Grid.SetColumn(status, 2);
             row.Children.Add(status);
 
+            // The agent's statement is stored, so the user can pick up its work where it stopped.
+            if (!string.IsNullOrWhiteSpace(entry.Statement) && !string.IsNullOrWhiteSpace(entry.SpaceId))
+            {
+                var open = new Button
+                {
+                    Content = "Open as tab",
+                    Tag = entry,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                AutomationProperties.SetName(open, $"Open the {entry.Tool} statement as a tab");
+                open.Click += OpenAuditStatement_Click;
+                Grid.SetColumn(open, 1);
+                row.Children.Add(open);
+            }
+
             AgentsActivityPanel.Children.Add(row);
+        }
+    }
+
+    private void OpenAuditStatement_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: McpLogRecord entry } || _studio is null)
+        {
+            return;
+        }
+
+        if (!_studio.OpenExternalQuery(entry.SpaceId ?? string.Empty, null, entry.Statement ?? string.Empty))
+        {
+            return;
+        }
+
+        // The tab lives in the shell, so go there and show it. Settings is hosted in the shell's
+        // frame; if there is no back entry (the frame was cleared), say where the tab went instead
+        // of navigating to a second shell.
+        if (Frame.CanGoBack)
+        {
+            Frame.GoBack();
+        }
+        else
+        {
+            AgentsStatusText.Text = $"Opened in {entry.SpaceName}. Press Back to see the tab.";
         }
     }
 
@@ -649,15 +691,21 @@ public sealed partial class SettingsPage : Page
         path.Replace("\\", "\\\\", StringComparison.Ordinal);
 
     /// <summary>
-    /// The MCP server EXE: beside the app in a shipped build, or in its own project output while
-    /// developing (the two projects publish into one folder only when packaging does it).
+    /// The MCP server EXE: in its own <c>mcp\</c> folder beside the app (each apphost owns its
+    /// dependencies), or in its project output while developing.
     /// </summary>
     private static string? FindMcpServerPath()
     {
-        var beside = Path.Combine(AppContext.BaseDirectory, "Larik.Mcp.exe");
-        if (File.Exists(beside))
+        foreach (var candidate in new[]
+                 {
+                     Path.Combine(AppContext.BaseDirectory, "mcp", "Larik.Mcp.exe"),
+                     Path.Combine(AppContext.BaseDirectory, "Larik.Mcp.exe"),
+                 })
         {
-            return beside;
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
         }
 
 #if DEBUG

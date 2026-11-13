@@ -26,7 +26,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   level — **Off**, **Read only** or **Read and write** — and unknown values read as Off. **Four tools**:
   `list_connections`, `list_databases`, `get_schema` (typed columns, primary keys, foreign keys,
   optional routines), `run_query` (200 rows by default, 1000 max, per-set `truncated` flag, engine
-  messages). Read-only workspaces are enforced in two layers: the provider's fail-closed statement
+  messages) and `open_in_studio` (drops the agent's statement into a query tab in the right workspace
+  and switches there — nothing runs). Read-only workspaces are enforced in two layers: the provider's fail-closed statement
   classifier, and the engine itself — SQL Server runs every read-mode batch in a transaction that is
   always rolled back, PostgreSQL in `BEGIN TRANSACTION READ ONLY`. A statement the classifier cannot
   prove is a read is refused with the reason and the two ways forward. Every call, including refusals,

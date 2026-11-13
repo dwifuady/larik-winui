@@ -152,6 +152,13 @@ public sealed partial class MainPage : Page
             ViewModel.ResultChanged += (_, _) => RenderResults();
             ViewModel.NewTabRequested += ViewModel_NewTabRequested;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+
+            // An agent can hand a statement over as a tab. The pipe service marshals this to the UI
+            // thread, and returning null means it opened.
+            McpApprovalService.SetOpenHandler(request =>
+                ViewModel.OpenExternalQuery(request.SpaceId, request.Database, request.Statement)
+                    ? null
+                    : "That workspace is no longer open in Larik.");
             _lastSpaceIndex = ActiveSpaceIndex();
             ViewModel.StartBackgroundMaintenance();
         }

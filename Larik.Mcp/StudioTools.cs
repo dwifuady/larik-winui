@@ -310,9 +310,68 @@ internal sealed class StudioTools(StudioContext context)
         return Serialize(payload);
     }
 
-    /// <summary>One result set as the agent sees it: mutable rows so the size budget can shorten it.</summary>
-    private sealed class ToolResultSet
+    [McpServerTool(Name = "open_in_studio", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description(
+        "Opens a statement in Larik SQL Studio as a new query tab on that connection, so the user " +
+        "can review, adjust or run the agent's work themselves. Needs the studio to be running; " +
+        "fails with the reason when it is not. Nothing is executed.")]
+    public async Task<string> OpenInStudioAsync(
+        [Description("Connection id from list_connections.")] string connection,
+        [Description("The SQL to place in the tab.")] string query,
+        [Description("Database for the tab; defaults to the connection's saved database.")] string? database = null,
+        CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var space = context.RequireSpace(connection);
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            throw new McpException("The statement is empty.");
+        }
+
+        var target = string.IsNullOrWhiteSpace(database) ? DefaultDatabase(space) : database;
+        var response = await ApprovalChannel.TryOpenAsync(
+            new McpOpenRequest
+            {
+                Id = Guid.NewGuid().ToString("n"),
+                SpaceId = space.Id,
+                SpaceName = space.Name,
+                Statement = query.Length > StudioContext.MaxStatementChars
+                    ? query[..StudioContext.MaxStatementChars]
+                    : query,
+                Database = target,
+            },
+            cancellationToken);
+
+        if (response is null)
+        {
+            context.Audit("open_in_studio", space, space.Access, query, "error",
+                "the studio is not running", stopwatch.Elapsed, rows: 0);
+
+            throw new McpException(
+                "Larik SQL Studio is not running, so there is nothing to open the statement in. " +
+                "Ask the user to start it, or use run_query if the workspace allows it.");
+        }
+
+        if (!response.Ok)
+        {
+            var reason = response.Reason ?? "The studio could not open the statement.";
+            context.Audit("open_in_studio", space, space.Access, query, "error", reason, stopwatch.Elapsed, rows: 0);
+            throw new McpException(reason);
+        }
+
+        context.Audit("open_in_studio", space, space.Access, query, "ok", reason: null, stopwatch.Elapsed, rows: 0);
+        return Serialize(new
+        {
+            opened = true,
+            connection,
+            database = target,
+            message = $"Opened in {space.Name} as a new query tab. Nothing was run.",
+        });
+    }
+
+    /// <summary>One result set as the agent sees it: mutable rows so the size budget can shorten it.</summary>
+    private sealed class ToolResultSet    {
         public required IReadOnlyList<ToolColumn> Columns { get; init; }
 
         public required List<string?[]> Rows { get; init; }

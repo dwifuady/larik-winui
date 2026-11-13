@@ -1111,7 +1111,7 @@ public partial class StudioViewModel : ObservableObject
     }
 
     /// <summary>Creates and activates a tab bound to <paramref name="databaseName"/> (null = unbound).</summary>
-    public TabViewModel CreateTab(string? databaseName)
+    public TabViewModel CreateTab(string? databaseName, string content = "")
     {
         var space = ActiveSpace ?? throw new InvalidOperationException("No active workspace.");
         ClearGroupUndo();
@@ -1121,7 +1121,7 @@ public partial class StudioViewModel : ObservableObject
             $"Query {++_queryCounter}",
             databaseName ?? string.Empty,
             space,
-            string.Empty);
+            content);
 
         // After "Group by database", a tab opened on that database lands in its group; the group
         // expands so the new tab is visible instead of hidden inside a collapsed header.
@@ -1801,6 +1801,34 @@ public partial class StudioViewModel : ObservableObject
         LastResult = active?.Result;
         ResultMessage = active?.Message ?? string.Empty;
         ResultSummary = active?.Summary ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Opens a statement produced elsewhere (an agent's tool call, or the activity list) as a new
+    /// query tab in that workspace, switching there when needed. Nothing is executed: the tab is the
+    /// user's, and running it stays their decision.
+    /// </summary>
+    /// <returns>False when the workspace is gone, so the caller can say why nothing happened.</returns>
+    public bool OpenExternalQuery(string spaceId, string? databaseName, string content)
+    {
+        var space = Spaces.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, spaceId, StringComparison.OrdinalIgnoreCase));
+
+        if (space is null)
+        {
+            return false;
+        }
+
+        if (!ReferenceEquals(space, ActiveSpace))
+        {
+            SelectSpace(space);
+        }
+
+        var tab = CreateTab(databaseName, content ?? string.Empty);
+        tab.IsPinned = false;
+        StatusText = $"Opened an agent's statement in {space.Name} · nothing run";
+        ScheduleSave();
+        return true;
     }
 
     public void SelectSpace(SpaceViewModel space, TabViewModel? tab = null)

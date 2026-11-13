@@ -366,7 +366,7 @@ Settings → MCP page renders a quiet read-only list (reuse the Archive page pat
 "continue the agent's work in the studio" affordance. Both processes write through the same
 `McpAuditStore` in `Larik.Core`; the app is the only reader.
 
-### 5.6 Tool surface (5 tools, annotated)
+### 5.6 Tool surface (5 tools, annotated) — **all five shipped**
 
 | Tool | Annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`) | Notes vs Tauri |
 |---|---|---|
@@ -596,6 +596,7 @@ Phase 1 of §9 is in the tree. What exists now:
 | Settings → AI agents | New Settings section: global switch, per-workspace access rows, per-client onboarding command with copy, activity list with clear (refreshed while visible). |
 | Approvals | `Larik/Services/McpApprovalService.cs` owns a current-user pipe (`larik.studio.mcp.v1`), the dialog (Deny is the default button), a Windows notification plus taskbar flash when the window is not in front, and the two-minute auto-deny. `Larik.Mcp/ApprovalChannel.cs` parks the call and waits. `mcp_approvals` records the lifecycle; the audit row carries `decision_surface = app`. |
 | Limits | 120 s statement cap (verified against LocalDB: a `WAITFOR` past the cap returns "stopped after N seconds" rather than the engine's cancellation text), 200/1000 rows, and a 1 MiB payload budget that drops rows (`McpResponseBudget`, unit-tested) instead of discarding the result. Two calls per workspace run at once. |
+| `open_in_studio` | Fifth tool plus an **Open as tab** button on every activity row: the statement lands in a query tab in the right workspace and the shell switches there (verified: the editor holds the agent's SQL and the status bar says "nothing run"). Nothing is executed; a closed studio returns "Larik is not running…". |
 
 Deviation inside the approval work: **the toast needs packaging**. `AppNotificationManager.Register()`
 requires the package to declare the App Notification COM activator; the debug identity registers none,

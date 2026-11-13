@@ -20,6 +20,8 @@ public static class McpPipe
 
     public const string MessageTypeApproval = "approval";
     public const string MessageTypeDecision = "decision";
+    public const string MessageTypeOpen = "open";
+    public const string MessageTypeOpened = "opened";
 
     public static JsonSerializerOptions Json { get; } = new(JsonSerializerDefaults.Web);
 }
@@ -63,4 +65,33 @@ public sealed class McpApprovalDecision
         Status = status,
         Reason = reason,
     };
+}
+
+/// <summary>An agent asking the studio to put a statement in front of the user as a query tab.</summary>
+public sealed class McpOpenRequest
+{
+    public string Type { get; init; } = McpPipe.MessageTypeOpen;
+
+    public required string Id { get; init; }
+
+    public required string SpaceId { get; init; }
+
+    public string? SpaceName { get; init; }
+
+    public required string Statement { get; init; }
+
+    /// <summary>The database to open the tab on; null means the workspace's own.</summary>
+    public string? Database { get; init; }
+}
+
+/// <summary>The studio's answer to <see cref="McpOpenRequest"/>.</summary>
+public sealed class McpOpenResponse
+{
+    public string Type { get; init; } = McpPipe.MessageTypeOpened;
+
+    public required string Id { get; init; }
+
+    public bool Ok { get; init; }
+
+    public string? Reason { get; init; }
 }

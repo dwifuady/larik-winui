@@ -26,6 +26,14 @@ public static class McpApprovalService
 
     private static bool _started;
 
+    private static Func<McpOpenRequest, string?>? _openHandler;
+
+    /// <summary>
+    /// The shell registers how to open a tab; the handler runs on the UI thread and returns null on
+    /// success or a sentence explaining why the statement could not be opened.
+    /// </summary>
+    public static void SetOpenHandler(Func<McpOpenRequest, string?>? handler) => _openHandler = handler;
+
     public static void Start()
     {
         if (_started)
@@ -77,29 +85,92 @@ public static class McpApprovalService
             return;
         }
 
-        McpApprovalRequest? request;
+        string? type;
         try
         {
-            request = JsonSerializer.Deserialize<McpApprovalRequest>(line, McpPipe.Json);
+            using var document = JsonDocument.Parse(line);
+            type = document.RootElement.TryGetProperty("type", out var value) ? value.GetString() : null;
         }
         catch (JsonException)
         {
             return;
         }
 
-        if (request is null)
+        object? response;
+        if (string.Equals(type, McpPipe.MessageTypeOpen, StringComparison.Ordinal))
         {
-            return;
+            if (JsonSerializer.Deserialize<McpOpenRequest>(line, McpPipe.Json) is not { } open)
+            {
+                return;
+            }
+
+            response = await OpenAsync(open);
+        }
+        else
+        {
+            if (JsonSerializer.Deserialize<McpApprovalRequest>(line, McpPipe.Json) is not { } request)
+            {
+                return;
+            }
+
+            AppLog.Info("mcp", $"approval requested by an agent: space {request.SpaceId}, {request.Statement.Length} characters");
+            var decision = await AskAsync(request);
+            AppLog.Info("mcp", $"approval {decision.Status} for space {request.SpaceId}");
+            response = decision;
         }
 
-        AppLog.Info("mcp", $"approval requested by an agent: space {request.SpaceId}, {request.Statement.Length} characters");
-
-        var decision = await AskAsync(request);
-
-        AppLog.Info("mcp", $"approval {decision.Status} for space {request.SpaceId}");
-
         await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-        await writer.WriteLineAsync(JsonSerializer.Serialize(decision, McpPipe.Json));
+        await writer.WriteLineAsync(JsonSerializer.Serialize(response, McpPipe.Json));
+    }
+
+    /// <summary>
+    /// Opens an agent's statement as a query tab. The shell registers this when it loads; without it
+    /// the request fails with a reason the agent can relay instead of pretending it worked.
+    /// </summary>
+    private static async Task<McpOpenResponse> OpenAsync(McpOpenRequest request)
+    {
+        var handler = _openHandler;
+        if (handler is null)
+        {
+            return new McpOpenResponse
+            {
+                Id = request.Id,
+                Ok = false,
+                Reason = "Larik is still starting, so the statement was not opened. Try again in a moment.",
+            };
+        }
+
+        var completion = new TaskCompletionSource<McpOpenResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        if (!App.DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    var reason = handler(request);
+                    completion.TrySetResult(new McpOpenResponse
+                    {
+                        Id = request.Id,
+                        Ok = reason is null,
+                        Reason = reason,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("mcp", "opening an agent statement failed", ex);
+                    completion.TrySetResult(new McpOpenResponse
+                    {
+                        Id = request.Id,
+                        Ok = false,
+                        Reason = "Larik could not open the statement as a tab.",
+                    });
+                }
+            }))
+        {
+            return new McpOpenResponse { Id = request.Id, Ok = false, Reason = "The studio is closing." };
+        }
+
+        AppLog.Info("mcp", $"agent asked to open a statement in space {request.SpaceId}");
+        return await completion.Task;
     }
 
     private static async Task<McpApprovalDecision> AskAsync(McpApprovalRequest request)
