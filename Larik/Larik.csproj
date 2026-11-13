@@ -14,6 +14,13 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!--
+      Our own entry point (Program.cs) owns single-instance redirection: Windows starts a new process
+      for every activation, including a click on an agent approval toast, and a second studio would
+      mean a second window, store and approval channel.
+    -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <StartupObject>Larik.Program</StartupObject>
 
     <!--  Version is overridden from the git tag by the release workflow.  -->
     <Version>0.1.1</Version>
@@ -74,6 +81,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Larik.Core\Larik.Core.csproj" />
     <ProjectReference Include="..\Larik.Data\Larik.Data.csproj" />
     <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
@@ -118,4 +126,34 @@
     <PublishTrimmed>false</PublishTrimmed>
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
+
+  <!--
+    The MCP server is a second apphost, not a library: agents launch it themselves. It ships in its
+    own mcp\ folder because the two apphosts resolve overlapping Microsoft.Extensions packages to
+    different versions, and a shared folder lets one overwrite the other (that is exactly how the
+    0.1.1 installer shipped a server that could not start). Publish repeats it from a self-contained
+    build (see PublishMcpServer) so an installed copy needs no .NET runtime of its own.
+  -->
+  <Target Name="CopyMcpServer" AfterTargets="Build" Condition="'$(NoBuild)' != 'true'">
+    <ItemGroup>
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.dll" />
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.exe" />
+      <McpServerFile Include="$(MSBuildProjectDirectory)\..\Larik.Mcp\bin\$(Configuration)\net10.0\*.json" />
+    </ItemGroup>
+    <!-- No nested build on purpose: a project build started from here inherits this project's
+         RuntimeIdentifier, which the MCP project only gets from its own restore. The solution
+         builds it; a plain app build copies whatever is already there. -->
+    <Copy
+      Condition="'@(McpServerFile)' != ''"
+      SourceFiles="@(McpServerFile)"
+      DestinationFolder="$(OutDir)mcp\"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublishMcpServer" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <!-- A real dotnet process, not a nested MSBuild call: a publish for a runtime identifier needs
+         its own restore, and MSBuild skips Restore when it runs inside a build session. -->
+    <Exec
+      Command="dotnet publish &quot;$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishTrimmed=false -o &quot;$(PublishDir)mcp&quot; --nologo -v quiet" />
+  </Target>
 </Project>

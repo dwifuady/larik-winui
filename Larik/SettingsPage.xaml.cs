@@ -55,6 +55,10 @@ public sealed partial class SettingsPage : Page
         SnippetList.ItemsSource = _visible;
         Loaded += SettingsPage_Loaded;
 
+        // The page is cached and re-shown after Back; a timer belongs to the loaded instance, so
+        // stop it when the page leaves the tree and start a fresh one on the way back in.
+        Unloaded += (_, _) => StopAgentActivityTimer();
+
         // Driver rows are code-built, so their token brushes do not follow a Light/Dark switch on
         // their own. Re-draw them from the rows already fetched (no second catalogue request).
         ActualThemeChanged += (_, _) =>
@@ -137,6 +141,13 @@ public sealed partial class SettingsPage : Page
             SettingsNav.SelectedItem = SnippetsNavItem;
         }
 
+        // A cached page can come back with the agents section already selected; its timer was
+        // stopped on Unloaded, so start one for this instance.
+        if (AgentsSection.Visibility == Visibility.Visible)
+        {
+            StartAgentActivityTimer();
+        }
+
         SyncThemeChoice();
         RefreshCategories();
         RefreshList();
@@ -169,17 +180,31 @@ public sealed partial class SettingsPage : Page
         var tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag as string;
         var about = string.Equals(tag, "about", StringComparison.Ordinal);
         var appearance = string.Equals(tag, "appearance", StringComparison.Ordinal);
+        var agents = string.Equals(tag, "agents", StringComparison.Ordinal);
         var drivers = AddonPolicy.AddonsEnabled &&
             string.Equals(tag, "drivers", StringComparison.Ordinal);
 
         AppearanceSection.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
-        SnippetsSection.Visibility = about || appearance || drivers ? Visibility.Collapsed : Visibility.Visible;
+        AgentsSection.Visibility = agents ? Visibility.Visible : Visibility.Collapsed;
+        SnippetsSection.Visibility = about || appearance || agents || drivers
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         AboutSection.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
         AddonsSection.Visibility = drivers ? Visibility.Visible : Visibility.Collapsed;
 
         if (appearance)
         {
             SyncThemeChoice();
+        }
+
+        if (agents)
+        {
+            RefreshAgentsSection();
+            StartAgentActivityTimer();
+        }
+        else
+        {
+            StopAgentActivityTimer();
         }
 
         if (drivers)
@@ -298,8 +323,423 @@ public sealed partial class SettingsPage : Page
 
     // ---------------------------------------------------------------- add-ons
 
-    private void RefreshAddons_Click(object sender, RoutedEventArgs e) => _ = RefreshAddonsAsync();
+    // ---------------------------------------------------------------- AI agents (MCP)
 
+    private StudioStore? _mcpStore;
+    private bool _agentsLoading;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _agentsActivityTimer;
+
+    /// <summary>
+    /// The store opens a connection per call, so a second handle here is safe: the MCP server is a
+    /// separate process doing exactly the same thing while the app is open.
+    /// </summary>
+    private StudioStore McpStore => _mcpStore ??= new StudioStore();
+
+    private static readonly (string Id, string Label)[] AgentClients =
+    [
+        ("claude", "Claude Code"),
+        ("cursor", "Cursor"),
+        ("vscode", "VS Code"),
+        ("codex", "Codex"),
+    ];
+
+    private void RefreshAgentsSection()
+    {
+        var enabled = McpStore.IsMcpEnabled();
+
+        _agentsLoading = true;
+        try
+        {
+            AgentsToggle.IsOn = enabled;
+        }
+        finally
+        {
+            _agentsLoading = false;
+        }
+
+        AgentsStatusText.Text = enabled
+            ? "On — the agents you configure below can read the workspaces you expose, even while Larik is closed."
+            : "Off — no agent can connect. Nothing is listed and nothing is served.";
+
+        AgentsWorkspacesCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        AgentsConnectCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        AgentsActivityCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+        if (AgentClientChoice.Items.Count == 0)
+        {
+            foreach (var client in AgentClients)
+            {
+                AgentClientChoice.Items.Add(new ComboBoxItem { Content = client.Label, Tag = client.Id });
+            }
+        }
+
+        if (AgentClientChoice.SelectedIndex < 0)
+        {
+            AgentClientChoice.SelectedIndex = 0;
+        }
+
+        if (!enabled)
+        {
+            return;
+        }
+
+        RenderAgentWorkspaces();
+        RenderAgentActivity();
+        SyncAgentCommand();
+    }
+
+    private void AgentsToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_agentsLoading)
+        {
+            return;
+        }
+
+        McpStore.SetMcpEnabled(AgentsToggle.IsOn);
+        RefreshAgentsSection();
+    }
+
+    private void RenderAgentWorkspaces()
+    {
+        AgentsWorkspacePanel.Children.Clear();
+
+        var spaces = McpStore.GetMcpSpaces().Where(space => space.HasConnection).ToList();
+        AgentsWorkspaceEmptyText.Visibility = spaces.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        foreach (var space in spaces)
+        {
+            var row = new Grid
+            {
+                Padding = new Thickness(0, 2, 0, 2),
+                ColumnSpacing = 12,
+            };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var text = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock
+            {
+                Text = space.Name,
+                FontSize = 13,
+                Foreground = Resource("StudioTextPrimaryBrush", StudioColors.Muted),
+            });
+
+            var provider = Larik.Data.DatabaseProviderCatalog.Find(space.ProviderId);
+            text.Children.Add(new TextBlock
+            {
+                Text = provider?.DisplayName ?? $"{space.ProviderId} (not installed)",
+                FontSize = 10,
+                Foreground = Resource("StudioTextMutedBrush", StudioColors.Muted),
+            });
+            row.Children.Add(text);
+
+            var choice = new ComboBox
+            {
+                MinWidth = 150,
+                Tag = space.Id,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            AutomationProperties.SetName(choice, $"{space.Name} agent access");
+            choice.Items.Add(new ComboBoxItem { Content = "Off", Tag = McpAccess.Off });
+            choice.Items.Add(new ComboBoxItem { Content = "Read only", Tag = McpAccess.Read });
+            choice.Items.Add(new ComboBoxItem { Content = "Read and write", Tag = McpAccess.Write });
+            choice.SelectedIndex = space.Access switch
+            {
+                McpAccess.Read => 1,
+                McpAccess.Write => 2,
+                _ => 0,
+            };
+
+            // Attached after the initial selection so loading the list cannot look like a change.
+            choice.SelectionChanged += AgentAccess_SelectionChanged;
+            Grid.SetColumn(choice, 1);
+            row.Children.Add(choice);
+
+            AgentsWorkspacePanel.Children.Add(row);
+        }
+    }
+
+    private void AgentAccess_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not ComboBox { Tag: string spaceId } choice ||
+            choice.SelectedItem is not ComboBoxItem { Tag: McpAccess access })
+        {
+            return;
+        }
+
+        McpStore.SetSpaceMcpAccess(spaceId, access);
+    }
+
+    private void RenderAgentActivity()
+    {
+        AgentsActivityPanel.Children.Clear();
+
+        var entries = McpStore.GetMcpLog(30);
+        AgentsActivityEmptyText.Visibility = entries.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        foreach (var entry in entries)
+        {
+            var row = new Grid
+            {
+                Padding = new Thickness(0, 3, 0, 3),
+                ColumnSpacing = 12,
+            };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var text = new StackPanel { Spacing = 2 };
+            text.Children.Add(new TextBlock
+            {
+                Text = entry.SpaceName is null ? entry.Tool : $"{entry.Tool} · {entry.SpaceName}",
+                FontSize = 12,
+                Foreground = Resource("StudioTextPrimaryBrush", StudioColors.Muted),
+            });
+
+            var detail = entry.Reason is { Length: > 0 } reason
+                ? $"{entry.RecordedAt} UTC · {reason}"
+                : $"{entry.RecordedAt} UTC · {entry.RowsReturned} row(s) · {entry.DurationMs} ms";
+            text.Children.Add(new TextBlock
+            {
+                Text = detail,
+                FontSize = 10,
+                Foreground = Resource("StudioTextMutedBrush", StudioColors.Muted),
+                MaxLines = 2,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            row.Children.Add(text);
+
+            // Status is text plus colour, never colour alone.
+            var status = new TextBlock
+            {
+                Text = entry.Status switch
+                {
+                    "denied" => "Refused",
+                    "error" => "Failed",
+                    _ => "Delivered",
+                },
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Resource(
+                    entry.Status switch
+                    {
+                        "denied" => "StudioWarningBrush",
+                        "error" => "StudioDangerBrush",
+                        _ => "StudioSuccessBrush",
+                    },
+                    StudioColors.Muted),
+            };
+            Grid.SetColumn(status, 2);
+            row.Children.Add(status);
+
+            // The agent's statement is stored, so the user can pick up its work where it stopped.
+            if (!string.IsNullOrWhiteSpace(entry.Statement) && !string.IsNullOrWhiteSpace(entry.SpaceId))
+            {
+                var open = new Button
+                {
+                    Content = "Open as tab",
+                    Tag = entry,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                AutomationProperties.SetName(open, $"Open the {entry.Tool} statement as a tab");
+                open.Click += OpenAuditStatement_Click;
+                Grid.SetColumn(open, 1);
+                row.Children.Add(open);
+            }
+
+            AgentsActivityPanel.Children.Add(row);
+        }
+    }
+
+    private void OpenAuditStatement_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: McpLogRecord entry } || _studio is null)
+        {
+            return;
+        }
+
+        if (!_studio.OpenExternalQuery(entry.SpaceId ?? string.Empty, null, entry.Statement ?? string.Empty))
+        {
+            return;
+        }
+
+        // The tab lives in the shell, so go there and show it. Settings is hosted in the shell's
+        // frame; if there is no back entry (the frame was cleared), say where the tab went instead
+        // of navigating to a second shell.
+        if (Frame.CanGoBack)
+        {
+            Frame.GoBack();
+        }
+        else
+        {
+            AgentsStatusText.Text = $"Opened in {entry.SpaceName}. Press Back to see the tab.";
+        }
+    }
+
+    private async void ClearAgentActivity_Click(object sender, RoutedEventArgs e)
+    {
+        // The audit list is the only record of what an agent did, and clearing it cannot be undone.
+        var dialog = new ContentDialog
+        {
+            XamlRoot = AgentsSection.XamlRoot,
+            Title = "Clear agent activity?",
+            Content = new TextBlock
+            {
+                Text = "This removes the record of every agent call, including the ones Larik refused. " +
+                       "It cannot be undone.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Clear",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        McpStore.ClearMcpLog();
+        RenderAgentActivity();
+    }
+
+    /// <summary>
+    /// The list is written by another process, so a visible section polls it while it is on screen:
+    /// a user watching an agent work should not have to navigate away to see what it just did.
+    /// </summary>
+    private void StartAgentActivityTimer()
+    {
+        if (_agentsActivityTimer is not null || !McpStore.IsMcpEnabled())
+        {
+            return;
+        }
+
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(4);
+        timer.Tick += (_, _) =>
+        {
+            if (AgentsSection.Visibility == Visibility.Visible)
+            {
+                RenderAgentActivity();
+            }
+        };
+        timer.Start();
+        _agentsActivityTimer = timer;
+        AppLog.Info("mcp", "activity timer started");
+    }
+
+    private void StopAgentActivityTimer()
+    {
+        _agentsActivityTimer?.Stop();
+        _agentsActivityTimer = null;
+    }
+
+    private void AgentClientChoice_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        SyncAgentCommand();
+
+    private void SyncAgentCommand()
+    {
+        if (AgentCommandText is null)
+        {
+            return;
+        }
+
+        var client = (AgentClientChoice?.SelectedItem as ComboBoxItem)?.Tag as string ?? "claude";
+        var serverPath = FindMcpServerPath();
+        var installed = serverPath is not null;
+
+        // Packaged builds expose the server on PATH; portable builds point at the file.
+        var exe = serverPath ?? "larik-mcp";
+
+        // A packaged studio keeps its store inside the package, and a client that starts the EXE by
+        // path has no package identity to find it. Name the folder explicitly in that case.
+        var stateDirectory = LarikPaths.IsPackaged ? LarikPaths.StateDirectory : null;
+
+        var cliTarget = installed ? $"\"{exe}\"" : exe;
+        if (stateDirectory is not null)
+        {
+            cliTarget = $"{cliTarget} --state \"{stateDirectory}\"";
+        }
+
+        var commandJson = stateDirectory is null
+            ? $"\"command\":\"{JsonPath(exe)}\""
+            : $"\"command\":\"{JsonPath(exe)}\",\"args\":[\"--state\",\"{JsonPath(stateDirectory)}\"]";
+
+        AgentCommandText.Text = client switch
+        {
+            "cursor" => $"{{ \"mcpServers\": {{ \"larik\": {{ {commandJson} }} }} }}",
+            "vscode" => $"code --add-mcp '{{\"name\":\"larik\",\"type\":\"stdio\",{commandJson}}}'",
+            "codex" => $"codex mcp add larik -- {cliTarget}",
+            _ => $"claude mcp add larik -- {cliTarget}",
+        };
+
+        AgentCommandNote.Text = serverPath is null
+            ? "This build has not installed the MCP server yet, so larik-mcp is only a name here. Packaging the server is the next step."
+            : installed
+                ? "The command points at this build's MCP server. Packaging puts it on PATH as larik-mcp, so the command gets shorter."
+                : "The MCP server is installed next to Larik; the command works as shown.";
+    }
+
+    /// <summary>Windows path as it has to appear inside JSON: backslashes escaped.</summary>
+    private static string JsonPath(string path) =>
+        path.Replace("\\", "\\\\", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The MCP server EXE: in its own <c>mcp\</c> folder beside the app (each apphost owns its
+    /// dependencies), or in its project output while developing.
+    /// </summary>
+    private static string? FindMcpServerPath()
+    {
+        foreach (var candidate in new[]
+                 {
+                     Path.Combine(AppContext.BaseDirectory, "mcp", "Larik.Mcp.exe"),
+                     Path.Combine(AppContext.BaseDirectory, "Larik.Mcp.exe"),
+                 })
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+#if DEBUG
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var depth = 0; depth < 8 && directory is not null; depth++)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "Larik.Mcp",
+                "bin",
+                "Debug",
+                "net10.0",
+                "Larik.Mcp.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+#endif
+
+        return null;
+    }
+
+    private void CopyAgentCommand_Click(object sender, RoutedEventArgs e)
+    {
+        var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        package.SetText(AgentCommandText.Text);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+        Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+    }
+
+    private void RefreshAddons_Click(object sender, RoutedEventArgs e) => _ = RefreshAddonsAsync();
     private async Task RefreshAddonsAsync()
     {
         if (_addonsBusy)

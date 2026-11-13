@@ -22,6 +22,8 @@ public sealed class SqlServerProvider : IDatabaseProvider
 
     public IEditorLanguage? EditorLanguage => TSqlDialect.Instance;
 
+    public IReadOnlyStatementPolicy? ReadOnlyPolicy => TSqlReadOnlyPolicy.Instance;
+
     public string? DescribeEndpoint(ConnectionProfile profile) =>
         string.IsNullOrWhiteSpace(profile.Get("server"))
             ? null
@@ -600,6 +602,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         var stopwatch = Stopwatch.StartNew();
         var rowLimit = options.EffectiveMaxRows;
         var results = new List<QueryResult>();
+        SqlTransaction? readOnlyTransaction = null;
 
         await OpenAsync(cancellationToken);
         await _gate.WaitAsync(cancellationToken);
@@ -611,8 +614,15 @@ internal sealed class SqlServerConnection : IDatabaseConnection
 
             SwitchDatabase(database);
 
+            // Read-only exposure (an agent reading through a saved connection): run the batch inside
+            // a transaction that is never committed. T-SQL has no read-only session, so a statement
+            // the classifier misjudges still cannot commit here. Locks live for the query, which is
+            // the same window the caller waits for anyway.
+            readOnlyTransaction = options.ReadOnly == true ? _connection!.BeginTransaction() : null;
+
             await using var command = _connection!.CreateCommand();
             command.CommandText = sql;
+            command.Transaction = readOnlyTransaction;
             // The provider's timeout setting is the user's one control here: a report that needs
             // minutes must not die at a value the app chose. 0 means wait indefinitely.
             command.CommandTimeout = Math.Max(0, _profile.GetInt("queryTimeout", 60));
@@ -661,6 +671,21 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         }
         finally
         {
+            if (readOnlyTransaction is not null)
+            {
+                // The rollback is the protection, so it must happen even when the batch threw.
+                try
+                {
+                    await readOnlyTransaction.RollbackAsync(CancellationToken.None);
+                }
+                catch
+                {
+                    // A connection that already died ended the transaction server-side.
+                }
+
+                await readOnlyTransaction.DisposeAsync();
+            }
+
             _gate.Release();
         }
 

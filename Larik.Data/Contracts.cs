@@ -107,6 +107,15 @@ public sealed class QueryExecutionOptions
 
     public int MaxRows { get; init; } = QueryLimits.DefaultMaxRows;
 
+    /// <summary>
+    /// True asks the provider to enforce read-only semantics as deep as the engine allows (for
+    /// example a server-side read-only transaction). Null is the historical read-write behaviour,
+    /// so older callers and providers keep working unchanged. A provider that cannot honour it
+    /// honestly should refuse rather than pretend: the host pairs this with
+    /// <see cref="IDatabaseProvider.ReadOnlyPolicy"/>.
+    /// </summary>
+    public bool? ReadOnly { get; init; }
+
     public int EffectiveMaxRows => QueryLimits.Normalize(MaxRows);
 }
 
@@ -354,7 +363,30 @@ public interface IDatabaseProvider
     /// </summary>
     string? DescribeIdentity(ConnectionProfile profile) => null;
 
+    /// <summary>
+    /// How this engine proves a statement read-only before executing it at access level "read".
+    /// Null means the host must refuse read-mode execution for this provider (fail closed), which
+    /// keeps every provider written before this member existed safe without changes.
+    /// </summary>
+    IReadOnlyStatementPolicy? ReadOnlyPolicy => null;
+
     IDatabaseConnection CreateConnection(ConnectionProfile profile);
+}
+
+/// <summary>
+/// A provider's statement gate for read-only exposure (an AI agent reading through a saved
+/// connection, for example). Implementations must be fail-closed: return true only when every
+/// statement in <paramref name="sql"/> is provably a read on this engine.
+/// <para>
+/// This is a contract seam, not a security guarantee on its own. Providers that can ask the server
+/// (a read-only transaction, a read-only session) should also honour
+/// <see cref="QueryExecutionOptions.ReadOnly"/>.
+/// </para>
+/// </summary>
+public interface IReadOnlyStatementPolicy
+{
+    /// <summary>True only when every statement in the batch is provably a read; false otherwise.</summary>
+    bool IsProvenRead(string sql);
 }
 
 /// <summary>One open connection. A provider owns its own client library and pooling.</summary>

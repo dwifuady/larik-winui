@@ -26,3 +26,13 @@ public sealed class VirtualReferenceRecord
 
     public required string TargetColumn { get; init; }
 }
+
+/// <summary>Local storage for user-defined references; the shell supplies the real store.</summary>
+public interface IVirtualReferenceStore
+{
+    IReadOnlyList<VirtualReferenceRecord> GetVirtualReferences(string spaceId, string databaseName);
+
+    bool SaveVirtualReference(VirtualReferenceRecord reference);
+
+    bool DeleteVirtualReference(string id);
+}

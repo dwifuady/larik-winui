@@ -19,6 +19,45 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   `app_state`. A packaged build (the Store edition, or a debug run through `winapp`) never checks
   or replaces its files: About hides the updater and says Store updates come from the Store.
 
+- **AI agents (MCP)**: `Larik.Mcp.exe` is an MCP server that agents such as Claude Code, Cursor,
+  VS Code and Codex launch over **stdio** — no port, no token, no listener. It reads the same local
+  store and Windows Credential Manager entries as the app, so an agent uses saved connections without
+  ever seeing credentials. Exposure is opt-in twice: a global switch (default off) plus a per-workspace
+  level — **Off**, **Read only** or **Read and write** — and unknown values read as Off. **Four tools**:
+  `list_connections`, `list_databases`, `get_schema` (typed columns, primary keys, foreign keys,
+  optional routines), `run_query` (200 rows by default, 1000 max, per-set `truncated` flag, engine
+  messages) and `open_in_studio` (drops the agent's statement into a query tab in the right workspace
+  and switches there — nothing runs). Read-only workspaces are enforced in two layers: the provider's fail-closed statement
+  classifier, and the engine itself — SQL Server runs every read-mode batch in a transaction that is
+  always rolled back, PostgreSQL in `BEGIN TRANSACTION READ ONLY`. A statement the classifier cannot
+  prove is a read is refused with the reason and the two ways forward. Every call, including refusals,
+  is audited in `mcp_log` in the same SQLite store. Reads and schema work with the studio closed.
+  Deliberate gap: write workspaces are approved **inside the studio**, so with Larik closed a write is
+  refused rather than run on the saved login's permissions — client-side elicitation is blocked by the
+  SDK's tool pipeline (see the gap table). Exposure, onboarding and the activity list live in
+  **Settings → AI agents**: the switch, one level per workspace (Off / Read only / Read and write), a
+  copy-paste command for Claude Code, Cursor, VS Code and Codex, and a live list of calls including
+  refusals. A shipped build installs `Larik.Mcp.exe` beside the app and aliases it as **`larik-mcp`**.
+
+  **Writes ask first.** On a Read and write workspace every `run_query` parks on a dialog showing the
+  statement — Deny is the default button, so Enter on a prompt nobody read runs nothing. When the
+  window is not in front, a Windows notification and a taskbar flash bring it back; the notification
+  carries **Run it** and **Deny** buttons, so a decision can be made from the notification centre
+  without finding the window. Two minutes without an answer refuses and the agent gets the reason.
+  The agent's call stays blocked the whole time, and the audit row records who decided.
+
+  **One studio per session.** Windows starts a fresh process for every activation — a shortcut, and
+  also a click on an approval notification — so the app registers a single-instance key: later
+  activations are redirected to the running studio, which comes to the front instead of a second
+  window, store and approval channel appearing.
+
+  **Limits that protect the agent as much as the server.** A statement is stopped after two minutes
+  whatever the workspace's own timeout says (a saved profile can wait forever; an agent cannot), with
+  a message that suggests narrowing the query. Results are trimmed by dropping rows until they fit
+  one MiB — columns, leading rows and the `truncated` flag survive, so the agent still learns
+  something. At most two calls run against one workspace at once. Clearing the activity list asks
+  first, because it is the only record of what an agent did.
+
 - **Vertical tabs, groups and pinned folders** per workspace, active tab tinted with the workspace
   colour (2 px strip + 26 % tint), database subtitle revealed on hover/active, close button.
   **Groups** are collapsible headers with a colour edge and a count; their tabs indent underneath,
@@ -364,6 +403,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 
 | Gap | Why / next step |
 |---|---|
+| MCP writes need the studio open | The approval prompt is the studio's dialog, so a closed studio means a refused write. Client-side elicitation (MRTR) is implemented in the tool but **not shipped**: the SDK's attribute-tool pipeline turns `InputRequiredException` into a generic `-32603` instead of an `input_required` result (verified against a 2026-07-28 session). It needs `run_query` registered as a low-level handler first. |
+| `larik-mcp` only resolves in an installed package | The manifest declares the execution alias and `dotnet publish` puts `Larik.Mcp.exe` beside `Larik.exe`, so an installed (MSIX/portable) build has the command on PATH. The `winapp run` dev layout regenerates its `AppX` folder and drops the copied EXE, so a debug-identity package has a dangling alias; Settings falls back to the build-output path there. || SQL Server read-only is best-effort plus one layer | The classifier plus an always-rolled-back transaction stop transactional writes, but non-transactional effects (some extended procedures, linked-server writes reachable from a misjudged read) are outside it. A read-only login remains the only hard guarantee; the UI copy should say so. |
 | Three providers ship | SQL Server, PostgreSQL and the in-memory Demo. MongoDB ships as an add-on from its own repository (`dwifuady/larik-mongodb`). |
 | Updates are full downloads and unsigned | Each release downloads the whole ZIP or installer; there are no delta patches. The updater trusts TLS plus the release's `SHA256SUMS.txt`, not an Authenticode signature, so signing the GitHub artifacts is still future work. A portable copy in a read-only folder cannot update in place and points at the new ZIP instead. |
 | MongoDB is a T-SQL surface over a NoSQL engine | The provider translates your T-SQL into aggregation pipelines / write commands and passes mongosh (`db.c.method(…)`) through. Deliberately limited: single-column `JOIN … ON` (a multi-key ON is rejected), an `INSERT` column list is recommended (bare `VALUES` store under generated keys), a handful of mongosh methods, and no multi-document transactions yet (`BEGIN TRAN` errors). The result-tab *Generated query* strip shows the pipeline that actually ran. |

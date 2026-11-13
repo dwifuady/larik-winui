@@ -45,6 +45,11 @@
                         <FontIcon Glyph="&#xE790;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem x:Name="AgentsNavItem" Content="AI agents" Tag="agents">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE99A;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem x:Name="SnippetsNavItem" Content="Snippets" Tag="snippets">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE943;" />
@@ -122,6 +127,185 @@
                             Foreground="{ThemeResource StudioTextMutedBrush}"
                             Text="Larik redraws open tabs and results immediately; nothing needs a restart."
                             TextWrapping="Wrap" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!--  ============ AI AGENTS ============  -->
+                <ScrollViewer
+                    x:Name="AgentsSection"
+                    Visibility="Collapsed"
+                    VerticalScrollBarVisibility="Auto">
+                    <StackPanel
+                        MaxWidth="760"
+                        HorizontalAlignment="Left"
+                        Spacing="14">
+                        <StackPanel Spacing="3">
+                            <TextBlock
+                                FontSize="20"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                Text="AI agents" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Text="Claude Code, Cursor, VS Code and Codex can use the connections you already saved. Credentials stay in Windows Credential Manager: the agent asks the MCP server, and the MCP server asks Larik what it may read."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <Border
+                            Padding="18"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                            <StackPanel Spacing="12">
+                                <ToggleSwitch
+                                    x:Name="AgentsToggle"
+                                    AutomationProperties.Name="Allow AI agents"
+                                    Header="Allow AI agents"
+                                    OffContent="Off"
+                                    OnContent="On"
+                                    Toggled="AgentsToggle_Toggled" />
+                                <TextBlock
+                                    x:Name="AgentsStatusText"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border
+                            x:Name="AgentsWorkspacesCard"
+                            Padding="18"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Visibility="Collapsed">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                        Text="Workspaces agents may use" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="Read only is enforced by the database, not by trusting what the agent writes."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <StackPanel x:Name="AgentsWorkspacePanel" Spacing="8" />
+
+                                <TextBlock
+                                    x:Name="AgentsWorkspaceEmptyText"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="A workspace needs a saved connection before an agent can use it."
+                                    TextWrapping="Wrap"
+                                    Visibility="Collapsed" />
+
+                                <TextBlock
+                                    FontSize="11"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="Writes ask you first: the statement appears in Larik, and the agent waits for your answer. With Larik closed, writes are refused."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border
+                            x:Name="AgentsConnectCard"
+                            Padding="18"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Visibility="Collapsed">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                        Text="Connect an agent" />
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                                        Text="Run this once in the agent's terminal. There is no port and no token to paste."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <ComboBox
+                                    x:Name="AgentClientChoice"
+                                    AutomationProperties.Name="Agent client"
+                                    SelectionChanged="AgentClientChoice_SelectionChanged" />
+
+                                <TextBox
+                                    x:Name="AgentCommandText"
+                                    AutomationProperties.Name="Agent command"
+                                    FontFamily="Cascadia Mono, Consolas"
+                                    IsReadOnly="True"
+                                    TextWrapping="Wrap" />
+
+                                <TextBlock
+                                    x:Name="AgentCommandNote"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    TextWrapping="Wrap" />
+
+                                <Button
+                                    x:Name="CopyAgentCommandButton"
+                                    AutomationProperties.Name="Copy agent command"
+                                    Click="CopyAgentCommand_Click"
+                                    Content="Copy command" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border
+                            x:Name="AgentsActivityCard"
+                            Padding="18"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Visibility="Collapsed">
+                            <StackPanel Spacing="12">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock
+                                            FontSize="14"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                            Text="Recent agent activity" />
+                                        <TextBlock
+                                            FontSize="11"
+                                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                                            Text="Every call is recorded here, including the ones Larik refused."
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button
+                                        x:Name="ClearAgentActivityButton"
+                                        Grid.Column="1"
+                                        AutomationProperties.Name="Clear agent activity"
+                                        Click="ClearAgentActivity_Click"
+                                        Content="Clear" />
+                                </Grid>
+
+                                <StackPanel x:Name="AgentsActivityPanel" Spacing="6" />
+
+                                <TextBlock
+                                    x:Name="AgentsActivityEmptyText"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Text="No agent has connected yet."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
 

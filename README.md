@@ -57,6 +57,12 @@ The Store edition updates through the Store instead.
   — a virtualized grid with a sticky row-number gutter, draggable columns, syntax-coloured cell
   preview with JSON/XML formatting and Ctrl+F find, foreign-key and **custom** reference previews,
   copy as TSV / INSERT / IN clause, and CSV/JSON export.
+- **AI agents, on your terms.** `Larik.Mcp.exe` is an MCP server your agent launches over stdio — no
+  port, no token, no credentials shared. Workspaces are exposed per level (Off / Read only / Read and
+  write), reads are enforced by the engine (rolled-back transaction on SQL Server, `READ ONLY` on
+  PostgreSQL), writes ask you first in a dialog that blocks the agent, and every call lands in an
+  activity list. Reads work with the studio closed, and any statement the agent touched can be
+  reopened as a query tab to continue by hand.
 - **Windows-native craft.** Mica and the system theme, Light/Dark/HighContrast, real keyboard and
   accessibility support, and no web-app chrome.
 
