@@ -23,7 +23,7 @@
     <StartupObject>Larik.Program</StartupObject>
 
     <!--  Version is overridden from the git tag by the release workflow.  -->
-    <Version>0.1.1</Version>
+    <Version>0.2.0</Version>
     <Product>Larik</Product>
     <Company>Larik</Company>
   </PropertyGroup>
