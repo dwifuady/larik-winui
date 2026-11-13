@@ -492,9 +492,11 @@ positional record parameters. Old plugins keep compiling and loading.
    | Splitting for the gate | provider's `IEditorLanguage.Split` | EXE calls it; no global splitter |
    | Row/time/size caps, audit, approvals | `Larik.Mcp` + `Larik.Core` | EXE-side |
 
-   The MongoDB add-on can later ship its own policy (its shell parser already classifies); until it
-   does, read-space `run_query` on MongoDB refuses with the standard message — fail closed, no app
-   change, old add-on versions unaffected.
+   The MongoDB add-on ships the same seam from version 1.2.0 (`MongoReadOnlyPolicy`): the provider's
+   own splitter decides shell-vs-SQL, SQL has to translate to a `SELECT` or `USE`, and a mongosh call
+   has to be one allow-listed read with no `$out`/`$merge`, so read-space `run_query` works on
+   MongoDB. Older add-on versions still refuse with the standard message — fail closed, no app
+   change.
 
 4. **`StudioStore` schema v7** (additive, `EnsureColumn`-style): `spaces.mcp_access TEXT NOT NULL
    DEFAULT 'off'`; `mcp_log` and `mcp_approvals` tables (Tauri's proven columns, `provider_id`
@@ -526,7 +528,7 @@ model (Tauri) is the variant that adds a stealable secret; stdio removes it.
 |---|---|---|---|
 | SQL Server | fail-closed classifier (no EXEC/`xp_`/`sp_`/OPENROWSET/`INTO`/SET/USE/BEGIN/…, literals stripped first) + always-rollback transaction + `ApplicationIntent=ReadOnly` | every write/DDL verb it can lex; misclassified *transactional* writes (rolled back) | non-transactional side effects: some extended procedures, linked-server/remote writes reachable from misclassified reads, session-scoped temp objects (harmless — vanish with the per-call session). `ApplicationIntent` only routes on AG listeners; it is not enforcement. Honest label: best-effort+, stronger than Tauri by one layer; a **read-only login remains the only hard guarantee** (offered in UI copy, like Tauri) |
 | PostgreSQL | `BEGIN TRANSACTION READ ONLY` per call (server rejects writes) + banned-leads/anywhere gate (no SET/BEGIN/COPY/DO/CALL/dblink/…) | all writes and DDL server-side; session-escape attempts | reads of sensitive data (by design — the user opted the space in) |
-| MongoDB (add-on, later) | shell allow-list + `$out`/`$merge` denial (as Tauri ships) | parsed write methods | until the add-on adopts `IReadOnlyStatementPolicy`: read spaces refuse `run_query` entirely |
+| MongoDB (add-on 1.2.0+) | fail-closed structural gate: the provider's own splitter, SQL compiled to a read pipeline (`SELECT`/`USE`), mongosh read allow-list with `$out`/`$merge` denial | parsed write methods, `runCommand`, chained calls, mixed batches, writing pipeline stages | MongoDB has no server-side read-only session, so the gate is the only layer: a translator bug or an unnoticed write path is not rolled back. A read-only login remains the hard guarantee |
 
 **What the human-in-the-loop buys**: the write approval stops a *rogue model* (it cannot click), and
 the app-side dialog additionally stops a *compromised client* (it cannot click either — the
