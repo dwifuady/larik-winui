@@ -119,6 +119,21 @@ public partial class TabViewModel : ObservableObject
     public partial string Content { get; set; }
 
     /// <summary>
+    /// True while this tab is rendered in its own window. The tab keeps its rail row and stays the
+    /// active tab (the shell shows a placeholder instead of a second editor); the pop-out owns the
+    /// visible query surface. Not persisted: a restart opens every tab docked, as it always has.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PopoutGlyphVisibility))]
+    [NotifyPropertyChangedFor(nameof(PopoutStatus))]
+    public partial bool IsPoppedOut { get; set; }
+
+    /// <summary>The rail marks a popped-out tab so the row does not look like a tab that vanished.</summary>
+    public Visibility PopoutGlyphVisibility => IsPoppedOut ? Visibility.Visible : Visibility.Collapsed;
+
+    public string PopoutStatus => IsPoppedOut ? "Open in its own window" : string.Empty;
+
+    /// <summary>
     /// Pinned tabs are never removed by auto-archive. The flag survives a restart and a restore
     /// from the archive page.
     /// </summary>

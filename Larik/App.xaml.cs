@@ -23,6 +23,12 @@ public partial class App : Application
     public static Window Window { get; private set; } = null!;
 
     /// <summary>
+    /// The tab windows, at most one per tab. Owned here rather than by the page so the process
+    /// lifetime (main window closing, app exit) is the one place that can close them all.
+    /// </summary>
+    public static PopoutManager Popouts { get; } = new();
+
+    /// <summary>
     /// The UI thread dispatcher. Use <c>App.DispatcherQueue</c> to marshal calls
     /// to the UI thread. Fully qualified to avoid CS0104 ambiguity with
     /// <see cref="Windows.System.DispatcherQueue"/>.

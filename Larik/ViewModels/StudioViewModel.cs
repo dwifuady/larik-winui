@@ -270,6 +270,21 @@ public partial class StudioViewModel : ObservableObject
     public Visibility WorkspaceChromeVisibility => HasSpaces ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
+    /// True while the active tab is rendered in its own window. The shell keeps the rail row and
+    /// the selection, but swaps the editor + results for a placeholder: two live query surfaces on
+    /// one tab would fight over the text and the grid.
+    /// </summary>
+    public bool IsActiveTabPoppedOut => HasSpaces && ActiveTab is { IsPoppedOut: true };
+
+    /// <summary>Editor, toolbar and results are hidden only while a pop-out owns the active tab.</summary>
+    public Visibility EditorChromeVisibility =>
+        HasSpaces && !IsActiveTabPoppedOut ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>The placeholder that points at the pop-out window (and can dock it back).</summary>
+    public Visibility PoppedOutVisibility =>
+        HasSpaces && IsActiveTabPoppedOut ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
     /// Three chips read as a map; past three, unlabelled marks stop identifying anything. Beyond
     /// three the footer shows a window on the active workspace with a chevron on whichever side
     /// still has one, so the strip stays calm instead of shrinking into specks.
@@ -368,6 +383,25 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Procedures of the active database, used after EXEC and by the schema browser.</summary>
     public IReadOnlyList<RoutineSchema> Routines => _routines;
 
+    /// <summary>
+    /// Snippets for a tab's dialect. A pop-out must not borrow the active workspace's list when it
+    /// belongs to another one.
+    /// </summary>
+    public IReadOnlyList<SnippetDef> SnippetsFor(TabViewModel tab) =>
+        _snippets.ForDialect(tab.Space.Connection.Dialect);
+
+    /// <summary>Tables of the tab's database, from the shared schema cache (empty until loaded).</summary>
+    public IReadOnlyList<TableSchema> TablesFor(TabViewModel tab) => SnapshotFor(tab)?.Tables ?? [];
+
+    /// <summary>Routines of the tab's database, from the shared schema cache.</summary>
+    public IReadOnlyList<RoutineSchema> RoutinesFor(TabViewModel tab) => SnapshotFor(tab)?.Routines ?? [];
+
+    private SchemaSnapshot? SnapshotFor(TabViewModel tab)
+    {
+        var database = DatabaseNameFor(tab.Space, tab);
+        return database is null ? null : _schemaCache.GetValueOrDefault(SchemaKey(tab.Space, database));
+    }
+
     public QueryResult? LastResult { get; private set; }
 
     public event EventHandler? ResultChanged;
@@ -379,6 +413,9 @@ public partial class StudioViewModel : ObservableObject
 
     /// <summary>The shell shows the database picker before creating a tab; the view owns dialogs.</summary>
     public event EventHandler? NewTabRequested;
+
+    /// <summary>A tab is leaving the workspace: close its pop-out window, if any, before the model goes.</summary>
+    public event EventHandler<TabViewModel>? TabClosing;
 
     [RelayCommand]
     private void ToggleSidebar() => IsSidebarOpen = !IsSidebarOpen;
@@ -869,6 +906,9 @@ public partial class StudioViewModel : ObservableObject
             return false;
         }
 
+        // The window renders this tab; close it before the model (and its session) goes away.
+        TabClosing?.Invoke(this, tab);
+
         ClearGroupUndo();
         _lastGrouping = [];
         var wasActive = ReferenceEquals(ActiveTab, tab);
@@ -1242,6 +1282,7 @@ public partial class StudioViewModel : ObservableObject
         // Each tab owns one session; close them before the connection and profile disappear.
         foreach (var tab in space.Tabs)
         {
+            TabClosing?.Invoke(this, tab);
             tab.Session.Cancel();
             await tab.CloseSessionAsync(CancellationToken.None);
         }
@@ -1299,6 +1340,7 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveLanguage));
         OnPropertyChanged(nameof(ActiveSpace));
         OnPropertyChanged(nameof(WindowTitle));
+        NotifyPopoutChrome();
         NotifyWorkspaceFooter();
     }
 
@@ -1417,11 +1459,20 @@ public partial class StudioViewModel : ObservableObject
     public async Task<QueryResult> RunCellReferenceQueryAsync(
         string sql,
         int maxRows,
+        CancellationToken cancellationToken) =>
+        ActiveTab is { } activeTab
+            ? await RunCellReferenceQueryAsync(activeTab, sql, maxRows, cancellationToken)
+            : QueryResult.Error("Connect the workspace to preview referenced rows.", TimeSpan.Zero);
+
+    /// <summary>The same lookup on a specific tab, so a pop-out previews against its own session.</summary>
+    public async Task<QueryResult> RunCellReferenceQueryAsync(
+        TabViewModel tab,
+        string sql,
+        int maxRows,
         CancellationToken cancellationToken)
     {
-        var tab = ActiveTab;
-        var space = ActiveSpace;
-        if (tab is null || space?.Connection.IsConnected != true)
+        var space = tab.Space;
+        if (!space.Connection.IsConnected)
         {
             return QueryResult.Error("Connect the workspace to preview referenced rows.", TimeSpan.Zero);
         }
@@ -1442,14 +1493,23 @@ public partial class StudioViewModel : ObservableObject
     }
 
     /// <summary>A row-count estimate for choosing list vs lookup; null when the provider cannot tell.</summary>
+    public Task<long?> EstimateRowCountAsync(
+        string? schema,
+        string table,
+        CancellationToken cancellationToken) =>
+        ActiveTab is { } activeTab
+            ? EstimateRowCountAsync(activeTab, schema, table, cancellationToken)
+            : Task.FromResult<long?>(null);
+
+    /// <summary>The same estimate on a specific tab, used by the pop-out's grid.</summary>
     public async Task<long?> EstimateRowCountAsync(
+        TabViewModel tab,
         string? schema,
         string table,
         CancellationToken cancellationToken)
     {
-        var tab = ActiveTab;
-        var space = ActiveSpace;
-        if (tab is null || space?.Connection.IsConnected != true)
+        var space = tab.Space;
+        if (!space.Connection.IsConnected)
         {
             return null;
         }
@@ -1475,27 +1535,31 @@ public partial class StudioViewModel : ObservableObject
     /// Creates the reference resolver for a result. Null when the active provider has no SQL
     /// dialect, because building a safe lookup is the dialect's job.
     /// </summary>
-    public ICellReferenceController? CreateCellReferenceController(QueryResult result)
+    public ICellReferenceController? CreateCellReferenceController(QueryResult result) =>
+        ActiveTab is { } activeTab ? CreateCellReferenceController(activeTab, result) : null;
+
+    /// <summary>
+    /// The same resolver for a specific tab. A popped-out tab may not be the shell's active tab,
+    /// so its dialect, database and schema come from the tab rather than the shell's selection.
+    /// </summary>
+    public ICellReferenceController? CreateCellReferenceController(TabViewModel tab, QueryResult result)
     {
-        if (ActiveLanguage is not ISqlDialect dialect)
+        if (tab.Space.Connection.EditorLanguage is not ISqlDialect dialect)
         {
             return null;
         }
 
-        var database = result.Database
-            ?? (ActiveTab is { } activeTab && ActiveSpace is { } activeSpace
-                ? DatabaseNameFor(activeSpace, activeTab)
-                : null);
+        var database = result.Database ?? DatabaseNameFor(tab.Space, tab);
 
         return new CellReferenceController(
             result,
-            string.IsNullOrWhiteSpace(result.Statement) ? ActiveTab?.Content : result.Statement,
-            Tables,
+            string.IsNullOrWhiteSpace(result.Statement) ? tab.Content : result.Statement,
+            TablesFor(tab),
             dialect,
-            RunCellReferenceQueryAsync,
-            EstimateRowCountAsync,
+            (sql, maxRows, token) => RunCellReferenceQueryAsync(tab, sql, maxRows, token),
+            (schema, table, token) => EstimateRowCountAsync(tab, schema, table, token),
             _store,
-            ActiveSpace?.Id,
+            tab.Space.Id,
             database);
     }
 
@@ -1504,14 +1568,17 @@ public partial class StudioViewModel : ObservableObject
     /// inside a batch, so declared variables and temp tables keep their scope exactly as they do
     /// when SQL Server receives a native batch; <c>GO</c> starts a new server batch.
     /// </summary>
-    public async Task RunBatchesAsync(IReadOnlyList<string> batches, bool append = false)
+    public Task RunBatchesAsync(IReadOnlyList<string> batches, bool append = false) =>
+        ActiveTab is { } tab ? RunBatchesAsync(tab, batches, append) : Task.CompletedTask;
+
+    /// <summary>
+    /// Runs batches on a specific tab, whether or not it is the shell's active tab. A tab rendered
+    /// in its own window still owns its session, results and status, so the pop-out can run it
+    /// while the main window is looking at another tab.
+    /// </summary>
+    public async Task RunBatchesAsync(TabViewModel tab, IReadOnlyList<string> batches, bool append = false)
     {
-        var tab = ActiveTab;
-        var space = ActiveSpace;
-        if (tab is null || space is null)
-        {
-            return;
-        }
+        var space = tab.Space;
 
         if (IsBusy)
         {
@@ -1611,13 +1678,12 @@ public partial class StudioViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task CommitTransactionAsync()
-    {
-        if (ActiveTab is not { } tab)
-        {
-            return;
-        }
+    private Task CommitTransactionAsync() =>
+        ActiveTab is { } tab ? CommitTransactionAsync(tab) : Task.CompletedTask;
 
+    /// <summary>Commits on a specific tab; a pop-out can settle its own transaction.</summary>
+    public async Task CommitTransactionAsync(TabViewModel tab)
+    {
         try
         {
             await tab.Session.CommitAsync(_lifetime.Token);
@@ -1635,13 +1701,12 @@ public partial class StudioViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task RollbackTransactionAsync()
-    {
-        if (ActiveTab is not { } tab)
-        {
-            return;
-        }
+    private Task RollbackTransactionAsync() =>
+        ActiveTab is { } tab ? RollbackTransactionAsync(tab) : Task.CompletedTask;
 
+    /// <summary>Rolls back on a specific tab; a pop-out can settle its own transaction.</summary>
+    public async Task RollbackTransactionAsync(TabViewModel tab)
+    {
         try
         {
             await tab.Session.RollbackAsync(_lifetime.Token);
@@ -1661,14 +1726,26 @@ public partial class StudioViewModel : ObservableObject
     [RelayCommand]
     private void CancelRun()
     {
-        if (ActiveTab is not { } tab || !tab.IsRunning)
+        if (ActiveTab is { } tab)
+        {
+            CancelRun(tab);
+        }
+    }
+
+    /// <summary>Stops the query running on a specific tab, from either window.</summary>
+    public void CancelRun(TabViewModel tab)
+    {
+        if (!tab.IsRunning)
         {
             return;
         }
 
         tab.Session.Cancel();
         tab.StatusText = "Cancelling…";
-        StatusText = tab.StatusText;
+        if (ReferenceEquals(tab, ActiveTab))
+        {
+            StatusText = tab.StatusText;
+        }
     }
 
     /// <summary>The deliberately conservative safety net, applied per GO batch.</summary>
@@ -1705,40 +1782,73 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>Selects a result tab and republishes its grid, message and summary.</summary>
     public void SelectResult(ResultSetViewModel result)
     {
-        if (ActiveTab is null || !ReferenceEquals(result.Tab, ActiveTab))
+        if (ActiveTab is { } tab)
+        {
+            SelectResult(tab, result);
+        }
+    }
+
+    /// <summary>
+    /// Selects a result on a specific tab. Only the shell's active tab updates the mirrored grid;
+    /// a pop-out selects on its own tab and repaints its own strip.
+    /// </summary>
+    public void SelectResult(TabViewModel tab, ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(result.Tab, tab))
         {
             return;
         }
 
-        ActiveTab.SelectResult(result);
-        SyncResultsMirror(ActiveTab);
-        ActiveTab.StatusText = result.Result.IsError
+        tab.SelectResult(result);
+
+        if (!ReferenceEquals(tab, ActiveTab))
+        {
+            return;
+        }
+
+        SyncResultsMirror(tab);
+        tab.StatusText = result.Result.IsError
             ? "Error"
             : result.Result.Rows.Count > 0
                 ? $"{result.Result.Rows.Count} rows returned"
                 : result.Result.Message;
-        StatusText = ActiveTab.StatusText;
+        StatusText = tab.StatusText;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Closes one result tab and keeps the remaining active result/shell mirror coherent.</summary>
     public void CloseResult(ResultSetViewModel result)
     {
-        if (ActiveTab is null || !ReferenceEquals(result.Tab, ActiveTab))
+        if (ActiveTab is { } tab)
+        {
+            CloseResult(tab, result);
+        }
+    }
+
+    /// <summary>Closes a result on a specific tab, from either window.</summary>
+    public void CloseResult(TabViewModel tab, ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(result.Tab, tab))
         {
             return;
         }
 
-        ActiveTab.CloseResult(result);
-        SyncResultsMirror(ActiveTab);
-        ActiveTab.StatusText = ActiveTab.ActiveResult is not { } active
+        tab.CloseResult(result);
+
+        if (!ReferenceEquals(tab, ActiveTab))
+        {
+            return;
+        }
+
+        SyncResultsMirror(tab);
+        tab.StatusText = tab.ActiveResult is not { } active
             ? "No results"
             : active.Result.IsError
                 ? "Error"
                 : active.Result.Rows.Count > 0
                     ? $"{active.Result.Rows.Count} rows returned"
                     : active.Result.Message;
-        StatusText = ActiveTab.StatusText;
+        StatusText = tab.StatusText;
         ResultChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -1862,6 +1972,9 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(HasSpaces));
         OnPropertyChanged(nameof(WelcomeVisibility));
         OnPropertyChanged(nameof(WorkspaceChromeVisibility));
+        OnPropertyChanged(nameof(EditorChromeVisibility));
+        OnPropertyChanged(nameof(PoppedOutVisibility));
+        OnPropertyChanged(nameof(IsActiveTabPoppedOut));
         OnPropertyChanged(nameof(RailSpaces));
         OnPropertyChanged(nameof(HiddenSpaceCount));
         OnPropertyChanged(nameof(HiddenSpaceCountLabel));
@@ -2001,6 +2114,7 @@ public partial class StudioViewModel : ObservableObject
             ActiveTab = null;
             SyncResultMirror(null);
             StatusText = "Ready";
+            NotifyPopoutChrome();
             return;
         }
 
@@ -2031,8 +2145,40 @@ public partial class StudioViewModel : ObservableObject
         // A run can finish while another tab is active; this restores that tab's own status
         // instead of leaving the shell stuck on "Running…".
         StatusText = string.IsNullOrWhiteSpace(tab.StatusText) ? "Ready" : tab.StatusText;
+        NotifyPopoutChrome();
         ActiveTabChanged?.Invoke(this, EventArgs.Empty);
         ScheduleSave();
+    }
+
+    /// <summary>
+    /// Marks a tab as rendered in its own window. The rail row and the selection stay: the shell
+    /// shows the placeholder, and the window is the one live query surface for the tab.
+    /// </summary>
+    public void NotifyPoppedOut(TabViewModel tab) => tab.IsPoppedOut = true;
+
+    /// <summary>
+    /// Marks a tab as docked again. If it is still the selected tab, the shell takes the editor and
+    /// results back, including anything the pop-out changed in the meantime.
+    /// </summary>
+    public void NotifyDocked(TabViewModel tab)
+    {
+        tab.IsPoppedOut = false;
+
+        if (!ReferenceEquals(tab, ActiveTab))
+        {
+            return;
+        }
+
+        SyncResultMirror(tab);
+        StatusText = string.IsNullOrWhiteSpace(tab.StatusText) ? "Ready" : tab.StatusText;
+        ActiveTabChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void NotifyPopoutChrome()
+    {
+        OnPropertyChanged(nameof(IsActiveTabPoppedOut));
+        OnPropertyChanged(nameof(EditorChromeVisibility));
+        OnPropertyChanged(nameof(PoppedOutVisibility));
     }
 
     /// <summary>
@@ -2720,6 +2866,13 @@ public partial class StudioViewModel : ObservableObject
             {
                 ScheduleSave();
             }
+
+            if (args.PropertyName == nameof(TabViewModel.IsPoppedOut)
+                && ReferenceEquals(tab, ActiveTab))
+            {
+                // The shell swaps the editor for the pop-out placeholder (and back on dock).
+                NotifyPopoutChrome();
+            }
         };
     }
 
@@ -2825,9 +2978,11 @@ public partial class StudioViewModel : ObservableObject
     /// Loads the schema for the tab's database, from cache when possible. Completion is scoped to
     /// the active tab, so an in-flight load for a tab the user already left is discarded.
     /// </summary>
-    private async Task SyncSchemaForTabAsync(SpaceViewModel space, TabViewModel tab)
+    private async Task SyncSchemaForTabAsync(SpaceViewModel space, TabViewModel tab, bool forPopout = false)
     {
-        if (!ReferenceEquals(space, ActiveSpace) || !ReferenceEquals(tab, ActiveTab))
+        // A pop-out owns its own tab and may belong to a workspace the shell is not showing, so it
+        // loads into the shared cache without replacing what the active tab's completion sees.
+        if (!forPopout && (!ReferenceEquals(space, ActiveSpace) || !ReferenceEquals(tab, ActiveTab)))
         {
             return;
         }
@@ -2835,18 +2990,29 @@ public partial class StudioViewModel : ObservableObject
         var database = DatabaseNameFor(space, tab);
         if (!space.Connection.IsConnected || string.IsNullOrWhiteSpace(database))
         {
-            ClearSchema();
+            if (!forPopout)
+            {
+                ClearSchema();
+            }
+
             return;
         }
 
         var key = SchemaKey(space, database);
         if (_schemaCache.TryGetValue(key, out var cached))
         {
-            ApplySchema(cached);
+            if (!forPopout)
+            {
+                ApplySchema(cached);
+            }
+
             return;
         }
 
-        ClearSchema();
+        if (!forPopout)
+        {
+            ClearSchema();
+        }
 
         try
         {
@@ -2879,6 +3045,12 @@ public partial class StudioViewModel : ObservableObject
             // Completion degrades to keywords/snippets; the session itself stays usable.
         }
     }
+
+    /// <summary>
+    /// Warms the schema cache for a tab rendered in its own window. The pop-out's completion reads
+    /// the cache through <see cref="TablesFor"/>; nothing here changes the active tab's schema.
+    /// </summary>
+    public Task EnsurePopoutSchemaAsync(TabViewModel tab) => SyncSchemaForTabAsync(tab.Space, tab, forPopout: true);
 
     /// <summary>The database a tab is bound to, falling back to the space default only for an unbound tab.</summary>
     private static string? DatabaseNameFor(SpaceViewModel space, TabViewModel tab) =>

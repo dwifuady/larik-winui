@@ -62,6 +62,9 @@ public sealed partial class MainPage : Page
 
         ViewModel.DriverInstallRequested += ViewModel_DriverInstallRequested;
 
+        // The manager owns tab windows; the page only asks it to show, focus or dock one.
+        App.Popouts.Attach(ViewModel);
+
         // Settings is pushed onto the same frame; keep the shell (and its live session) alive.
         NavigationCacheMode = NavigationCacheMode.Required;
         Loaded += OnLoaded;
@@ -182,10 +185,50 @@ public sealed partial class MainPage : Page
     private void ToggleResultsAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        ToggleResultsPane();
+
+        // The pop-out owns the visible results for this tab.
+        if (ViewModel.ActiveTab is not { IsPoppedOut: true })
+        {
+            ToggleResultsPane();
+        }
     }
 
     private void BrowseSchema_Click(object sender, RoutedEventArgs e) => OpenSchemaPeek();
+
+    /// <summary>Ctrl+Alt+O moves the active tab between this window and its own.</summary>
+    private void TogglePopoutAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (ViewModel.ActiveTab is not { } tab)
+        {
+            return;
+        }
+
+        if (tab.IsPoppedOut)
+        {
+            App.Popouts.Close(tab.Id, dock: true);
+        }
+        else
+        {
+            App.Popouts.Show(tab);
+        }
+    }
+
+    private void ShowPopoutButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.ActiveTab is { IsPoppedOut: true } tab)
+        {
+            App.Popouts.Focus(tab.Id);
+        }
+    }
+
+    private void DockPopoutButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.ActiveTab is { IsPoppedOut: true } tab)
+        {
+            App.Popouts.Close(tab.Id, dock: true);
+        }
+    }
 
     private void OpenSchemaPeek()
     {
@@ -393,6 +436,22 @@ public sealed partial class MainPage : Page
             return;
         }
 
+        if (e.PropertyName == nameof(StudioViewModel.PoppedOutVisibility))
+        {
+            // The placeholder replaces the editor + results in place; docking brings them back.
+            if (ViewModel.IsActiveTabPoppedOut)
+            {
+                HideResultsPane();
+            }
+            else
+            {
+                SyncEditorFromActiveTab();
+                RenderResults();
+            }
+
+            return;
+        }
+
         if (e.PropertyName == nameof(StudioViewModel.HasSpaces) && !ViewModel.HasSpaces)
         {
             // The welcome surface replaces the editor; a result pane left open would sit behind it.
@@ -520,6 +579,13 @@ public sealed partial class MainPage : Page
 
     private void SyncEditorFromActiveTab()
     {
+        // A popped-out tab's editor lives in its own window; writing here would clobber what the
+        // user is typing there.
+        if (ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            return;
+        }
+
         // Language first: the first highlight after a tab/space switch must use the right one.
         SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
         SqlEditor.Text = ViewModel.ActiveTab?.Content ?? string.Empty;
@@ -542,6 +608,11 @@ public sealed partial class MainPage : Page
 
     private void SqlEditor_TextChanged(object? sender, EventArgs e)
     {
+        if (ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            return;
+        }
+
         if (ViewModel.ActiveTab is not null)
         {
             ViewModel.ActiveTab.Content = SqlEditor.Text;
@@ -597,55 +668,17 @@ public sealed partial class MainPage : Page
     /// </summary>
     private async Task RunFromEditorAsync(bool all, bool append)
     {
-        var text = SqlEditor.Text;
-        var selection = SqlEditor.Selection;
+        // The visible editor for a popped-out tab is in its own window; this one is stale.
+        if (ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            return;
+        }
 
         ShowResultsPane();
 
-        IReadOnlyList<string> batches;
-        if (!selection.IsEmpty)
-        {
-            batches = SplitBatches(text.Substring(selection.Start, selection.Length));
-        }
-        else if (all)
-        {
-            // F5 may contain GO: SQL Server does not understand it (it is an SSMS/sqlcmd
-            // separator), so ask the active language to split real server batches before sending.
-            batches = SplitBatches(text);
-        }
-        else
-        {
-            var statement = SqlEditor.EditorLanguage.StatementAt(text, SqlEditor.CaretOffset);
-            if (!statement.IsEmpty)
-            {
-                SqlEditor.Select(new EditorSpan(statement.Start, statement.Length));
-            }
-
-            batches = [text.Substring(statement.Start, statement.Length)];
-        }
-
-        await ViewModel.RunBatchesAsync(batches, append);
-    }
-
-    /// <summary>
-    /// The provider's language owns batch boundaries (T-SQL splits on <c>GO</c>); the shell only
-    /// turns the returned document spans into the strings the session sends.
-    /// </summary>
-    private IReadOnlyList<string> SplitBatches(string text)
-    {
-        var spans = SqlEditor.EditorLanguage.SplitBatches(text);
-        if (spans.Count == 0)
-        {
-            return [];
-        }
-
-        var batches = new List<string>(spans.Count);
-        foreach (var span in spans)
-        {
-            batches.Add(text.Substring(span.Start, span.Length));
-        }
-
-        return batches;
+        // Selection, statement-under-caret and GO batches are decided once, in QueryRunner, so the
+        // pop-out window runs exactly what this one would.
+        await ViewModel.RunBatchesAsync(QueryRunner.ResolveBatches(SqlEditor, all), append);
     }
 
     private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);
@@ -661,6 +694,13 @@ public sealed partial class MainPage : Page
         if (e.ClickedItem is TabViewModel tab)
         {
             ViewModel.SelectTab(tab);
+
+            // Selecting a popped-out tab shows the placeholder here and brings the window that
+            // actually renders it forward.
+            if (tab.IsPoppedOut)
+            {
+                App.Popouts.Focus(tab.Id);
+            }
         }
     }
 
@@ -722,6 +762,37 @@ public sealed partial class MainPage : Page
         };
         rename.Click += (_, _) => BeginInlineRename(tab, target);
         flyout.Items.Add(rename);
+
+        // A tab is rendered in exactly one window. The menu says which verb applies now, so
+        // "pop out" and "dock back" never sit side by side as two ways to do nothing.
+        if (tab.IsPoppedOut)
+        {
+            var show = new MenuFlyoutItem
+            {
+                Text = "Show window",
+                Icon = new FontIcon { Glyph = "\uE8A7" },
+            };
+            show.Click += (_, _) => App.Popouts.Focus(tab.Id);
+            flyout.Items.Add(show);
+
+            var dock = new MenuFlyoutItem
+            {
+                Text = "Dock back",
+                Icon = new FontIcon { Glyph = "\uE73F" },
+            };
+            dock.Click += (_, _) => App.Popouts.Close(tab.Id, dock: true);
+            flyout.Items.Add(dock);
+        }
+        else
+        {
+            var popout = new MenuFlyoutItem
+            {
+                Text = "Pop out window",
+                Icon = new FontIcon { Glyph = "\uE8A7" },
+            };
+            popout.Click += (_, _) => App.Popouts.Show(tab);
+            flyout.Items.Add(popout);
+        }
 
         // The existing menu gains the two group entries; grouping never needs a new toolbar.
         if (tab.Space.Groups.Count > 0 || tab.Group is not null)
@@ -2806,6 +2877,12 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void ShowResultsPane()
     {
+        // A popped-out tab renders its results in its own window; this grid must stay out of it.
+        if (ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            return;
+        }
+
         if (_resultsVisible)
         {
             return;
@@ -2939,6 +3016,14 @@ public sealed partial class MainPage : Page
 
     private void RenderResults()
     {
+        // The pop-out owns the grid for a popped-out tab: rendering here would paint a second copy
+        // behind the placeholder and steal the reference controller from the other window.
+        if (ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            HideResultsPane();
+            return;
+        }
+
         var result = ViewModel.LastResult;
         ResultMessageText.Foreground = result?.IsError == true
             ? ThemeBrush("StudioDangerBrush", StudioColors.Danger)
