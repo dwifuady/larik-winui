@@ -139,6 +139,9 @@ branch on the provider id in the shell:
   literals, comments and quoted identifiers are stripped before the `;` split) and the keyword-list
   rules; the provider supplies its own lists (`TSqlReadOnlyPolicy`, `PostgresReadOnlyPolicy`,
   `DemoReadOnlyPolicy`).
+- A non-SQL engine proves reads structurally instead of with keyword lists: the MongoDB add-on's
+  `MongoReadOnlyPolicy` (1.2.0+) reuses its own splitter, requires SQL to translate to a read command
+  (`SELECT`/`USE`), and allows one allow-listed mongosh read call with no `$out`/`$merge`.
 - `QueryExecutionOptions.ReadOnly` (default `null`) asks for engine-level enforcement inside
   `ExecuteAsync`/`ExecuteBatchAsync`. SQL Server wraps the batch in a transaction that is always
   rolled back; PostgreSQL runs it inside `BEGIN TRANSACTION READ ONLY`. Providers that cannot honour

@@ -346,7 +346,7 @@ bare file.
   public static class LarikDataContract
   {
       /// <summary>Semantic contract version, independent of AssemblyVersion.</summary>
-      public const string Version = "1.1.0";
+      public const string Version = "1.2.0";
   }
   ```
 

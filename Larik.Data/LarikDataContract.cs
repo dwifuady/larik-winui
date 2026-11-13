@@ -12,7 +12,7 @@ public static class LarikDataContract
     /// Bump the minor version for additive members with defaults; bump the major version only for a
     /// breaking change, which also means accepting that old add-ons stop loading.
     /// </summary>
-    public const string Version = "1.1.0";
+    public const string Version = "1.2.0";
 
     /// <summary>
     /// Whether <paramref name="range"/> admits the running contract. The only supported form is
