@@ -31,8 +31,9 @@ installer and portable ZIP are unsigned, so Windows SmartScreen may warn on the 
 **More info → Run anyway**. The Microsoft Store edition is signed by Microsoft.
 
 GitHub builds keep themselves current: an in-app notice checks Releases at launch, downloads the
-matching installer or portable ZIP, verifies its checksum, and installs it without leaving the app.
-The Store edition updates through the Store instead.
+matching installer or portable ZIP, verifies its checksum (a missing or unreachable checksum blocks
+the install), and installs it without leaving the app. The Store edition updates through the Store
+instead.
 
 ## What it does
 
@@ -108,8 +109,9 @@ completion lists), so the shell never knows a specific database.
 - **Demo** (built in, in-memory) — offline use, onboarding and UI tests.
 - **MongoDB** — installed as a driver/add-on from Settings → Drivers.
 
-Providers are discovered from the app's referenced assemblies and from `Plugins` folders under the
-app directory and `%LOCALAPPDATA%\Larik WinUI`. The connection dialog is generated from the
+Providers are discovered from the app's referenced assemblies and from manifest-backed add-ons under
+`%LOCALAPPDATA%\Larik WinUI\Plugins`; a bare DLL in a plugins folder is deliberately not loaded. The
+connection dialog is generated from the
 provider's declared settings, declared password fields go to Windows Credential Manager, and a
 declared file field (SQLite-style) keeps an editable path with a Browse… action.
 

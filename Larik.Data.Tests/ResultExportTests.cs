@@ -59,6 +59,30 @@ public sealed class ResultExportTests
         Assert.Contains("\"  padded  \"", csv, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("=WEBSERVICE(A1)")]
+    [InlineData("+1+1")]
+    [InlineData("-2+3")]
+    [InlineData("@SUM(A1)")]
+    [InlineData("\t=cmd")]
+    [InlineData("\r=cmd")]
+    public void Csv_neutralises_values_a_spreadsheet_would_run_as_formulas(string value)
+    {
+        var csv = ResultExport.ToCsv(Result([value, "1"]));
+
+        // The apostrophe is Excel's text marker; the original text follows untouched.
+        Assert.Contains("'" + value, csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r\n" + value, csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Json_keeps_a_formula_like_value_unchanged()
+    {
+        const string value = "=1+1";
+        using var document = JsonDocument.Parse(ResultExport.ToJson(Result([value, "1"])));
+        Assert.Equal(value, document.RootElement[0].GetProperty("name").GetString());
+    }
+
     [Fact]
     public void Json_is_an_array_of_objects_with_nulls()
     {

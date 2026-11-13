@@ -105,18 +105,31 @@ public static class ResultExport
         builder.Append("\r\n");
     }
 
+    /// <summary>
+    /// Makes a value inert when a spreadsheet opens it. Excel and LibreOffice treat a cell that
+    /// starts with <c>=</c>, <c>+</c>, <c>-</c> or <c>@</c> (or a control character) as a formula,
+    /// and formulas can fetch remote content (<c>HYPERLINK</c>, <c>WEBSERVICE</c>). A leading
+    /// apostrophe is the spreadsheet's own "this is text" marker and is not shown in the cell.
+    /// JSON keeps the original value: only tabular formats can carry a live formula.
+    /// </summary>
+    public static string NeutralizeSpreadsheetFormula(string value) =>
+        value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r'
+            ? "'" + value
+            : value;
+
     private static string EscapeCsv(string value)
     {
+        var safe = NeutralizeSpreadsheetFormula(value);
         var needsQuotes =
-            value.Length == 0
-            || value[0] == ' '
-            || value[^1] == ' '
-            || value.Contains(',')
-            || value.Contains('"')
-            || value.Contains('\r')
-            || value.Contains('\n');
+            safe.Length == 0
+            || safe[0] == ' '
+            || safe[^1] == ' '
+            || safe.Contains(',')
+            || safe.Contains('"')
+            || safe.Contains('\r')
+            || safe.Contains('\n');
 
-        return needsQuotes ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
+        return needsQuotes ? "\"" + safe.Replace("\"", "\"\"") + "\"" : safe;
     }
 
     /// <summary>

@@ -364,6 +364,14 @@ public interface IDatabaseProvider
     string? DescribeIdentity(ConnectionProfile profile) => null;
 
     /// <summary>
+    /// A short, user-facing warning when this profile would expose credentials or data to someone
+    /// who can intercept the network (for example a remote server whose certificate is not
+    /// verified). Null means nothing to warn about. The host shows the text next to the connection
+    /// form and in the workspace list; an older provider keeps working unchanged.
+    /// </summary>
+    string? DescribeSecurityWarning(ConnectionProfile profile) => null;
+
+    /// <summary>
     /// How this engine proves a statement read-only before executing it at access level "read".
     /// Null means the host must refuse read-mode execution for this provider (fail closed), which
     /// keeps every provider written before this member existed safe without changes.

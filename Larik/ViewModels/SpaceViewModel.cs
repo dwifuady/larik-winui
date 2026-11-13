@@ -34,6 +34,8 @@ public partial class SpaceViewModel : ObservableObject
             OnPropertyChanged(nameof(Identity));
             OnPropertyChanged(nameof(ConnectionSummary));
             OnPropertyChanged(nameof(TooltipText));
+            OnPropertyChanged(nameof(SecurityWarning));
+            OnPropertyChanged(nameof(SecurityWarningVisibility));
             OnPropertyChanged(nameof(ConnectedDatabaseText));
             OnPropertyChanged(nameof(ContextBadgeText));
             OnPropertyChanged(nameof(ConnectActionVisibility));
@@ -125,6 +127,12 @@ public partial class SpaceViewModel : ObservableObject
 
     /// <summary>The configured login (or integrated-security phrase), when the provider names one.</summary>
     public string? Identity => Connection.Identity;
+
+    /// <summary>A provider-owned transport warning shown on the workspace row (for example unverified TLS).</summary>
+    public string? SecurityWarning => Connection.SecurityWarning;
+
+    public Visibility SecurityWarningVisibility =>
+        string.IsNullOrWhiteSpace(SecurityWarning) ? Visibility.Collapsed : Visibility.Visible;
 
     /// <summary>One line for the manager: provider · endpoint · identity, without repeating the provider.</summary>
     public string ConnectionSummary => string.IsNullOrWhiteSpace(Identity)

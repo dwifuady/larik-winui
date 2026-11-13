@@ -23,7 +23,8 @@ docs/                          provider/add-on handbooks, feature detail, this f
 
 `Larik.Data` is the dependency-free core (`net10.0`, no packages, no WinUI types). The app owns the
 UI and composition root; providers own everything engine-specific. The shell never branches on a
-provider — `DatabaseProviderCatalog` loads them from referenced assemblies and Plugins folders.
+provider — `DatabaseProviderCatalog` loads them from referenced assemblies and manifest-backed
+add-on folders.
 
 `Larik.Core` is the half both processes need: the SQLite store (`StudioStore`), Windows Credential
 Manager secrets, state paths and the diagnostics log. It targets plain `net10.0` so the MCP EXE, a
@@ -248,8 +249,9 @@ tag. The release publishes these asset names:
 `https://api.github.com/repos/dwifuady/larik-winui/releases/latest` once per launch, compares the
 tag with `AppInfo.Version`, and picks `Larik-<version>-win-<arch>-setup.exe` when an Inno
 uninstaller is beside the app, otherwise the portable ZIP. The download goes to
-`%LOCALAPPDATA%\Larik WinUI\updates\<version>\` and is checked against `SHA256SUMS.txt`; a complete
-download is reused on the next launch. The installer runs with `/DIR=<current folder> /RELAUNCH=1`,
+`%LOCALAPPDATA%\Larik WinUI\updates\<version>\` and is checked against `SHA256SUMS.txt`; a missing,
+unreachable or incomplete checksum blocks the install (fail closed) instead of trusting TLS alone. A
+complete download is reused on the next launch. The installer runs with `/DIR=<current folder> /RELAUNCH=1`,
 and the portable path extracts the ZIP and starts a `cmd` helper that waits for the app to exit,
 copies with `robocopy`, and reopens `Larik.exe`.
 

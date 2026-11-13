@@ -80,6 +80,9 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
     /// <summary>The identity the saved profile connects as, or null when the provider has none to name.</summary>
     public string? Identity => Provider?.DescribeIdentity(Profile);
 
+    /// <summary>A provider-owned warning when the saved profile weakens transport security.</summary>
+    public string? SecurityWarning => Provider?.DescribeSecurityWarning(Profile);
+
     /// <summary>Status is colour AND text — never colour alone.</summary>
     public string StatusLine => Provider is null
         ? StatusText
@@ -166,6 +169,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(EditorLanguage));
         OnPropertyChanged(nameof(Endpoint));
         OnPropertyChanged(nameof(Identity));
+        OnPropertyChanged(nameof(SecurityWarning));
         OnPropertyChanged(nameof(StatusLine));
     }
 
@@ -194,6 +198,7 @@ public sealed partial class ConnectionViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(EditorLanguage));
         OnPropertyChanged(nameof(Endpoint));
         OnPropertyChanged(nameof(Identity));
+        OnPropertyChanged(nameof(SecurityWarning));
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(StatusLine));
         OnPropertyChanged(nameof(ConnectionActionLabel));

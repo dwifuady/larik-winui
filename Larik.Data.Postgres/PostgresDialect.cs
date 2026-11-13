@@ -225,10 +225,14 @@ public sealed class PostgresDialect : SqlLanguage, ISqlDialect
 
         if (type == "bytea" && value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            return $"'\\x{value[2..]}'";
+            // E'' keeps the bytea \x prefix literal even when standard_conforming_strings is off.
+            return $"E'\\\\x{value[2..]}'";
         }
 
-        return $"'{value.Replace("'", "''")}'";
+        // E'' makes backslash escaping explicit, so a value containing \' can never close the
+        // literal early on a server configured with standard_conforming_strings=off. Doubling the
+        // backslashes keeps the value unchanged under both settings.
+        return $"E'{value.Replace("\\", "\\\\").Replace("'", "''")}'";
     }
 
     private static readonly HashSet<string> NumericTypes = new(StringComparer.OrdinalIgnoreCase)

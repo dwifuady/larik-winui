@@ -164,7 +164,7 @@ public sealed class UpdateService
             if (asset?.Name is not { Length: > 0 } assetName ||
                 Path.GetFileName(assetName) != assetName ||
                 !Uri.TryCreate(asset.BrowserDownloadUrl, UriKind.Absolute, out var assetUri) ||
-                !string.Equals(assetUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                !IsTrustedDownloadUri(assetUri))
             {
                 return new(
                     UpdateCheckStatus.Failed,
@@ -175,9 +175,19 @@ public sealed class UpdateService
                     string.Equals(candidate.Name, ChecksumsAssetName, StringComparison.OrdinalIgnoreCase))
                 ?.BrowserDownloadUrl;
             Uri? checksumsUri = Uri.TryCreate(checksumsUrl, UriKind.Absolute, out var parsedChecksums) &&
-                string.Equals(parsedChecksums.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                IsTrustedDownloadUri(parsedChecksums)
                     ? parsedChecksums
                     : null;
+
+            if (checksumsUri is null)
+            {
+                // Fail closed: without the published hash the download is only "whatever GitHub
+                // served", which cannot detect a tampered release. Offer the manual download instead.
+                return new(
+                    UpdateCheckStatus.Failed,
+                    Error: $"Larik {versionText} has no SHA256SUMS.txt, so it cannot be verified. " +
+                        "Download it manually from GitHub Releases.");
+            }
 
             await Task.Run(() => CleanupOldDownloads(versionText), CancellationToken.None);
 
@@ -468,8 +478,9 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// Checks the SHA-256 published with the release. A missing checksum asset is not fatal (the
-    /// download already came over TLS); a mismatch is.
+    /// Checks the SHA-256 published with the release. Every path fails closed: no checksum asset,
+    /// an unreachable checksum, a missing entry or a mismatch all block the install. TLS alone is
+    /// not an independent check against a compromised release.
     /// </summary>
     private static async Task<bool> VerifyAsync(
         UpdateInfo update,
@@ -478,7 +489,7 @@ public sealed class UpdateService
     {
         if (update.ChecksumsUri is null)
         {
-            return true;
+            return false;
         }
 
         string checksums;
@@ -492,18 +503,10 @@ public sealed class UpdateService
         {
             throw;
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or IOException)
         {
-            // The 15-second timeout is not fatal; the file came over TLS.
-            return true;
-        }
-        catch (HttpRequestException)
-        {
-            return true;
-        }
-        catch (IOException)
-        {
-            return true;
+            // A checksum we cannot fetch proves nothing, so the update stays blocked.
+            return false;
         }
 
         var expected = checksums
@@ -518,13 +521,26 @@ public sealed class UpdateService
 
         if (expected is null)
         {
-            return true;
+            return false;
         }
 
         await using var stream = File.OpenRead(filePath);
         var hash = await SHA256.HashDataAsync(stream, cancellationToken);
         return Convert.ToHexString(hash).Equals(expected, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Release assets must come from GitHub over HTTPS. The API's browser URL is normally on
+    /// github.com and redirects to githubusercontent.com for the bytes, so those hosts cover the
+    /// legitimate flow without accepting an arbitrary download origin.
+    /// </summary>
+    private static bool IsTrustedDownloadUri(Uri uri) =>
+        uri.Scheme == Uri.UriSchemeHttps
+        && uri.UserInfo.Length == 0
+        && (uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.Equals("githubusercontent.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase));
 
     private static void CleanupOldDownloads(string? keepVersion)
     {

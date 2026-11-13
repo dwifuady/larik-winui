@@ -74,6 +74,19 @@ public string? DescribeIdentity(ConnectionProfile profile) =>
 
 The default returns null, so an older provider simply shows no identity.
 
+A provider can also warn about a profile that weakens transport security (a remote server whose
+certificate is not verified, for example):
+
+```csharp
+public string? DescribeSecurityWarning(ConnectionProfile profile) =>
+    IsRemote(profile) && TrustsAnyCertificate(profile)
+        ? "This connection does not verify the server's certificate."
+        : null;
+```
+
+The host shows the sentence in the connection form and marks the workspace row **UNVERIFIED**. Null
+is the default, so providers without a transport story stay unchanged.
+
 The connection dialog builds itself from `Settings`. Password fields are stored in Windows
 Credential Manager, never in the SQLite state file. `IsAdvanced` moves rare fields into the
 dialog's **Advanced** section.
@@ -411,8 +424,9 @@ also uses the filtered lookup.
 
 `DatabaseProviderCatalog.Initialize` receives `ProviderSource` records: every built-in assembly
 passed by the composition root (`Larik/App.xaml.cs`), plus every add-on `AddonLocator` loaded from
-`%LOCALAPPDATA%\Larik WinUI\Plugins\<id>\<version>\`. It still scans flat `*.dll` files in
-`<app dir>\Plugins` and `%LOCALAPPDATA%\Larik WinUI\Plugins` for the pre-add-on layout.
+`%LOCALAPPDATA%\Larik WinUI\Plugins\<id>\<version>\`. Bare `*.dll` files in a `Plugins` folder are
+deliberately ignored; only a manifest-backed, versioned add-on is loaded, so a dropped DLL cannot
+become unlisted code running in the app.
 
 It instantiates every public, non-abstract type implementing `IDatabaseProvider` with a
 parameterless constructor, dedupes by `Id` (first wins), and surfaces load errors with the origin
@@ -422,11 +436,10 @@ Current limitations, by design for now:
 
 | Limitation | Consequence |
 |---|---|
-| Installed add-ons use `AddonLoadContext`; legacy flat DLLs use `Assembly.LoadFrom` | Add-on dependencies are isolated with `AssemblyDependencyResolver`. Flat DLLs still share the app's context. No context is collectible, so an update needs a restart. |
-| No index client or signature check yet | A versioned add-on folder must be installed by hand. The curated index, hash pinning and channels are specified in [`ADDONS.md`](ADDONS.md) but not implemented. |
-| Every `*.dll` in a flat Plugins folder is loaded | Native or unrelated DLLs are touched; failures are reported as provider load problems. Versioned add-on folders are not scanned this way. |
-| `%LOCALAPPDATA%` is user-writable | A dropped DLL is trusted code running in-process. Only install plugins you trust. |
-| The folder is not auto-created | Create `%LOCALAPPDATA%\Larik WinUI\Plugins` before dropping a DLL. |
+| There is no unload | Add-ons use one non-collectible `AssemblyLoadContext` each; an update needs a restart. |
+| The index is not signed | The SHA-256 in the index detects a swapped zip, but whoever can edit the index can point at their own zip. Signing is specified in [`ADDONS.md`](ADDONS.md). |
+| `%LOCALAPPDATA%` is user-writable | An installed add-on is trusted code running in-process. Only install drivers you trust. |
+| A manually copied add-on still needs a manifest | Create `Plugins\<id>\<version>\larik-addon.json` and `current.json`; a bare DLL is not loaded. |
 | Release builds are self-contained | Trimming is off (`PublishTrimmed=false`) so XAML/x:Bind and reflection-based provider discovery survive. Revisit a trimmer root only if trimming is turned on later; validate plugins against a published build when that happens. |
 
 **Recommendation:** first-party engines ship as built-in project references in
@@ -532,6 +545,7 @@ What it proves about the host contract:
 - [ ] `Id` is stable (stored in `spaces.provider_id`); `Dialect` matches snippet scopes.
 - [ ] `DescribeEndpoint` reports the host/port shown in the rail (or leave the default null).
 - [ ] `DescribeIdentity` names the configured login (or the integrated-auth phrase); null hides the line.
+- [ ] `DescribeSecurityWarning` reports a remote profile with weak transport security; null otherwise.
 - [ ] `Settings` covers every connection field; secrets use `ProviderSettingKind.Password`.
 - [ ] `CreateConnection` returns a fresh session; `OpenAsync` fails fast with a useful message.
 - [ ] Per-tab state (temp tables, `SET`, transactions) lives on that instance, not in a shared field.
@@ -571,7 +585,7 @@ What it proves about the host contract:
 | Setting kinds | Only Text/Password/Number/Boolean; no Choice or FilePath. PostgreSQL SSL mode is a documented text field until `Choice` exists. |
 | Snippet dialects | `SnippetDialects.Known` is a fixed list (`mssql`, `postgres`). |
 | Non-SQL completion | `IEditorLanguage.GetCompletionHints` is the seam: a language contributes completions for a document the SQL model does not understand (MongoDB uses it for `db.` and `db.collection.`). SQL providers return null and are unchanged. |
-| Plugin isolation | `Assembly.LoadFrom` in the default context; no unload, no dependency resolver, no manifest. |
+| Plugin isolation | Manifest-backed add-ons load in one non-collectible `AssemblyLoadContext` each, with a dependency resolver. No unload, so updates need a restart. Bare DLLs in `Plugins` are ignored. |
 | Trimming | Off: `Larik.csproj` sets `PublishTrimmed=false` for Debug and Release, so WinUI/XAML and reflection-based plugin discovery survive. A `TrimmerRootAssembly` becomes relevant only if trimming is enabled. |
 | Transactions | The contract exists (`SupportsTransactions`, `GetTransactionStateAsync`, commit/rollback). SQL Server implements it from `@@TRANCOUNT`/`XACT_STATE()`; PostgreSQL tracks the transaction commands it sent because the backend cannot introspect its own in-transaction state while answering. Other providers keep the defaults. |
 | App exit | Closing a tab or disconnecting rolls back; closing the whole app relies on the server rolling back when its sessions end. There is no app-exit prompt. |

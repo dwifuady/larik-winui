@@ -27,4 +27,35 @@ public sealed class SqlServerProviderTests
             @"SQL Server · (localdb)\MSSQLLocalDB",
             new SqlServerProvider().DescribeEndpoint(profile));
     }
+
+    [Fact]
+    public void Trust_server_certificate_defaults_off_for_new_remote_connections()
+    {
+        var setting = Assert.Single(
+            new SqlServerProvider().Settings,
+            item => item.Key == "trustServerCertificate");
+
+        Assert.Equal(ProviderSettingKind.Boolean, setting.Kind);
+        Assert.Equal("false", setting.DefaultValue);
+    }
+
+    [Fact]
+    public void Warns_only_when_a_remote_connection_trusts_any_certificate()
+    {
+        var provider = new SqlServerProvider();
+
+        var remoteTrusted = new ConnectionProfile { ProviderId = "mssql" };
+        remoteTrusted.Values["server"] = "db.internal";
+        remoteTrusted.Values["trustServerCertificate"] = "true";
+        Assert.NotNull(provider.DescribeSecurityWarning(remoteTrusted));
+
+        var remoteVerified = new ConnectionProfile { ProviderId = "mssql" };
+        remoteVerified.Values["server"] = "db.internal";
+        Assert.Null(provider.DescribeSecurityWarning(remoteVerified));
+
+        var localTrusted = new ConnectionProfile { ProviderId = "mssql" };
+        localTrusted.Values["server"] = @"(localdb)\MSSQLLocalDB";
+        localTrusted.Values["trustServerCertificate"] = "true";
+        Assert.Null(provider.DescribeSecurityWarning(localTrusted));
+    }
 }

@@ -35,6 +35,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
             ? "Windows authentication"
             : profile.Get("user")!.Trim();
 
+    public string? DescribeSecurityWarning(ConnectionProfile profile) =>
+        IsLocalTarget(profile.Get("server")) || !profile.GetBool("trustServerCertificate", false)
+            ? null
+            : "This connection trusts any server certificate, so someone on the network could impersonate the server.";
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()
@@ -69,8 +74,11 @@ public sealed class SqlServerProvider : IDatabaseProvider
             Key = "trustServerCertificate",
             Label = "Trust server certificate",
             Kind = ProviderSettingKind.Boolean,
-            DefaultValue = "true",
-            Hint = "Needed for local/dev servers with self-signed certificates.",
+            // Off for remote servers: encryption without an identity check stops casual snooping
+            // but not an active man in the middle. Local targets skip the check automatically.
+            DefaultValue = "false",
+            Hint = "Off verifies the server certificate. Local servers are trusted automatically; "
+                + "turn this on only for a remote/dev server whose certificate Windows cannot verify.",
             IsAdvanced = true,
         },
         new()
@@ -93,6 +101,40 @@ public sealed class SqlServerProvider : IDatabaseProvider
     ];
 
     public IDatabaseConnection CreateConnection(ConnectionProfile profile) => new SqlServerConnection(profile);
+
+    /// <summary>
+    /// Loopback and LocalDB targets never cross a network, so trusting their certificate does not
+    /// create a man-in-the-middle surface. Everything else is verified unless the profile opts out.
+    /// </summary>
+    internal static bool IsLocalTarget(string? server)
+    {
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return false;
+        }
+
+        var name = server.Trim();
+        if (name.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase))
+        {
+            name = name[4..];
+        }
+
+        // Drop the instance suffix and the optional port: host\instance or host,1433.
+        var separator = name.IndexOfAny(['\\', ',']);
+        if (separator >= 0)
+        {
+            name = name[..separator];
+        }
+
+        name = name.Trim();
+        return name.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || name == "."
+            || name.Equals("(local)", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("(localdb)", StringComparison.OrdinalIgnoreCase)
+            || name == "127.0.0.1"
+            || name == "::1"
+            || name == "[::1]";
+    }
 }
 
 internal sealed class SqlServerConnection : IDatabaseConnection
@@ -858,7 +900,11 @@ internal sealed class SqlServerConnection : IDatabaseConnection
             ApplicationName = "Larik SQL Studio",
             ConnectTimeout = Math.Max(1, _profile.GetInt("connectTimeout", 8)),
             Encrypt = _profile.GetBool("encrypt", true),
-            TrustServerCertificate = _profile.GetBool("trustServerCertificate", true),
+            // A local target cannot be reached through a network attacker, so the self-signed
+            // LocalDB/Express certificate is accepted there. Remote targets verify by default.
+            TrustServerCertificate =
+                SqlServerProvider.IsLocalTarget(_profile.Get("server"))
+                || _profile.GetBool("trustServerCertificate", false),
             Pooling = true,
         };
 

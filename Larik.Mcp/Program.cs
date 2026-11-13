@@ -1,4 +1,5 @@
 using Larik.Data;
+using Larik.Data.Addons;
 using Larik.Data.Demo;
 using Larik.Data.Postgres;
 using Larik.Data.SqlServer;
@@ -21,15 +22,18 @@ for (var index = 0; index < args.Length - 1; index++)
     }
 }
 
-// Providers are discovered from the assemblies this EXE carries, plus the same Plugins folder the
-// app uses, so an installed add-on works for agents too without a second registration list.
+// Providers are discovered from the assemblies this EXE carries, plus the same manifest-backed
+// add-ons the app loads, so an installed add-on works for agents too without a second registration
+// list. Bare DLLs in the Plugins root are not loaded.
+var addons = AddonLocator.Scan(LarikPaths.PluginsDirectory);
 DatabaseProviderCatalog.Initialize(
     [
-        typeof(DemoProvider).Assembly,
-        typeof(SqlServerProvider).Assembly,
-        typeof(PostgresProvider).Assembly,
+        new ProviderSource("built-in: Demo", typeof(DemoProvider).Assembly),
+        new ProviderSource("built-in: SQL Server", typeof(SqlServerProvider).Assembly),
+        new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
+        .. addons.Sources,
     ],
-    LarikPaths.PluginsDirectory);
+    addons.Errors);
 
 var builder = Host.CreateApplicationBuilder(args);
 

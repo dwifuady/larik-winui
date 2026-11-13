@@ -1042,6 +1042,43 @@ try {
         Assert-True ((Find-Element 'Customer totals').matchCount -gt 0) 'the active workspace changed while restoring names'
     }
 
+    Test-UI 'a remote SQL Server connection warns while certificate checking is off' {
+        # A remote profile verifies by default. Turning trust on must surface the consequence
+        # where the decision is made, and the form is cancelled so the saved workspace is untouched.
+        Open-WorkspaceSettings 'Local SQL Server'
+        Wait-ForText 'Workspace settings' 10
+        try {
+            $server = @((Find-Element 'Server').matches | Where-Object type -eq 'Edit' | Select-Object -First 1)
+            Assert-True ($null -ne $server) 'the server field is missing'
+            Invoke-Ui @('set-value', $server.selector, 'db.example.test') | Out-Null
+            Start-Sleep -Milliseconds 400
+            Assert-True ((Find-Element 'This connection trusts any server certificate').matchCount -eq 0) 'a verified remote connection already warns'
+
+            Click-Element 'Advanced'
+            Wait-ForText 'Connect timeout (s)' 10
+            $trust = @((Find-Element 'Trust server certificate').matches | Where-Object { $_.type -in @('CheckBox', 'Button', 'ToggleButton') -and $_.isEnabled } | Select-Object -First 1)
+            Assert-True ($null -ne $trust) 'the trust toggle is missing'
+            Invoke-Ui @('invoke', $trust.selector, '--action', 'toggle-on') -Attempts 2 | Out-Null
+            Start-Sleep -Milliseconds 700
+            $warning = @((Find-Element 'This connection trusts any server certificate').matches | Where-Object { $_.width -gt 0 } | Select-Object -First 1)
+            Assert-True ($null -ne $warning) 'turning trust on did not show the warning'
+
+            Click-Element 'Done'
+            Start-Sleep -Milliseconds 400
+        }
+        finally {
+            # A flyout swallows the first click outside it, so close it before Cancel.
+            Send-Keys 'escape'
+            Start-Sleep -Milliseconds 400
+            if ((Find-Element 'Cancel').matchCount -gt 0) {
+                Click-Element 'Cancel'
+                Start-Sleep -Milliseconds 600
+            }
+
+            Close-WorkspaceManager
+        }
+    }
+
     Test-UI 'the workspace indicator shows every workspace and switches' {
         Assert-True ((Find-Element 'Workspace Staging').matchCount -gt 0) 'indicator does not show the active workspace'
         Assert-True ((Find-Element 'Workspace Local SQL Server').matchCount -gt 0) 'indicator does not show every workspace'
