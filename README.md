@@ -6,6 +6,17 @@ highlighting, and snippet completion that expands on Tab.**
 
 ![WinUI 3](https://img.shields.io/badge/WinUI-3-0E7A0D) ![.NET](https://img.shields.io/badge/.NET-10-512BD4) ![License](https://img.shields.io/badge/license-MIT-blue)
 
+## Why another SQL client
+
+Most SQL clients are feature catalogues with a query box attached. Larik is the other shape: a place
+to keep queries. A workspace owns one connection, a tab owns one session, and closing a tab files it
+in an archive instead of leaving `SQLQuery7.sql` behind. If you missed Azure Data Studio for being
+small and modern, or like TablePlus for opening instantly, that is the target.
+
+It is a native WinUI 3 app — Mica, the system theme, real keyboard and accessibility — not a web app
+in a window. It covers SQL Server and PostgreSQL properly, plus an in-memory Demo, rather than
+claiming a hundred databases.
+
 ## Download
 
 Published for `win-x64` and `win-arm64` from
@@ -23,8 +34,8 @@ Published for `win-x64` and `win-arm64` from
 - **GitHub** — the installer and portable ZIP above, with Settings → Drivers and the curated
   index (MongoDB today). These binaries are unsigned.
 - **Microsoft Store** — SQL Server + PostgreSQL built in, signed by Microsoft, and no add-on
-  surface. The Store build keeps its data in the package's local store; the listing is being
-  prepared. See [`docs/STORE.md`](docs/STORE.md).
+  surface. The Store build keeps its data in the package's local store; build and submission
+  detail is in [`docs/STORE.md`](docs/STORE.md).
 
 Requires Windows 10 1809+ and does not need a separate .NET install. The GitHub
 installer and portable ZIP are unsigned, so Windows SmartScreen may warn on the first run:
