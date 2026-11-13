@@ -16,6 +16,11 @@
     <Version>0.1.1</Version>
     <Product>Larik MCP Server</Product>
     <Company>Larik</Company>
+    <!--
+      Same icon as the app: the server shows up in Task Manager (it is a child of the agent client,
+      not of Larik), and an unlabelled generic icon there reads like malware.
+    -->
+    <ApplicationIcon>..\Larik\Assets\AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
