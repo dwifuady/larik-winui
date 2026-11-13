@@ -163,6 +163,16 @@ internal sealed class StudioTools(StudioContext context)
         return Serialize(payload);
     }
 
+    /// <summary>
+    /// The options one <c>run_query</c> call executes with. Only a read-only exposure asks the
+    /// provider for the engine guard: SQL Server honours it by opening a transaction it never
+    /// commits, so an approved write must run with <c>null</c> (read-write) or it is rolled back
+    /// after reporting "N rows affected". Internal and separate so a test pins both branches —
+    /// a hardcoded <c>true</c> here silently discarded every approved write.
+    /// </summary>
+    internal static QueryExecutionOptions ExecutionOptions(bool readOnly, int limit) =>
+        new() { MaxRows = limit, ReadOnly = readOnly ? true : null };
+
     [McpServerTool(Name = "run_query", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description(
         "Runs SQL on an exposed connection and returns result sets (columns, rows, a per-set " +
@@ -230,11 +240,7 @@ internal sealed class StudioTools(StudioContext context)
                 (db, token) => db.ExecuteBatchAsync(
                     query,
                     target,
-                    // Only a read-only exposure gets the engine-level guard. An approved write must
-                    // run read-write: SQL Server honours ReadOnly by opening a transaction it rolls
-                    // back afterwards, so a hardcoded true reported "N rows affected" for a write
-                    // that never committed. ReadOnly is bool?, and null means read-write.
-                    new QueryExecutionOptions { MaxRows = limit, ReadOnly = readOnly ? true : null },
+                    ExecutionOptions(readOnly, limit),
                     token),
                 execution.Token);
         }

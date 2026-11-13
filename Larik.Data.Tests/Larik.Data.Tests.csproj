@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
     <ProjectReference Include="..\Larik.Data.Tests.Fixture\Larik.Data.Tests.Fixture.csproj" />
+    <ProjectReference Include="..\Larik.Mcp\Larik.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

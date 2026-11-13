@@ -34,4 +34,9 @@
     <ProjectReference Include="..\Larik.Data.Postgres\Larik.Data.Postgres.csproj" />
     <ProjectReference Include="..\Larik.Data.SqlServer\Larik.Data.SqlServer.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!--  The approved-write regression test calls the tool surface directly.  -->
+    <InternalsVisibleTo Include="Larik.Data.Tests" />
+  </ItemGroup>
 </Project>
