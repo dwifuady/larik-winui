@@ -14,6 +14,13 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!--
+      Our own entry point (Program.cs) owns single-instance redirection: Windows starts a new process
+      for every activation, including a click on an agent approval toast, and a second studio would
+      mean a second window, store and approval channel.
+    -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <StartupObject>Larik.Program</StartupObject>
 
     <!--  Version is overridden from the git tag by the release workflow.  -->
     <Version>0.1.1</Version>

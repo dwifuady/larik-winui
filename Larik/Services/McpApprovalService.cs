@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 
@@ -21,8 +22,17 @@ namespace Larik.Services;
 /// </remarks>
 public static class McpApprovalService
 {
-    /// <summary>One dialog at a time: a queue of modal prompts is a queue of accidents.</summary>
+    /// <summary>
+    /// One dialog at a time: a queue of modal prompts is a queue of accidents.
+    /// </summary>
     private static readonly SemaphoreSlim DialogGate = new(1, 1);
+
+    /// <summary>
+    /// Approvals that can still be answered, by id. A toast button press arrives through activation,
+    /// not through the dialog, so it has to find the parked request and answer it.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Action<bool>> Pending =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static bool _started;
 
@@ -224,6 +234,37 @@ public static class McpApprovalService
             };
             AutomationProperties.SetName(dialog, "Agent approval");
 
+            // A toast button press arrives as an activation, not through this dialog: park the way to
+            // answer it so the notification's Run it / Deny can close the prompt too.
+            Pending[request.Id] = approved =>
+            {
+                var decided = completion.TrySetResult(new McpApprovalDecision
+                {
+                    Id = request.Id,
+                    Approved = approved,
+                    Surface = "app",
+                    Status = approved ? McpApprovalStatus.Approved : McpApprovalStatus.Denied,
+                    Reason = approved
+                        ? null
+                        : "The user denied this statement from the notification.",
+                });
+
+                if (decided)
+                {
+                    App.DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            dialog.Hide();
+                        }
+                        catch
+                        {
+                            // Already closed: the decision still stands.
+                        }
+                    });
+                }
+            };
+
             using var timeout = new CancellationTokenSource(McpPipe.ApprovalTimeout);
             AppLog.Info("mcp", $"approval prompt shown; auto-deny in {McpPipe.ApprovalTimeout}");
             using var registration = timeout.Token.Register(() =>
@@ -269,8 +310,68 @@ public static class McpApprovalService
         }
         finally
         {
+            Pending.TryRemove(request.Id, out _);
             DialogGate.Release();
         }
+    }
+
+    /// <summary>
+    /// An activation the user asked for: a toast click (possibly on Run it / Deny) or a second launch
+    /// of the shortcut. Answers the parked approval when there is one, and puts the studio in front
+    /// either way.
+    /// </summary>
+    internal static void HandleActivation(AppActivationArguments? args)
+    {
+        if (args?.Data is AppNotificationActivatedEventArgs toast)
+        {
+            HandleNotificationArguments(toast.Arguments);
+            return;
+        }
+
+        // Unpackaged installs can arrive as a plain launch whose command line carries the arguments.
+        if (args?.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launch)
+        {
+            HandleNotificationArguments(ParseArguments(launch.Arguments));
+            return;
+        }
+
+        App.BringToFront();
+    }
+
+    /// <summary>Answers the parked approval named by the notification arguments, if any.</summary>
+    internal static void HandleNotificationArguments(IDictionary<string, string>? arguments)
+    {
+        if (arguments is not null &&
+            arguments.TryGetValue("mcpId", out var id) &&
+            Pending.TryRemove(id, out var decide))
+        {
+            var approved = arguments.TryGetValue("mcpAction", out var action) &&
+                string.Equals(action, "approve", StringComparison.OrdinalIgnoreCase);
+
+            decide(approved);
+            AppLog.Info("mcp", $"approval answered from the notification: {(approved ? "approved" : "denied")}");
+            return;
+        }
+
+        // A body click, or a decision for a prompt that already timed out: show the studio.
+        App.BringToFront();
+    }
+
+    private static IDictionary<string, string>? ParseArguments(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        Dictionary<string, string> values = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in text.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            values[Uri.UnescapeDataString(parts[0])] = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+        }
+
+        return values;
     }
 
     /// <summary>
@@ -293,6 +394,14 @@ public static class McpApprovalService
             var notification = new AppNotificationBuilder()
                 .AddText("An agent wants to run a statement")
                 .AddText($"{request.SpaceName}: {preview}")
+                // Answering from the notification is the whole point of an approval prompt: the user
+                // should not have to find the window first.
+                .AddButton(new AppNotificationButton("Run it")
+                    .AddArgument("mcpAction", "approve")
+                    .AddArgument("mcpId", request.Id))
+                .AddButton(new AppNotificationButton("Deny")
+                    .AddArgument("mcpAction", "deny")
+                    .AddArgument("mcpId", request.Id))
                 .BuildNotification();
 
             AppNotificationManager.Default.Show(notification);
@@ -315,6 +424,11 @@ public static class McpApprovalService
             // "No COM servers are registered for this app" on a packaged build.
             if (!LarikPaths.IsPackaged)
             {
+                // An unpackaged install registers its own activator, so a click can be delivered to
+                // this process; either way it means "show me the studio".
+                AppNotificationManager.Default.NotificationInvoked += (_, e) =>
+                    App.DispatcherQueue.TryEnqueue(() => HandleNotificationArguments(e.Arguments));
+
                 AppNotificationManager.Default.Register();
             }
         }
@@ -364,3 +478,4 @@ public static class McpApprovalService
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
 }
+

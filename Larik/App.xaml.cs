@@ -1,5 +1,6 @@
 using Larik.Services;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
@@ -36,6 +37,32 @@ public partial class App : Application
     /// </summary>
     public static nint WindowHandle =>
         WinRT.Interop.WindowNative.GetWindowHandle(Window);
+
+    /// <summary>
+    /// Set by <see cref="Program"/> on the first instance; later activations are redirected to it.
+    /// </summary>
+    internal static AppInstance? PrimaryInstance { get; set; }
+
+    /// <summary>
+    /// Brings the studio forward for an activation the user asked for (a toast click, or a second
+    /// launch of the shortcut). Windows refuses to hand focus to a background process, so this
+    /// restores and activates the window instead of only calling <see cref="Window.Activate"/>.
+    /// </summary>
+    public static void BringToFront()
+    {
+        var handle = WindowHandle;
+        ShowWindow(handle, SwRestore);
+        SetForegroundWindow(handle);
+        Window.Activate();
+    }
+
+    private const int SwRestore = 9;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(nint window, int command);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(nint window);
 
     /// <summary>
     /// Initializes the singleton application object.
@@ -75,6 +102,11 @@ public partial class App : Application
         // The notice is useful only once the shell is on screen; checking before Activate would
         // race the first layout and could show a bar over a window that is not there yet.
         ((MainWindow)Window).StartUpdateCheck();
+
+        // A redirected activation (a toast click, or the user opening the shortcut again) means "show
+        // me the studio" — and, when the click was Run it / Deny, "answer that agent".
+        PrimaryInstance?.Activated += (_, activation) =>
+            DispatcherQueue.TryEnqueue(() => McpApprovalService.HandleActivation(activation));
 
         // Agents can ask this window for a write approval while it runs; the channel is silent
         // when the app is closed, and Larik.Mcp then refuses instead of guessing.

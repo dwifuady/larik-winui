@@ -41,9 +41,15 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 
   **Writes ask first.** On a Read and write workspace every `run_query` parks on a dialog showing the
   statement — Deny is the default button, so Enter on a prompt nobody read runs nothing. When the
-  window is not in front, a Windows notification and a taskbar flash bring it back; two minutes
-  without an answer refuses and the agent gets the reason. The agent's call stays blocked the whole
-  time, and the audit row records who decided.
+  window is not in front, a Windows notification and a taskbar flash bring it back; the notification
+  carries **Run it** and **Deny** buttons, so a decision can be made from the notification centre
+  without finding the window. Two minutes without an answer refuses and the agent gets the reason.
+  The agent's call stays blocked the whole time, and the audit row records who decided.
+
+  **One studio per session.** Windows starts a fresh process for every activation — a shortcut, and
+  also a click on an approval notification — so the app registers a single-instance key: later
+  activations are redirected to the running studio, which comes to the front instead of a second
+  window, store and approval channel appearing.
 
   **Limits that protect the agent as much as the server.** A statement is stopped after two minutes
   whatever the workspace's own timeout says (a saved profile can wait forever; an agent cannot), with
