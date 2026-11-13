@@ -230,7 +230,11 @@ internal sealed class StudioTools(StudioContext context)
                 (db, token) => db.ExecuteBatchAsync(
                     query,
                     target,
-                    new QueryExecutionOptions { MaxRows = limit, ReadOnly = true },
+                    // Only a read-only exposure gets the engine-level guard. An approved write must
+                    // run read-write: SQL Server honours ReadOnly by opening a transaction it rolls
+                    // back afterwards, so a hardcoded true reported "N rows affected" for a write
+                    // that never committed. ReadOnly is bool?, and null means read-write.
+                    new QueryExecutionOptions { MaxRows = limit, ReadOnly = readOnly ? true : null },
                     token),
                 execution.Token);
         }
