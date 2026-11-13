@@ -174,6 +174,9 @@ the culprit.
 - **RichEditBox caret coordinates are text-area relative**; `Popup` offsets are relative to the
   editor control. Add the editor origin and `Padding` when anchoring; keep a real gap below the
   line. Remove the default `ListViewItem` inset so suggestion rows fill the popup.
+- **`ITextSelection.Text` leaves the inserted run selected.** Collapse the range after an insertion
+  that must not be replaced later (completion accept, Tab indentation); otherwise the next Tab
+  replaces the same spaces instead of adding an indent step, and typing overwrites the indent.
 - `ListView` with `SelectionMode="None"` gives no `Invoke` pattern, so tabs are activated with
   `ItemClick` — keyboard activation via Enter still needs an explicit handler.
 - The tab rail is **one flat `ListView` per band** (pinned, tabs) whose items are either a
@@ -183,7 +186,8 @@ the culprit.
   lands relative to the nearest header.
 - `KeyboardAccelerator` on the page does **not** win over `RichEditBox` shortcuts (Ctrl+B is bold),
   so shell shortcuts are handled in `Editor_PreviewKeyDown` and
-  `DisabledFormattingAccelerators="All"` keeps rich formatting off.
+  `DisabledFormattingAccelerators="All"` keeps rich formatting off. Ctrl+Space is another chord the
+  box would treat as a plain space, so the on-demand completion key is handled there too.
 - `RichEditBox` paints its own fill from the `TextControlBackground*` theme resources, including a
   different one while focused, which hides any parent card. Override those plus the
   `TextControlBorderBrush*` keys to `Transparent` so the card surface shows through.

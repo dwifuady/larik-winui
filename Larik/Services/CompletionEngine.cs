@@ -54,12 +54,6 @@ public sealed record CompletionRequest(
 
     /// <summary>Procedures the active database exposes; empty when the provider has none.</summary>
     public IReadOnlyList<RoutineSchema> Routines { get; init; } = [];
-
-    /// <summary>
-    /// True when the caret is in a SELECT projection (after SELECT, before FROM). Only then do
-    /// columns offer the multi-select checkbox; WHERE/JOIN conditions do not.
-    /// </summary>
-    public bool InSelectList { get; init; }
 }
 
 /// <summary>
@@ -71,7 +65,7 @@ public static partial class CompletionEngine
 {
     public static IReadOnlyList<string> Keywords { get; } =
     [
-        "SELECT", "FROM", "WHERE", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "ON",
+        "SELECT", "FROM", "JOIN", "WHERE", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "ON",
         "GROUP BY", "ORDER BY", "HAVING", "TOP", "DISTINCT", "AS", "AND", "OR", "NOT", "NULL", "IS NULL",
         "IN", "EXISTS", "BETWEEN", "LIKE", "CASE WHEN", "ELSE", "END", "UNION", "UNION ALL", "INSERT INTO",
         "VALUES", "UPDATE", "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE", "TRUNCATE TABLE",
@@ -119,17 +113,6 @@ public static partial class CompletionEngine
         "WHERE", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "JOIN", "ON", "GROUP",
         "ORDER", "HAVING", "SET", "UNION", "EXCEPT", "INTERSECT", "AS", "WITH", "SELECT",
         "FROM", "AND", "OR", "APPLY", "TABLESAMPLE", "PIVOT", "UNPIVOT", "FOR", "OPTION",
-    };
-
-    /// <summary>
-    /// Words that end a SELECT projection. Anything after SELECT and before the first of these is
-    /// the projection: the only place the multi-select checkbox belongs.
-    /// </summary>
-    private static readonly HashSet<string> SelectClauseStarters = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "SELECT", "FROM", "WHERE", "ON", "GROUP", "ORDER", "HAVING", "JOIN", "APPLY",
-        "UNION", "EXCEPT", "INTERSECT", "SET", "INTO", "VALUES", "UPDATE", "INSERT",
-        "DELETE", "USE", "EXEC", "EXECUTE", "DECLARE", "WITH", "RETURNING",
     };
 
     /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
@@ -319,107 +302,6 @@ public static partial class CompletionEngine
         }
 
         return (CompletionScope.Keyword, null);
-    }
-
-    /// <summary>
-    /// True when the caret sits in a SELECT projection: after SELECT and before its FROM. Strings,
-    /// comments, bracketed identifiers and nested parentheses are skipped, so a WHERE subquery or a
-    /// function argument is not mistaken for the outer projection.
-    /// </summary>
-    public static bool IsInSelectList(string text, int caret)
-    {
-        caret = Math.Clamp(caret, 0, text.Length);
-        var start = StatementStart(text, caret);
-        var before = text[start..caret];
-
-        var depth = 0;
-        string? clause = null;
-        var index = 0;
-        while (index < before.Length)
-        {
-            var c = before[index];
-            if (c == '\'')
-            {
-                index = SkipQuoted(before, index, '\'');
-            }
-            else if (c == '-' && index + 1 < before.Length && before[index + 1] == '-')
-            {
-                while (index < before.Length && before[index] is not ('\n' or '\r'))
-                {
-                    index++;
-                }
-            }
-            else if (c == '/' && index + 1 < before.Length && before[index + 1] == '*')
-            {
-                var close = before.IndexOf("*/", index + 2, StringComparison.Ordinal);
-                index = close < 0 ? before.Length : close + 2;
-            }
-            else if (c == '[')
-            {
-                var close = before.IndexOf(']', index + 1);
-                index = close < 0 ? before.Length : close + 1;
-            }
-            else if (c is '"' or '`')
-            {
-                index = SkipQuoted(before, index, c);
-            }
-            else if (c == '(')
-            {
-                depth++;
-                index++;
-            }
-            else if (c == ')')
-            {
-                if (depth > 0)
-                {
-                    depth--;
-                }
-
-                index++;
-            }
-            else if (char.IsLetter(c) || c == '_')
-            {
-                var wordStart = index;
-                while (index < before.Length && (char.IsLetterOrDigit(before[index]) || before[index] == '_'))
-                {
-                    index++;
-                }
-
-                if (depth == 0 && SelectClauseStarters.Contains(before[wordStart..index]))
-                {
-                    clause = before[wordStart..index].ToUpperInvariant();
-                }
-            }
-            else
-            {
-                index++;
-            }
-        }
-
-        return depth == 0 && string.Equals(clause, "SELECT", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static int SkipQuoted(string text, int index, char quote)
-    {
-        index++;
-        while (index < text.Length)
-        {
-            if (text[index] != quote)
-            {
-                index++;
-                continue;
-            }
-
-            if (index + 1 < text.Length && text[index + 1] == quote)
-            {
-                index += 2;
-                continue;
-            }
-
-            return index + 1;
-        }
-
-        return text.Length;
     }
 
     /// <summary>FROM/JOIN table references in the statement under the caret, in query order.</summary>
@@ -687,7 +569,7 @@ public static partial class CompletionEngine
             if (request.Scope == CompletionScope.Routine)
             {
                 AddRoutines(results, request, needle);
-                return Finish(request, results, int.MaxValue);
+                return Finish(results, int.MaxValue);
             }
 
             // dbo. in a table position lists that schema's tables; the qualifier is already typed,
@@ -695,7 +577,7 @@ public static partial class CompletionEngine
             if (request.Scope == CompletionScope.Table && MatchedSchema(request) is not null)
             {
                 AddTables(results, request, needle);
-                return Finish(request, results, int.MaxValue);
+                return Finish(results, int.MaxValue);
             }
 
             // alias. or table. -> that table's columns, whatever the clause.
@@ -716,8 +598,8 @@ public static partial class CompletionEngine
                 sources = mentioned.Count > 0 ? mentioned : request.Tables;
             }
 
-            AddColumns(results, sources, needle);
-            return Finish(request, results, SchemaLimit);
+            AddColumns(results, sources, needle, IdentifierQuoter(request));
+            return Finish(results, SchemaLimit);
         }
 
         switch (request.Scope)
@@ -742,7 +624,7 @@ public static partial class CompletionEngine
             case CompletionScope.Column:
                 if (request.Target is { } target)
                 {
-                    AddTargetColumns(results, target, needle);
+                    AddTargetColumns(results, target, needle, IdentifierQuoter(request));
                     break;
                 }
 
@@ -771,7 +653,7 @@ public static partial class CompletionEngine
                 AddVariables(results, request.Variables, needle);
                 AddKeywords(results, needle, request.Dialect?.Keywords);
                 AddPlainTables(results, request, needle);
-                AddColumns(results, request.Tables, needle);
+                AddColumns(results, request.Tables, needle, IdentifierQuoter(request));
                 break;
         }
 
@@ -783,25 +665,7 @@ public static partial class CompletionEngine
             _ => SchemaLimit,
         };
 
-        return Finish(request, results, max);
-    }
-
-    /// <summary>Order, cap, and mark columns checkable only when the caret is in a SELECT list.</summary>
-    private static IReadOnlyList<CompletionItem> Finish(CompletionRequest request, List<CompletionItem> results, int max)
-    {
-        var ordered = Finish(results, max);
-        if (request.InSelectList)
-        {
-            foreach (var item in ordered)
-            {
-                if (item.Kind == CompletionKind.Column)
-                {
-                    item.CanCheck = true;
-                }
-            }
-        }
-
-        return ordered;
+        return Finish(results, max);
     }
 
     /// <summary>
@@ -1147,6 +1011,8 @@ public static partial class CompletionEngine
     /// <summary>Columns of CTEs that the statement has not joined yet (e.g. while typing SELECT).</summary>
     private static void AddCteColumns(List<CompletionItem> results, CompletionRequest request, string needle)
     {
+        var quote = IdentifierQuoter(request);
+
         var referenced = new HashSet<string>(
             request.References
                 .Where(reference => reference.Table is not null)
@@ -1167,7 +1033,7 @@ public static partial class CompletionEngine
                     Label = column,
                     Detail = $"CTE · {cte.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = column,
+                    InsertText = Quote(quote, column),
                 });
             }
         }
@@ -1176,9 +1042,11 @@ public static partial class CompletionEngine
     /// <summary>Columns of the statement's tables; aliased tables are inserted as <c>alias.column</c>.</summary>
     private static void AddScopedColumns(List<CompletionItem> results, CompletionRequest request, string needle)
     {
+        var quote = IdentifierQuoter(request);
+
         if (request.References.Count == 0)
         {
-            AddColumns(results, request.Tables, needle);
+            AddColumns(results, request.Tables, needle, quote);
             return;
         }
 
@@ -1206,13 +1074,17 @@ public static partial class CompletionEngine
                     Label = label,
                     Detail = $"{table.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = label,
+                    InsertText = ColumnInsert(reference.Alias, column, quote),
                 });
             }
         }
     }
 
-    private static void AddColumns(List<CompletionItem> results, IReadOnlyList<TableSchema> tables, string needle)
+    private static void AddColumns(
+        List<CompletionItem> results,
+        IReadOnlyList<TableSchema> tables,
+        string needle,
+        Func<string, string>? quote)
     {
         foreach (var table in tables)
         {
@@ -1223,26 +1095,48 @@ public static partial class CompletionEngine
                     Label = column,
                     Detail = $"{table.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = column,
+                    InsertText = Quote(quote, column),
                 });
             }
         }
     }
 
     /// <summary>Columns of the table an UPDATE/INSERT writes; SET positions ask for <c>column = </c>.</summary>
-    private static void AddTargetColumns(List<CompletionItem> results, StatementTarget target, string needle)
+    private static void AddTargetColumns(
+        List<CompletionItem> results,
+        StatementTarget target,
+        string needle,
+        Func<string, string>? quote)
     {
         foreach (var column in target.Table.Columns.Where(column => Matches(column, needle)))
         {
+            var insert = Quote(quote, column);
             results.Add(new CompletionItem
             {
                 Label = column,
                 Detail = $"{target.Table.Name}.{column}",
                 Kind = CompletionKind.Column,
-                InsertText = target.Assignment ? $"{column} = " : column,
+                InsertText = target.Assignment ? $"{insert} = " : insert,
             });
         }
     }
+
+    /// <summary>
+    /// Identifier quoting for inserts, owned by the active dialect. Table names already go through
+    /// it; columns use the same seam so a field called <c>Key</c> inserts as <c>[Key]</c> on SQL
+    /// Server instead of producing a statement with a reserved word in it.
+    /// </summary>
+    private static Func<string, string>? IdentifierQuoter(CompletionRequest request) =>
+        request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
+
+    private static string Quote(Func<string, string>? quote, string name) =>
+        quote is null ? name : quote(name);
+
+    /// <summary><c>alias.column</c> with both parts quoted the way the dialect requires.</summary>
+    private static string ColumnInsert(string? qualifier, string column, Func<string, string>? quote) =>
+        string.IsNullOrEmpty(qualifier)
+            ? Quote(quote, column)
+            : $"{Quote(quote, qualifier)}.{Quote(quote, column)}";
 
     private static void AddVariables(List<CompletionItem> results, IReadOnlyList<string> variables, string needle)
     {
@@ -1302,6 +1196,11 @@ public static partial class CompletionEngine
             .ToList();
 
         var suggestions = new List<JoinSuggestion>();
+        var quote = IdentifierQuoter(request);
+
+        // Join text is a field expression like any other: alias and column carry the dialect's
+        // quoting so reserved-word columns survive (<c>[o].[Key] = [s].[Key]</c>).
+        string Qualified(string alias, string column) => ColumnInsert(alias, column, quote);
 
         foreach (var other in prior)
         {
@@ -1317,7 +1216,7 @@ public static partial class CompletionEngine
                 suggestions.Add(new JoinSuggestion(
                     $"Join on {first.Column} = {first.ReferencedColumn}",
                     "Foreign key",
-                    string.Join(" AND ", group.Select(key => $"{joinedAlias}.{key.Column} = {otherAlias}.{key.ReferencedColumn}")),
+                    string.Join(" AND ", group.Select(key => $"{Qualified(joinedAlias, key.Column)} = {Qualified(otherAlias, key.ReferencedColumn)}")),
                     1000 - (group.Count() - 1)));
             }
 
@@ -1329,7 +1228,7 @@ public static partial class CompletionEngine
                 suggestions.Add(new JoinSuggestion(
                     $"Join on {first.ReferencedColumn} = {first.Column}",
                     "Foreign key (reverse)",
-                    string.Join(" AND ", group.Select(key => $"{joinedAlias}.{key.ReferencedColumn} = {otherAlias}.{key.Column}")),
+                    string.Join(" AND ", group.Select(key => $"{Qualified(joinedAlias, key.ReferencedColumn)} = {Qualified(otherAlias, key.Column)}")),
                     980 - (group.Count() - 1)));
             }
 
@@ -1348,7 +1247,7 @@ public static partial class CompletionEngine
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {column} = {key}",
                         "Heuristic match",
-                        $"{joinedAlias}.{column} = {otherAlias}.{key}",
+                        $"{Qualified(joinedAlias, column)} = {Qualified(otherAlias, key)}",
                         900));
                 }
             }
@@ -1369,7 +1268,7 @@ public static partial class CompletionEngine
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {column} = {otherColumn}",
                         "Heuristic match",
-                        $"{joinedAlias}.{column} = {otherAlias}.{otherColumn}",
+                        $"{Qualified(joinedAlias, column)} = {Qualified(otherAlias, otherColumn)}",
                         isKey ? 760 : 720));
                 }
             }
@@ -1389,7 +1288,7 @@ public static partial class CompletionEngine
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {key} = {column}",
                         "Heuristic match (reverse)",
-                        $"{joinedAlias}.{key} = {otherAlias}.{column}",
+                        $"{Qualified(joinedAlias, key)} = {Qualified(otherAlias, column)}",
                         840));
                 }
             }

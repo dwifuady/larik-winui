@@ -479,6 +479,9 @@ public class LarikWin32 {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attachFrom, uint attachTo, bool attach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
 }
 "@
 
@@ -503,6 +506,22 @@ function Focus-App {
         Start-Sleep -Milliseconds 120
         [LarikWin32]::SetForegroundWindow($handle) | Out-Null
     }
+
+    # A background runner can still lose the race for the foreground to the app that owns the last
+    # input event. Attaching to that thread and raising the window is the reliable escape hatch; the
+    # synthetic clicks and keys below only reach the app while it owns the foreground.
+    if ([LarikWin32]::GetForegroundWindow() -ne $handle) {
+        $foregroundThread = [LarikWin32]::GetWindowThreadProcessId([LarikWin32]::GetForegroundWindow(), [IntPtr]::Zero)
+        $targetThread = [LarikWin32]::GetWindowThreadProcessId($handle, [IntPtr]::Zero)
+        if ($foregroundThread -ne 0 -and $targetThread -ne 0) {
+            [LarikWin32]::AttachThreadInput($foregroundThread, $targetThread, $true) | Out-Null
+            [LarikWin32]::BringWindowToTop($handle) | Out-Null
+            [LarikWin32]::SetForegroundWindow($handle) | Out-Null
+            [LarikWin32]::SetWindowPos($handle, [IntPtr]::Zero, 0, 0, 0, 0, 0x0001 -bor 0x0002 -bor 0x0040) | Out-Null
+            [LarikWin32]::AttachThreadInput($foregroundThread, $targetThread, $false) | Out-Null
+        }
+    }
+
     Start-Sleep -Milliseconds 400
 }
 # A tab window is a second HWND of the same process; -a would keep picking the shell, so the
@@ -1248,8 +1267,8 @@ try {
         Assert-True ((Find-Element '24 rows returned').matchCount -gt 0) 'status bar did not report the row count'
     }
 
-    Test-UI 'Space ticks columns only in the SELECT list' {
-        # In the projection, Space multi-selects the highlighted column: the text does not change.
+    Test-UI 'Space types a space in the suggestion popup' {
+        # Space must never tick or insert a column; it is ordinary typing, even in a SELECT list.
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+a'
         Send-Keys 'select ' -Literal
@@ -1257,9 +1276,9 @@ try {
         Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'column suggestions did not open'
         Send-Keys 'space'
         Start-Sleep -Milliseconds 300
-        Assert-True ((Get-EditorText) -eq 'select ') "Space did not tick in the SELECT list: '$((Get-EditorText))'"
+        Assert-True ((Get-EditorText) -eq 'select  ') "Space did not insert a space in the SELECT list: '$((Get-EditorText))'"
 
-        # In a WHERE condition the checkbox makes no sense, so Space is an ordinary space.
+        # In a WHERE condition the list is not a projection either; Space is still an ordinary space.
         Send-Keys 'ctrl+a'
         Send-Keys 'select * from customers where ' -Literal
         Start-Sleep -Milliseconds 900
@@ -1269,6 +1288,37 @@ try {
         Assert-True ((Get-EditorText) -eq 'select * from customers where  ') "Space was swallowed in WHERE: '$((Get-EditorText))'"
         Send-Keys 'esc'
         Start-Sleep -Milliseconds 200
+    }
+
+    Test-UI 'Ctrl+Space reopens the suggestion popup without typing a space' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select ' -Literal
+        Start-Sleep -Milliseconds 900
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -eq 0) 'Esc did not close the popup'
+
+        Send-Keys 'ctrl+space'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'Ctrl+Space did not reopen the popup'
+        Assert-True ((Get-EditorText) -eq 'select ') "Ctrl+Space typed a space: '$((Get-EditorText))'"
+        Send-Keys 'esc'
+        Start-Sleep -Milliseconds 200
+    }
+
+    Test-UI 'Tab indents repeatedly instead of reselecting the spaces' {
+        # RichEdit leaves the inserted run selected; two Tabs must add two indent steps, and the
+        # caret must stay collapsed so typing appends instead of replacing the indent.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'tab'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -eq (' ' * 8)) "two Tabs did not indent twice: '$((Get-EditorText))'"
+        Send-Keys 'x' -Literal
+        Start-Sleep -Milliseconds 300
+        Assert-True ((Get-EditorText) -eq ((' ' * 8) + 'x')) "typing after Tab replaced the indent: '$((Get-EditorText))'"
     }
 
     Test-UI 'Format preserves string literals and is undoable' {
@@ -1454,6 +1504,22 @@ try {
         Send-Keys 'tab'
         Start-Sleep -Milliseconds 600
         Assert-True ((Get-EditorText).TrimEnd().EndsWith('o.customer_id = c.id')) "join condition was not inserted: '$((Get-EditorText))'"
+    }
+
+    Test-UI 'typing JO completes to the JOIN keyword, not a snippet' {
+        # After a finished ON predicate a new line starts a keyword position. Snippet names that
+        # merely contain "JO" must not outrank the keyword the user is spelling.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from customers c join orders o on o.customer_id = c.id' -Literal
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'enter'
+        Send-Keys 'jo' -Literal
+        Start-Sleep -Milliseconds 900
+        Assert-True ((Find-Element 'SQL suggestions').matchCount -gt 0) 'typing JO did not suggest anything'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText).TrimEnd().EndsWith('JOIN')) "JO was not completed to JOIN: '$((Get-EditorText))'"
     }
 
     Test-UI 'columns are suggested through their table alias' {
@@ -1670,6 +1736,26 @@ try {
         Assert-True ((Find-Element 'backup_set_id').matchCount -gt 0) 'columns do not complete through the bracketed alias'
         Send-Keys 'esc'
         Start-Sleep -Milliseconds 300
+    }
+
+    Test-UI 'column completion quotes identifiers for T-SQL' {
+        # A field called Key is a reserved word: the insert must carry the dialect's brackets, in the
+        # projection and in an UPDATE target alike, or the statement the user accepts does not parse.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select * from [dbo].[backupset] b where b.backup_set_uuid' -Literal
+        Start-Sleep -Milliseconds 1500
+        Assert-True ((Find-Element 'backup_set_uuid').matchCount -gt 0) 'the column is not suggested'
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText).EndsWith('where b.[backup_set_uuid]')) "column insert was '$((Get-EditorText))'"
+
+        Send-Keys 'ctrl+a'
+        Send-Keys 'update [dbo].[backupset] set backup_set_uuid' -Literal
+        Start-Sleep -Milliseconds 1500
+        Send-Keys 'tab'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText).EndsWith('set [backup_set_uuid] = ')) "target column insert was '$((Get-EditorText))'"
     }
 
     Test-UI 'Shift+Space previews the referenced rows of a foreign key' {
