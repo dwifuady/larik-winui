@@ -247,12 +247,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   `SET TRANSACTION ISOLATION LEVEL ...` works, and now only affects the tab that issued it.
 - **Snippet completion**: type a trigger prefix, get a popup anchored to the caret via
   `ITextSelection.GetRect` (text-area coordinates, offset by the editor's padding), Up/Down to move,
-  **Tab or Enter accepts**, Esc dismisses. In a column list, **Space ticks the highlighted column**
-  (column rows carry a checkbox) so several can be picked, and one Tab/Enter inserts them
-  comma-separated (`o.Id, o.Intent, o.Status`). Picks survive filtering and closing the popup while
-  the caret stays at the same insertion point, so a selection can be built in several passes; moving
-  to another word or statement starts fresh, and accepting clears them. Space only ticks when the
-  word being typed is empty or a pick is already in progress, so a space mid-word is never swallowed.
+  **Tab or Enter accepts**, Esc dismisses, and **Ctrl+Space** asks for the list on demand (it never
+  types a space). Space is never intercepted: it types a space, so column
+  lists can be typed through and a column is inserted one at a time with Tab/Enter.
   Expansion honours `${cursor}`, `${1:placeholder}` (left
   selected), repeat markers, and `alias.`/`table.` column completion resolved through the
   statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
@@ -260,7 +257,10 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   dialect's quoting — `[dbo].[Promotion] AS [p]` on SQL Server (plus a `no alias` variant); typing a
   schema (`FROM dbo.`) narrows the list and is not repeated in the insert. After
   `SELECT`/`WHERE`/`ON`/`AND`/... it lists the
-  statement's columns through their aliases (`c.full_name`) — scoped to the tables of the statement,
+  statement's columns through their aliases (`[c].[full_name]` on SQL Server, bare
+  `c.full_name` when the provider has no quoting) — every inserted identifier is quoted the
+  dialect's way, so a field named `Key` arrives as `[Key]` instead of breaking the statement — scoped
+  to the tables of the statement,
   even when the FROM clause sits below the caret, which is how `SELECT t.` lists only `t`'s table —
   suggests join conditions after `ON` only (not after `WHERE`), offers the clause continuations
   (`GROUP BY`, `HAVING`, `ORDER BY`, `UNION`, `OPTION`) after a predicate, and the
