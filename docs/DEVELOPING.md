@@ -35,14 +35,17 @@ kernel32 call rather than `Windows.Storage.ApplicationData`. Files keep their hi
 port, no token and no listener; it reads the same store and secrets as the app, one
 `IDatabaseConnection` per tool call. It never references WinUI, and the app never references it.
 
-**Packaging.** `Larik.csproj` builds the MCP project and copies its EXE and dependencies beside
-`Larik.exe` (`CopyMcpServer`); `dotnet publish` repeats it from a self-contained build
-(`PublishMcpServer`) so an installed copy needs no .NET runtime of its own.
+**Packaging.** The MCP server ships in its own **`mcp\`** folder beside `Larik.exe`: the two
+apphosts resolve overlapping `Microsoft.Extensions.*` packages to different versions, and a shared
+folder lets one overwrite the other — that is exactly how 0.1.1 first shipped a server that could not
+start (`FileNotFoundException: Microsoft.Extensions.Logging.Abstractions`). `CopyMcpServer` copies the
+build output there; `PublishMcpServer` runs a real `dotnet publish` (a nested `MSBuild` call cannot
+restore, and a nested *build* inherits this project's `RuntimeIdentifier`) into `$(PublishDir)mcp\`.
 `Package.appxmanifest` declares a second `Application` with a `uap5:ExecutionAlias` for
-**`larik-mcp.exe`**, so agents run the command with no path at all. Two caveats: the debug layout
-`winapp run` generates rebuilds its `AppX` folder and drops the copied EXE (the alias dangles until a
-real package is installed), and the Store build's generated manifest must keep the second
-`Application` entry — check `obj\store\Package.appxmanifest` before a Store submission.
+**`larik-mcp.exe`** pointing at `mcp\Larik.Mcp.exe`. Caveat: the debug layout `winapp run` generates
+rebuilds its `AppX` folder and drops the copy (the alias dangles until a real package is installed),
+and the Store build's generated manifest must keep the second `Application` entry — check
+`obj\store\Package.appxmanifest` before a Store submission.
 
 ### Driving the MCP server by hand
 
