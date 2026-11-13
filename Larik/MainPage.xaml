@@ -620,9 +620,10 @@
                     ReorderMode="Enabled"
                     SelectionMode="None" />
 
-                <!--  Workspace footer: up to six icons, then a position pill. Ten unlabelled marks
-                      identify nothing, so past six the footer stops being a map and opens the
-                      labelled list instead. Both rows switch workspaces.  -->
+                <!--  Workspace footer: three chips at most, centred on the active workspace. Past three
+                      the strip is a window, and a chevron appears on whichever side still has a
+                      workspace: three marks read as a map, ten read as noise. Both rows switch
+                      workspaces.  -->
                 <Grid
                     Grid.Row="7"
                     Padding="8,7,8,7"
@@ -649,64 +650,48 @@
                     </Button>
 
                     <Grid Grid.Column="1">
-                        <ItemsControl
-                            HorizontalAlignment="Center"
-                            AutomationProperties.Name="Workspaces"
-                            ItemsSource="{x:Bind ViewModel.FooterSpaces, Mode=OneWay}"
-                            Visibility="{x:Bind ViewModel.FooterIconsVisibility, Mode=OneWay}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" Spacing="2" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:SpaceViewModel">
-                                    <Button
-                                        Width="26"
-                                        Height="24"
-                                        Padding="0"
-                                        AutomationProperties.Name="{x:Bind IndicatorName, Mode=OneWay}"
-                                        Background="{x:Bind IndicatorChipBrush, Mode=OneWay}"
-                                        Click="WorkspaceIndicator_Click"
-                                        Content="{x:Bind}"
-                                        ContentTemplate="{StaticResource SpaceIconTemplate}"
-                                        CornerRadius="6"
-                                        Style="{StaticResource StudioIconButtonStyle}"
-                                        ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
                         <StackPanel
                             HorizontalAlignment="Center"
                             Orientation="Horizontal"
-                            Spacing="2"
-                            Visibility="{x:Bind ViewModel.FooterPillVisibility, Mode=OneWay}">
+                            Spacing="2">
                             <Button
                                 Width="20"
                                 Height="24"
                                 Padding="0"
                                 AutomationProperties.Name="Previous workspace"
                                 Click="WorkspacePrevious_Click"
-                                IsEnabled="{x:Bind ViewModel.CanGoToPreviousSpace, Mode=OneWay}"
                                 Style="{StaticResource StudioIconButtonStyle}"
-                                ToolTipService.ToolTip="Previous workspace">
+                                ToolTipService.ToolTip="Previous workspace"
+                                Visibility="{x:Bind ViewModel.FooterPreviousVisibility, Mode=OneWay}">
                                 <FontIcon FontSize="9" Glyph="&#xE76B;" />
                             </Button>
 
-                            <Button
-                                Width="24"
-                                Height="24"
-                                Padding="0"
-                                AutomationProperties.HelpText="Opens the workspace list"
-                                AutomationProperties.Name="{x:Bind ViewModel.ActiveSpace.IndicatorName, Mode=OneWay}"
-                                Background="{x:Bind ViewModel.ActiveSpace.IndicatorChipBrush, Mode=OneWay}"
-                                Click="WorkspacePill_Click"
-                                Content="{x:Bind ViewModel.ActiveSpace, Mode=OneWay}"
-                                ContentTemplate="{StaticResource SpaceIconTemplate}"
-                                CornerRadius="6"
-                                Style="{StaticResource StudioIconButtonStyle}"
-                                ToolTipService.ToolTip="Switch workspace" />
+                            <ItemsControl
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Workspaces"
+                                ItemsSource="{x:Bind ViewModel.FooterSpaces, Mode=OneWay}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="2" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SpaceViewModel">
+                                        <Button
+                                            Width="26"
+                                            Height="24"
+                                            Padding="0"
+                                            AutomationProperties.Name="{x:Bind IndicatorName, Mode=OneWay}"
+                                            Background="{x:Bind IndicatorChipBrush, Mode=OneWay}"
+                                            Click="WorkspaceIndicator_Click"
+                                            Content="{x:Bind}"
+                                            ContentTemplate="{StaticResource SpaceIconTemplate}"
+                                            CornerRadius="6"
+                                            Style="{StaticResource StudioIconButtonStyle}"
+                                            ToolTipService.ToolTip="{x:Bind TooltipText, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
                             <Button
                                 Width="20"
@@ -714,18 +699,11 @@
                                 Padding="0"
                                 AutomationProperties.Name="Next workspace"
                                 Click="WorkspaceNext_Click"
-                                IsEnabled="{x:Bind ViewModel.CanGoToNextSpace, Mode=OneWay}"
                                 Style="{StaticResource StudioIconButtonStyle}"
-                                ToolTipService.ToolTip="Next workspace">
+                                ToolTipService.ToolTip="Next workspace"
+                                Visibility="{x:Bind ViewModel.FooterNextVisibility, Mode=OneWay}">
                                 <FontIcon FontSize="9" Glyph="&#xE76C;" />
                             </Button>
-
-                            <TextBlock
-                                Margin="6,0,0,0"
-                                VerticalAlignment="Center"
-                                FontSize="10"
-                                Foreground="{ThemeResource StudioTextMutedBrush}"
-                                Text="{x:Bind ViewModel.WorkspacePositionText, Mode=OneWay}" />
                         </StackPanel>
                     </Grid>
 

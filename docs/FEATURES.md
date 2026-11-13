@@ -96,9 +96,11 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
   Other tabs keep their own database
   and schema. An Arc-style row of **workspace icons** at the bottom of the
-  rail shows up to six visible workspaces, the current one tinted in its colour; clicking an icon
-  switches workspace. Past six the row becomes a position pill (`‹ icon › 4 / 10`) that steps to the
-  neighbour or opens the labelled workspace list, because ten unlabelled marks identify nothing.
+  rail shows at most three visible workspaces, the current one tinted in its colour; clicking an
+  icon switches workspace. Past three the row is a window that follows the active workspace and
+  grows a chevron only on a side that still has one, so it steps to the neighbour instead of
+  shrinking into unlabelled specks; the labelled workspace list stays one click away in the rail
+  header.
   Every row in that list carries a quiet **provider chip** (`SQL Server`, `PostgreSQL`, `Demo (in-memory)`) from
   the provider's own display name, so two look-alike workspace names are distinguishable without
   opening either. The switcher no longer edits: it only switches, offers **New workspace**, and

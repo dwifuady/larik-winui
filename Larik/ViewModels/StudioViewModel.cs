@@ -285,11 +285,11 @@ public partial class StudioViewModel : ObservableObject
         HasSpaces && IsActiveTabPoppedOut ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
-    /// Six icons fit in the rail footer at a legal hit-target size (26 px inside 172 px of usable
-    /// width). Beyond that the footer becomes a position pill: ten unlabelled marks identify nothing,
-    /// so the footer stops pretending to be a map and opens the labelled list instead.
+    /// Three chips read as a map; past three, unlabelled marks stop identifying anything. Beyond
+    /// three the footer shows a window on the active workspace with a chevron on whichever side
+    /// still has one, so the strip stays calm instead of shrinking into specks.
     /// </summary>
-    private const int FooterIconLimit = 6;
+    private const int FooterIconLimit = 3;
 
     /// <summary>
     /// The workspaces the rail and switcher offer: everything not hidden, plus the active one even
@@ -305,36 +305,38 @@ public partial class StudioViewModel : ObservableObject
         ? "1 hidden workspace"
         : $"{HiddenSpaceCount} hidden workspaces";
 
-    public IReadOnlyList<SpaceViewModel> FooterSpaces => [.. RailSpaces.Take(FooterIconLimit)];
-
-    public bool ShowsWorkspacePill => RailSpaces.Count > FooterIconLimit;
-
-    public Visibility FooterIconsVisibility => ShowsWorkspacePill ? Visibility.Collapsed : Visibility.Visible;
-
-    public Visibility FooterPillVisibility => ShowsWorkspacePill ? Visibility.Visible : Visibility.Collapsed;
-
-    public string WorkspacePositionText
+    /// <summary>
+    /// First workspace of the footer window. The window is centred on the active workspace and
+    /// clamped to the ends, so it never shows a gap and always contains the workspace you are in.
+    /// </summary>
+    private int FooterWindowStart
     {
         get
         {
             var rail = RailSpaces;
+            if (rail.Count <= FooterIconLimit)
+            {
+                return 0;
+            }
+
             var index = ActiveSpace is null ? -1 : rail.ToList().IndexOf(ActiveSpace);
-            return index < 0 ? string.Empty : $"{index + 1} / {rail.Count}";
+            return index < 0
+                ? 0
+                : Math.Clamp(index - ((FooterIconLimit - 1) / 2), 0, rail.Count - FooterIconLimit);
         }
     }
 
-    public bool CanGoToPreviousSpace => ActiveSpace is not null
-        && RailSpaces.ToList().IndexOf(ActiveSpace) > 0;
+    public IReadOnlyList<SpaceViewModel> FooterSpaces =>
+        [.. RailSpaces.Skip(FooterWindowStart).Take(FooterIconLimit)];
 
-    public bool CanGoToNextSpace
-    {
-        get
-        {
-            var rail = RailSpaces;
-            var index = ActiveSpace is null ? -1 : rail.ToList().IndexOf(ActiveSpace);
-            return index >= 0 && index < rail.Count - 1;
-        }
-    }
+    /// <summary>A chevron appears only on a side that still has a workspace beyond the window.</summary>
+    public Visibility FooterPreviousVisibility => FooterWindowStart > 0
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility FooterNextVisibility => FooterWindowStart + FooterIconLimit < RailSpaces.Count
+        ? Visibility.Visible
+        : Visibility.Collapsed;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowTitle))]
@@ -1974,21 +1976,20 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(PoppedOutVisibility));
         OnPropertyChanged(nameof(IsActiveTabPoppedOut));
         OnPropertyChanged(nameof(RailSpaces));
-        OnPropertyChanged(nameof(FooterSpaces));
         OnPropertyChanged(nameof(HiddenSpaceCount));
         OnPropertyChanged(nameof(HiddenSpaceCountLabel));
-        OnPropertyChanged(nameof(ShowsWorkspacePill));
-        OnPropertyChanged(nameof(FooterIconsVisibility));
-        OnPropertyChanged(nameof(FooterPillVisibility));
         NotifyWorkspaceFooter();
     }
 
-    /// <summary>Position and chevrons follow the active workspace, without rebuilding the icon strip.</summary>
+    /// <summary>
+    /// The footer window follows the active workspace, so a switch moves the strip and its
+    /// chevrons as well as the tint.
+    /// </summary>
     private void NotifyWorkspaceFooter()
     {
-        OnPropertyChanged(nameof(WorkspacePositionText));
-        OnPropertyChanged(nameof(CanGoToPreviousSpace));
-        OnPropertyChanged(nameof(CanGoToNextSpace));
+        OnPropertyChanged(nameof(FooterSpaces));
+        OnPropertyChanged(nameof(FooterPreviousVisibility));
+        OnPropertyChanged(nameof(FooterNextVisibility));
     }
 
     /// <summary>Re-tints the active workspace; the change schedules a save through TrackSpace.</summary>

@@ -1174,11 +1174,7 @@ public sealed partial class MainPage : Page
         }
     }
 
-    /// <summary>Above six workspaces the footer is a pill; its icon opens the same list as the switcher.</summary>
-    private void WorkspacePill_Click(object sender, RoutedEventArgs e) =>
-        ShowWorkspaceFlyout((FrameworkElement)sender);
-
-    /// <summary>One step along the workspace order. The pill's chevrons never wrap.</summary>
+    /// <summary>Above three workspaces the footer chevrons step along the workspace order.</summary>
     private void WorkspacePrevious_Click(object sender, RoutedEventArgs e) => ViewModel.SelectRelativeSpace(-1);
 
     private void WorkspaceNext_Click(object sender, RoutedEventArgs e) => ViewModel.SelectRelativeSpace(1);
