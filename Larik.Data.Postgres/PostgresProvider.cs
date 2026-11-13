@@ -40,6 +40,72 @@ public sealed class PostgresProvider : IDatabaseProvider
     public string? DescribeIdentity(ConnectionProfile profile) =>
         string.IsNullOrWhiteSpace(profile.Get("user")) ? null : profile.Get("user")!.Trim();
 
+    public string? DescribeSecurityWarning(ConnectionProfile profile)
+    {
+        var host = profile.Get("host");
+        if (IsLocalHost(host))
+        {
+            return null;
+        }
+
+        var value = profile.Get("sslMode");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            // Empty now means VerifyFull for a remote host.
+            return null;
+        }
+
+        if (!Enum.TryParse<SslMode>(value.Trim(), ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+        {
+            // The connection will refuse the unknown value with a clearer message.
+            return null;
+        }
+
+        return mode is SslMode.Disable or SslMode.Allow or SslMode.Prefer
+            ? "This connection does not verify the server's certificate, so someone on the network could impersonate the server."
+            : null;
+    }
+
+    /// <summary>Loopback hosts (or a Unix-socket directory) never cross a network.</summary>
+    internal static bool IsLocalHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        var name = host.Trim();
+        if (name.Length > 1 && name[0] == '[' && name[^1] == ']')
+        {
+            name = name[1..^1];
+        }
+
+        return name.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || name == "127.0.0.1"
+            || name == "::1"
+            || name.StartsWith('/')
+            || name.Contains('\\');
+    }
+
+    internal static SslMode ParseSslMode(string? value, bool isLocalHost)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            // Local servers routinely have TLS off, so insisting on it there would break the common
+            // dev setup without protecting anything. Remote hosts verify identity by default.
+            return isLocalHost ? SslMode.Prefer : SslMode.VerifyFull;
+        }
+
+        if (Enum.TryParse<SslMode>(value.Trim(), ignoreCase: true, out var mode) && Enum.IsDefined(mode))
+        {
+            return mode;
+        }
+
+        // Silently downgrading a typo to Prefer would leave the user believing VerifyFull is active.
+        throw new InvalidOperationException(
+            $"Unknown SSL mode '{value}'. Use Disable, Allow, Prefer, Require, VerifyCA or VerifyFull.");
+    }
+
     public IReadOnlyList<ProviderSetting> Settings { get; } =
     [
         new()
@@ -77,8 +143,11 @@ public sealed class PostgresProvider : IDatabaseProvider
         {
             Key = "sslMode",
             Label = "SSL mode",
-            DefaultValue = "Prefer",
-            Hint = "Disable, Allow, Prefer, Require, VerifyCA or VerifyFull.",
+            // Empty means "pick by host": localhost keeps the ecosystem default, remote servers
+            // verify the certificate. An explicit value always wins.
+            Placeholder = "VerifyFull for remote, Prefer for localhost",
+            Hint = "Disable, Allow, Prefer, Require, VerifyCA or VerifyFull. "
+                + "Empty verifies remote servers (VerifyFull) and uses Prefer for localhost.",
             IsAdvanced = true,
         },
         new()
@@ -1065,7 +1134,9 @@ internal sealed class PostgresConnection : IDatabaseConnection
             ApplicationName = "Larik SQL Studio",
             Timeout = Math.Max(1, _profile.GetInt("connectTimeout", 8)),
             Pooling = true,
-            SslMode = ParseSslMode(_profile.Get("sslMode")),
+            SslMode = PostgresProvider.ParseSslMode(
+                _profile.Get("sslMode"),
+                PostgresProvider.IsLocalHost(host)),
         };
 
         var user = _profile.Get("user");
@@ -1081,23 +1152,6 @@ internal sealed class PostgresConnection : IDatabaseConnection
         }
 
         return builder.ConnectionString;
-    }
-
-    private static SslMode ParseSslMode(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return SslMode.Prefer;
-        }
-
-        if (Enum.TryParse<SslMode>(value.Trim(), ignoreCase: true, out var mode) && Enum.IsDefined(mode))
-        {
-            return mode;
-        }
-
-        // Silently downgrading a typo to Prefer would leave the user believing VerifyFull is active.
-        throw new InvalidOperationException(
-            $"Unknown SSL mode '{value}'. Use Disable, Allow, Prefer, Require, VerifyCA or VerifyFull.");
     }
 
     private static string FormatError(PostgresException error)

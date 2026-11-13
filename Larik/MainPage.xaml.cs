@@ -1718,6 +1718,7 @@ public sealed partial class MainPage : Page
         var mutedBrush = ThemeBrush("StudioTextMutedBrush", StudioColors.Muted);
         var dangerBrush = ThemeBrush("StudioDangerBrush", StudioColors.Danger);
         var successBrush = ThemeBrush("StudioSuccessBrush", StudioColors.Success);
+        var warningBrush = ThemeBrush("StudioWarningBrush", StudioColors.Warning);
 
         var providerBox = new ComboBox
         {
@@ -1894,7 +1895,14 @@ public sealed partial class MainPage : Page
 
                 FrameworkElement input = setting.Kind switch
                 {
-                    ProviderSettingKind.Password => new PasswordBox { Password = value },
+                    // A saved password is loaded so an untouched box keeps it, but the reveal
+                    // button would show it to anyone at an unlocked PC. Hidden removes that
+                    // button without changing what the dialog saves.
+                    ProviderSettingKind.Password => new PasswordBox
+                    {
+                        Password = value,
+                        PasswordRevealMode = PasswordRevealMode.Hidden,
+                    },
                     ProviderSettingKind.Boolean => new ToggleSwitch
                     {
                         IsOn = bool.TryParse(value, out var on) && on,
@@ -1932,6 +1940,29 @@ public sealed partial class MainPage : Page
 
                 (setting.IsAdvanced ? advancedFields : primaryFields).Children.Add(group);
             }
+
+            // A provider's transport warning has to follow the fields the user is editing, not just
+            // the saved profile: flipping the trust toggle or changing the host updates it live.
+            foreach (var input in inputs.Values)
+            {
+                switch (input)
+                {
+                    case TextBox text:
+                        text.TextChanged += (_, _) => RefreshSecurityWarning();
+                        break;
+                    case ToggleSwitch toggle:
+                        toggle.Toggled += (_, _) => RefreshSecurityWarning();
+                        break;
+                    case NumberBox number:
+                        number.ValueChanged += (_, _) => RefreshSecurityWarning();
+                        break;
+                    case PasswordBox password:
+                        password.PasswordChanged += (_, _) => RefreshSecurityWarning();
+                        break;
+                }
+            }
+
+            RefreshSecurityWarning();
 
             advancedButton.Visibility = advancedFields.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -2135,6 +2166,23 @@ public sealed partial class MainPage : Page
         body.Children.Add(primaryFields);
         body.Children.Add(advancedButton);
 
+        var securityWarning = new TextBlock
+        {
+            FontSize = 10,
+            MaxWidth = 360,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = warningBrush,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetName(securityWarning, "Connection security warning");
+
+        void RefreshSecurityWarning()
+        {
+            var warning = SelectedProvider().DescribeSecurityWarning(BuildProfile());
+            securityWarning.Text = warning ?? string.Empty;
+            securityWarning.Visibility = warning is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+
         // The dialog's own scroller does not always engage when the form outgrows the window,
         // so the fields scroll in their own viewport and the status line stays in view.
         var fieldsScroll = new ScrollViewer
@@ -2153,12 +2201,15 @@ public sealed partial class MainPage : Page
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        form.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         Grid.SetRow(providerGroup, 0);
         Grid.SetRow(fieldsScroll, 1);
-        Grid.SetRow(status, 2);
+        Grid.SetRow(securityWarning, 2);
+        Grid.SetRow(status, 3);
         form.Children.Add(providerGroup);
         form.Children.Add(fieldsScroll);
+        form.Children.Add(securityWarning);
         form.Children.Add(status);
 
         if (DatabaseProviderCatalog.LoadErrors.Count > 0)
@@ -2171,7 +2222,7 @@ public sealed partial class MainPage : Page
                 Foreground = dangerBrush,
             };
 
-            Grid.SetRow(loadErrors, 3);
+            Grid.SetRow(loadErrors, 4);
             form.Children.Add(loadErrors);
         }
 

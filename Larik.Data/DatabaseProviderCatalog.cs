@@ -4,8 +4,8 @@ namespace Larik.Data;
 
 /// <summary>
 /// Discovers <see cref="IDatabaseProvider"/> implementations from the app's referenced provider
-/// assemblies, installed add-ons, and any DLL dropped into a Plugins folder. Adding a database means
-/// adding a provider assembly, not editing the app.
+/// assemblies and manifest-backed add-ons. Adding a database means adding a provider assembly, not
+/// editing the app.
 /// </summary>
 public static class DatabaseProviderCatalog
 {
@@ -25,15 +25,14 @@ public static class DatabaseProviderCatalog
             : Providers.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// The preferred entry point. <paramref name="sources"/> are assemblies the caller already
-    /// loaded — built-ins and add-ons alike — so the catalogue never has to guess how to load them.
-    /// <paramref name="errors"/> carries failures from the add-on scan; legacy flat DLLs in
-    /// <paramref name="legacyPluginDirectories"/> are still supported for compatibility.
+    /// The only entry point. <paramref name="sources"/> are assemblies the caller already loaded —
+    /// built-ins and add-ons alike — so the catalogue never has to guess how to load them.
+    /// <paramref name="errors"/> carries failures from the add-on scan. Bare DLLs are deliberately
+    /// not discovered: loading them would bypass the add-on manifest, hash check and install prompt.
     /// </summary>
     public static void Initialize(
         IEnumerable<ProviderSource> sources,
-        IEnumerable<string>? errors = null,
-        params string[] legacyPluginDirectories)
+        IEnumerable<string>? errors = null)
     {
         Errors.Clear();
         if (errors is not null)
@@ -48,27 +47,6 @@ public static class DatabaseProviderCatalog
             AddFromAssembly(source, providers);
         }
 
-        foreach (var directory in legacyPluginDirectories.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            foreach (var file in Directory.EnumerateFiles(directory, "*.dll"))
-            {
-                try
-                {
-                    AddFromAssembly(
-                        new ProviderSource(Path.GetFileName(file), Assembly.LoadFrom(file)),
-                        providers);
-                }
-                catch (Exception ex) when (ex is BadImageFormatException or FileLoadException)
-                {
-                    // Native or otherwise unmanaged DLL sitting beside plugins: not our business.
-                }
-                catch (Exception ex)
-                {
-                    Errors.Add($"{Path.GetFileName(file)}: {ex.Message}");
-                }
-            }
-        }
-
         Providers = providers
             .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
@@ -77,11 +55,10 @@ public static class DatabaseProviderCatalog
     }
 
     /// <summary>Compatibility overload for callers that only have assemblies.</summary>
-    public static void Initialize(IEnumerable<Assembly> builtInAssemblies, params string[] pluginDirectories) =>
+    public static void Initialize(IEnumerable<Assembly> builtInAssemblies) =>
         Initialize(
             builtInAssemblies.Select(assembly => new ProviderSource(assembly.GetName().Name ?? "built-in", assembly)),
-            errors: null,
-            pluginDirectories);
+            errors: null);
 
     /// <summary>
     /// Adds providers from add-ons installed while the app is running. Existing ids win, so an

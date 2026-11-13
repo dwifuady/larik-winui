@@ -185,6 +185,39 @@ public sealed class PostgresDialectTests
     }
 
     [Fact]
+    public void Ssl_mode_default_is_resolved_from_the_host_instead_of_written_down()
+    {
+        var setting = Assert.Single(
+            new PostgresProvider().Settings,
+            item => item.Key == "sslMode");
+
+        // Empty means "Prefer for localhost, VerifyFull for remote"; a stored value would freeze
+        // the old Prefer default into every new profile.
+        Assert.Null(setting.DefaultValue);
+        Assert.Contains("VerifyFull", setting.Placeholder, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Warns_only_when_a_remote_connection_can_skip_certificate_verification()
+    {
+        var provider = new PostgresProvider();
+
+        var remotePrefer = new ConnectionProfile { ProviderId = "postgres" };
+        remotePrefer.Values["host"] = "db.internal";
+        remotePrefer.Values["sslMode"] = "Prefer";
+        Assert.NotNull(provider.DescribeSecurityWarning(remotePrefer));
+
+        var remoteDefault = new ConnectionProfile { ProviderId = "postgres" };
+        remoteDefault.Values["host"] = "db.internal";
+        Assert.Null(provider.DescribeSecurityWarning(remoteDefault));
+
+        var localPrefer = new ConnectionProfile { ProviderId = "postgres" };
+        localPrefer.Values["host"] = "localhost";
+        localPrefer.Values["sslMode"] = "Prefer";
+        Assert.Null(provider.DescribeSecurityWarning(localPrefer));
+    }
+
+    [Fact]
     public void Provider_describes_its_endpoint_without_the_shell_knowing_the_provider()
     {
         var profile = new ConnectionProfile { ProviderId = "postgres" };
@@ -296,10 +329,51 @@ public sealed class PostgresDialectTests
     [Fact]
     public void Formats_literals_for_the_reference_filter()
     {
-        Assert.Equal("'it''s'", Pg.FormatLiteral("it's", "text"));
+        Assert.Equal("E'it''s'", Pg.FormatLiteral("it's", "text"));
         Assert.Equal("42", Pg.FormatLiteral("42", "integer"));
         Assert.Equal("TRUE", Pg.FormatLiteral("true", "boolean"));
-        Assert.Equal("'42'", Pg.FormatLiteral("42", "text"));
+        Assert.Equal("E'42'", Pg.FormatLiteral("42", "text"));
         Assert.Equal("NULL", Pg.FormatLiteral(null, "integer"));
+    }
+
+    [Fact]
+    public void Backslashes_cannot_close_a_literal_when_standard_conforming_strings_is_off()
+    {
+        // The E'' prefix makes the escape rules explicit; both characters are escaped, so the
+        // trailing text stays inside the literal instead of becoming a second statement.
+        Assert.Equal(
+            @"E'\\''; DROP TABLE x; --'",
+            Pg.FormatLiteral(@"\'; DROP TABLE x; --", "text"));
+    }
+
+    [Fact]
+    public void An_empty_ssl_mode_verifies_remote_hosts_and_stays_light_for_localhost()
+    {
+        var provider = new PostgresProvider();
+
+        // A stored "Prefer" is an explicit choice and is left alone.
+        Assert.Equal(Npgsql.SslMode.Prefer, PostgresProvider.ParseSslMode("Prefer", isLocalHost: false));
+        Assert.Equal(Npgsql.SslMode.VerifyFull, PostgresProvider.ParseSslMode(null, isLocalHost: false));
+        Assert.Equal(Npgsql.SslMode.Prefer, PostgresProvider.ParseSslMode("", isLocalHost: true));
+        Assert.Equal(Npgsql.SslMode.VerifyFull, PostgresProvider.ParseSslMode("", isLocalHost: false));
+    }
+
+    [Theory]
+    [InlineData("localhost", true)]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::1", true)]
+    [InlineData("[::1]", true)]
+    [InlineData("/var/run/postgresql", true)]
+    [InlineData("db.internal", false)]
+    [InlineData("10.0.0.5", false)]
+    public void Loopback_hosts_are_treated_as_local(string host, bool expected)
+    {
+        Assert.Equal(expected, PostgresProvider.IsLocalHost(host));
+    }
+
+    [Fact]
+    public void Bytea_keeps_its_hex_prefix_inside_an_escape_string()
+    {
+        Assert.Equal(@"E'\\xDEADBEEF'", Pg.FormatLiteral("0xDEADBEEF", "bytea"));
     }
 }

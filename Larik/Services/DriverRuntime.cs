@@ -45,6 +45,8 @@ public static class DriverRuntime
         Loaded.AddRange(scan.Sources);
         Contexts.AddRange(scan.Contexts);
 
+        // Only manifest-backed add-ons are loaded. A bare DLL dropped into a Plugins folder has no
+        // hash, prompt or listing, so it is never loaded silently.
         DatabaseProviderCatalog.Initialize(
             [
                 new ProviderSource("built-in: Demo", typeof(DemoProvider).Assembly),
@@ -52,9 +54,7 @@ public static class DriverRuntime
                 new ProviderSource("built-in: PostgreSQL", typeof(PostgresProvider).Assembly),
                 .. Loaded,
             ],
-            scan.Errors,
-            Path.Combine(AppContext.BaseDirectory, "Plugins"),
-            LarikPaths.PluginsDirectory);
+            scan.Errors);
 
         LogCatalogue();
     }

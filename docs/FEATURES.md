@@ -13,7 +13,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 
 - **Self-update (GitHub edition)**: the unpackaged installer and portable ZIP check GitHub Releases
   once at launch, show a non-blocking notice, download in the background, verify the published
-  `SHA256SUMS.txt`, and install. An installed copy runs the per-user installer silently and reopens
+  `SHA256SUMS.txt`, and install. Verification fails closed: a release without a checksum asset, an
+  unreachable checksum, a missing entry or a mismatch blocks the install, and asset URLs must point
+  at a GitHub download host. An installed copy runs the per-user installer silently and reopens
   Larik; a portable copy replaces its own folder after the app exits. Settings → About → **Check
   now** runs the same check on demand and remembers **Check for updates automatically** in
   `app_state`. A packaged build (the Store edition, or a debug run through `winapp`) never checks
@@ -134,7 +136,16 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   tab is adopted the same way: after the batch the provider reports the session's database and the
   tab, rail, picker and completion schema re-point at it, so the next run is not switched back.
   Other tabs keep their own database
-  and schema. An Arc-style row of **workspace icons** at the bottom of the
+  and schema.
+  **Connection security follows the server, not the workspace.** SQL Server starts with **Trust
+  server certificate** off, so a remote server's certificate is verified; local targets (`localhost`,
+  `.`, `(local)`, `(localdb)\…`, loopback) skip the check automatically. PostgreSQL resolves an empty
+  **SSL mode** to `VerifyFull` for remote hosts and `Prefer` for localhost, and an explicit value
+  always wins. Older saved profiles keep the value they were saved with, so re-open a remote
+  workspace's advanced settings once after upgrading if it was created before these defaults.
+  An unverified remote profile is marked **UNVERIFIED** in the workspace list, with the full warning
+  in its tooltip, and the connection form shows the same sentence while you edit it.
+  An Arc-style row of **workspace icons** at the bottom of the
   rail shows at most three visible workspaces, the current one tinted in its colour; clicking an
   icon switches workspace. Past three the row is a window that follows the active workspace and
   grows a chevron only on a side that still has one, so it steps to the neighbour instead of
@@ -354,7 +365,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   provider-typed SQL literals. **Export results…** in the same menu
   writes the whole result (not the selection) through the Windows save picker, where the file type
   *is* the format choice: CSV (RFC 4180, CRLF, header row, NULL as an empty field, UTF-8 with BOM
-  so Excel reads non-ASCII) or JSON (array of row objects, real `null`s, duplicate column names
+  so Excel reads non-ASCII, and a leading `'` on values a spreadsheet would otherwise run as a
+  formula) or JSON (array of row objects, real `null`s, duplicate column names
   suffixed). The status bar reports the row count and file name. Drag a header edge to resize a column;
   drag the header body to reorder columns (cell values, selection, reference lookups and copy all
   follow the visual order); widths persist with that result set. Each result also remembers its vertical/horizontal scroll
@@ -406,7 +418,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | MCP writes need the studio open | The approval prompt is the studio's dialog, so a closed studio means a refused write. Client-side elicitation (MRTR) is implemented in the tool but **not shipped**: the SDK's attribute-tool pipeline turns `InputRequiredException` into a generic `-32603` instead of an `input_required` result (verified against a 2026-07-28 session). It needs `run_query` registered as a low-level handler first. |
 | `larik-mcp` only resolves in an installed package | The manifest declares the execution alias and `dotnet publish` puts `Larik.Mcp.exe` beside `Larik.exe`, so an installed (MSIX/portable) build has the command on PATH. The `winapp run` dev layout regenerates its `AppX` folder and drops the copied EXE, so a debug-identity package has a dangling alias; Settings falls back to the build-output path there. || SQL Server read-only is best-effort plus one layer | The classifier plus an always-rolled-back transaction stop transactional writes, but non-transactional effects (some extended procedures, linked-server writes reachable from a misjudged read) are outside it. A read-only login remains the only hard guarantee; the UI copy should say so. |
 | Three providers ship | SQL Server, PostgreSQL and the in-memory Demo. MongoDB ships as an add-on from its own repository (`dwifuady/larik-mongodb`). |
-| Updates are full downloads and unsigned | Each release downloads the whole ZIP or installer; there are no delta patches. The updater trusts TLS plus the release's `SHA256SUMS.txt`, not an Authenticode signature, so signing the GitHub artifacts is still future work. A portable copy in a read-only folder cannot update in place and points at the new ZIP instead. |
+| Updates are full downloads and unsigned | Each release downloads the whole ZIP or installer; there are no delta patches. The updater trusts TLS plus the release's `SHA256SUMS.txt` and fails closed when that file is missing, unreachable or incomplete; the builds are not Authenticode-signed, so signing the GitHub artifacts is still future work. A portable copy in a read-only folder cannot update in place and points at the new ZIP instead. |
 | MongoDB is a T-SQL surface over a NoSQL engine | The provider translates your T-SQL into aggregation pipelines / write commands and passes mongosh (`db.c.method(…)`) through. Deliberately limited: single-column `JOIN … ON` (a multi-key ON is rejected), an `INSERT` column list is recommended (bare `VALUES` store under generated keys), a handful of mongosh methods, and no multi-document transactions yet (`BEGIN TRAN` errors). The result-tab *Generated query* strip shows the pipeline that actually ran. |
 | Routines cover procedures, not functions | `RoutineSchema` already models `Function`, but SQL Server reads `sys.procedures` only and completion offers procedures only after `EXEC`/`CALL`. PostgreSQL reads functions too, but they are not offered in expression positions yet. Adding `FN`/`IF`/`TF` objects and expression-position function completion is the next step. |
 | PostgreSQL overloads collapse to one routine | The contract identifies a routine by schema + name, so the provider keeps the first overload's signature instead of showing two `CALL` candidates with the same name. A contract-level routine identity is the fix. |

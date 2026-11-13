@@ -64,12 +64,20 @@ public static class AddonLocator
         var version = ReadCurrentVersion(addonDirectory);
         if (version is null)
         {
-            // Not an add-on folder. Flat DLLs in the root are the legacy layout, which the
-            // catalogue still scans separately.
+            // Not an add-on folder. Bare DLLs in the root are deliberately ignored: loading code
+            // without a manifest, hash and prompt would make the folder an unlisted trust bypass.
             return new AddonScan(sources, errors, contexts);
         }
 
         var versionDirectory = Path.Combine(addonDirectory, version);
+        if (version is "." or ".."
+            || Path.GetFileName(version) != version
+            || version.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            errors.Add($"{folderName}: current.json names an invalid version ('{version}').");
+            return new AddonScan(sources, errors, contexts);
+        }
+
         if (!Directory.Exists(versionDirectory))
         {
             errors.Add($"{folderName} {version}: the active version folder is missing.");

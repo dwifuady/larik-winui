@@ -35,7 +35,7 @@ built-ins only today. See [`STORE.md`](STORE.md).
 | Catalogue hosting | Static `index.json` in a repo we own | No server to run, reviewable by PR, works offline with "Install from zip" |
 | Approval | Pull request + CI + human review | Curated index, not an open marketplace |
 | Artifact source | The author's own GitHub Release zip | Providers stay in their owners' repos |
-| Integrity | SHA-256 pinned in the index, plus a signed index | A hash alone does not survive a compromised index |
+| Integrity | SHA-256 pinned in the index; index signing is planned, not shipped | A hash detects a swapped zip but not a compromised index |
 | Install location | `%LOCALAPPDATA%\Larik WinUI\Plugins\<id>\<version>\` | MSIX install folder is read-only; portable and Store builds both work |
 | Loading | One non-collectible `AssemblyLoadContext` per add-on | Dependency isolation; `Larik.Data` binds to the host |
 | Apply | Restart required | .NET cannot unload assemblies truthfully |
@@ -505,7 +505,8 @@ Paste into Partner Center's **Notes for certification**:
 > fully offline. MongoDB and future engines are optional add-ons, offered in the app's documented
 > Add-ons page. Add-ons come from a curated, first-party index at `<URL>`; this build accepts
 > only first-party (`official`) entries. Each add-on is a .NET assembly that implements the
-> app's provider contract, is verified by SHA-256 and a signed index before installation, is
+> app's provider contract, is verified by its SHA-256 before installation (the index itself is not
+> yet signed, but this build only reads first-party entries), is
 > installed to the user's LocalAppData, and requires a restart. Add-ons add a database engine;
 > they do not change the app's primary functionality. Add-ons can be removed in-app. No
 > add-on installs scripts or executable code outside the app process.

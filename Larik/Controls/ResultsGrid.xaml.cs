@@ -2757,10 +2757,17 @@ public sealed partial class ResultsGrid : UserControl
         return true;
     }
 
-    private static string Escape(string value) =>
-        value.Contains('\t') || value.Contains('\n') || value.Contains('\r') || value.Contains('"')
-            ? "\"" + value.Replace("\"", "\"\"") + "\""
-            : value;
+    /// <summary>
+    /// Tab-separated text is pasted into spreadsheets as often as CSV is, so a leading formula
+    /// character is neutralised here too. The apostrophe is the spreadsheet's text marker.
+    /// </summary>
+    private static string Escape(string value)
+    {
+        var safe = ResultExport.NeutralizeSpreadsheetFormula(value);
+        return safe.Contains('\t') || safe.Contains('\n') || safe.Contains('\r') || safe.Contains('"')
+            ? "\"" + safe.Replace("\"", "\"\"") + "\""
+            : safe;
+    }
 
     // ---------------------------------------------------------------- scrolling
 
