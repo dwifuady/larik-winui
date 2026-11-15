@@ -2667,6 +2667,37 @@ try {
         Wait-ForText 'Refused'
     }
 
+    Test-UI 'history lists the runs it should and opens one where it belongs' {
+        # A real execution on top of the refusal the previous check produced: the log keeps both,
+        # because a blocked statement is the evidence the guard held.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 42 as answer' -Literal
+        Start-Sleep -Milliseconds 300
+        Click-Element 'RunButton'
+        Wait-ForText '1 row' 15
+
+        Send-Keys 'ctrl+shift+h'
+        Wait-ForText 'Search executed SQL' 10
+        Wait-ForText 'select 42 as answer' 10
+        Assert-True ((Find-Element 'refused').matchCount -gt 0) 'the refused statement is missing from the run log'
+        Assert-True ((Find-Element 'Go to tab').matchCount -gt 0) 'a run from an open tab offers no jump back'
+
+        # One row, one action: a run whose tab is still open goes there rather than duplicating it.
+        Click-Element 'Go to tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -match 'select 42 as answer') 'the run did not return to its own tab'
+
+        # The other half keeps its own list; it is still cross-workspace, which is how the archive works.
+        Send-Keys 'ctrl+shift+h'
+        Wait-ForText 'Search executed SQL' 10
+        Click-Element 'Archived'
+        Wait-ForText 'Search archived tabs' 10
+        Wait-ForText 'select 1' 10
+        Click-Element 'Back to workspace'
+        Start-Sleep -Milliseconds 500
+    }
+
     Test-UI 'a long server name stays inside the workspace switcher' {
         # The switcher shows the endpoint above Connect. A long host must trim to one bounded line
         # with the full value in its tooltip, instead of widening the flyout. Edit the workspace

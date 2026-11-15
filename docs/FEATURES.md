@@ -107,8 +107,19 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   followed by the ones it can only see; the current tab's database stays first in its group. Names the
   login cannot open are listed but **disabled** (labelled *no access*) and are skipped by the arrow
   keys, Enter and clicks. With no databases available, Enter opens an unbound tab.
-- **Archive & history**: the TABS header's archive button opens a page listing
-  archived tabs with their workspace, database, saved SQL preview and age. Restore puts the tab
+- **History**: one page with two halves. **Runs** lists every execution — yours and the agent's —
+  newest first and day-grouped, with the statement, database, duration, row count, an actor chip and
+  the outcome (ok, failed, refused or cancelled). A row opens the tab the run came from, or the same
+  SQL in a new tab when that tab is gone — never both, so history cannot litter the rail. Runs is
+  scoped to the active workspace with a workspace menu to widen it to all of them; the search box
+  matches statement, workspace and database, and All/You/Agent/Failed narrows by actor or outcome.
+  Statement text is kept on a **30 / 90 / 120-day** window chosen on the page itself, pruned by the
+  hourly sweep and at launch. A statement the `WHERE` guard refuses is recorded too: the log is the
+  evidence that the guard held. Ctrl+Shift+H opens the page; the TABS header's archive button opens
+  it on the other half.
+- **Archive & history**: the TABS header's archive button opens the page on **Archived**, listing
+  archived tabs with their workspace, database, saved SQL preview and age — across every workspace,
+  because the sweep can archive a tab you are not looking at. Restore puts the tab
   back in its workspace (pin state, and its group when that group still exists); Delete or
   **Clear all** removes history.
   Inactivity is tracked per tab (last selected or edited). **Auto-archive** is configurable on that
@@ -296,8 +307,12 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   the **hidden-from-rail** flag also survive. WAL mode, foreign keys
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
   columns/tables in place; v3 adds the workspace icon; v4 adds the rail visibility flag; v5 adds
-  tab groups; v6 adds custom reference metadata); a
-  pre-SQLite `studio.json` is imported once. Spaces still start
+  tab groups; v6 adds custom reference metadata; v7 adds the MCP exposure level and the audit and
+  approval tables; v8 adds the run log); a
+  pre-SQLite `studio.json` is imported once. The **run log** (`run_log`) records each execution —
+  studio or agent, statement text, duration, rows, status and the workspace it ran in — so it is
+  pruned to a **30 / 90 / 120-day** window instead of kept forever, and a workspace can record
+  nothing at all (`record_runs` in `space_settings`). Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
   SQLite), so SQL-auth connections reconnect after a restart without re-entering the password.
   Corrupt state opens the welcome surface instead of failing the launch. The store is deliberately **separate from the Tauri
