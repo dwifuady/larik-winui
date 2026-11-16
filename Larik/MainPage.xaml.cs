@@ -471,6 +471,8 @@ public sealed partial class MainPage : Page
         if (e.PropertyName == nameof(StudioViewModel.PoppedOutVisibility))
         {
             // The placeholder replaces the editor + results in place; docking brings them back.
+            // This value is republished on every tab selection, so both calls must be cheap when
+            // nothing actually changed (they are: see SyncEditorFromActiveTab and ShowResult).
             if (ViewModel.IsActiveTabPoppedOut)
             {
                 HideResultsPane();
@@ -673,6 +675,11 @@ public sealed partial class MainPage : Page
 
     // ---------------------------------------------------------------- editor surface
 
+    // What the editor currently holds, so the repeated sync notifications a tab switch fires do not
+    // refill the RichEditBox (and recolour it) a second time.
+    private TabViewModel? _syncedTab;
+    private string _syncedText = string.Empty;
+
     private void SyncEditorFromActiveTab()
     {
         // A popped-out tab's editor lives in its own window; writing here would clobber what the
@@ -684,7 +691,21 @@ public sealed partial class MainPage : Page
 
         // Language first: the first highlight after a tab/space switch must use the right one.
         SqlEditor.EditorLanguage = ViewModel.ActiveLanguage;
-        SqlEditor.Text = ViewModel.ActiveTab?.Content ?? string.Empty;
+
+        var tab = ViewModel.ActiveTab;
+        var content = tab?.Content ?? string.Empty;
+
+        // Selecting a tab publishes several notifications (selection, pop-out chrome, results); only
+        // the first one has to fill the editor. Setting the text again would reset the undo history
+        // and re-tokenize the whole document for no visible difference.
+        if (ReferenceEquals(tab, _syncedTab) && string.Equals(content, _syncedText, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _syncedTab = tab;
+        _syncedText = content;
+        SqlEditor.Text = content;
     }
 
     /// <summary>
@@ -712,6 +733,10 @@ public sealed partial class MainPage : Page
         if (ViewModel.ActiveTab is not null)
         {
             ViewModel.ActiveTab.Content = SqlEditor.Text;
+
+            // The editor is the source of truth for this tab until another tab is selected.
+            _syncedTab = ViewModel.ActiveTab;
+            _syncedText = ViewModel.ActiveTab.Content;
         }
     }
 

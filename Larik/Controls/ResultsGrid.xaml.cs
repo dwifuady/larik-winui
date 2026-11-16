@@ -33,15 +33,26 @@ public sealed partial class ResultsGrid : UserControl
     private const double MinColumnWidth = 48;
     private const double MaxColumnWidth = 900;
 
-    private readonly ConditionalWeakTable<QueryResult, ResultLayout> _layouts = new();
+    /// <summary>Reused for unselected rows; a fresh brush per item would allocate on every scroll.</summary>
+    private static readonly SolidColorBrush TransparentBrush = new(Microsoft.UI.Colors.Transparent);
+
+    /// <summary>
+    /// Results at or below this many rows keep their row wrappers cached (~70 bytes per row, so
+    /// ~1.4 MB at the ceiling). Above it the wrappers are rebuilt on show, like before the cache.
+    /// </summary>
+    private const int CachedPresentationRowLimit = 20_000;
+
+    private readonly ConditionalWeakTable<QueryResult, ResultPresentation> _presentations = new();
     private readonly ConditionalWeakTable<QueryResult, ResultViewState> _viewStates = new();
     private readonly List<Grid> _headerContainers = [];
     private readonly List<Border> _headerSurfaces = [];
 
     private QueryResult? _result;
     private ResultLayout? _layout;
-    private IReadOnlyList<ResultRow> _rows = [];
-    private IReadOnlyList<int> _rowNumbers = [];
+    private List<ResultRow> _rows = [];
+    private List<int> _rowNumbers = [];
+    private ResultLayout? _headerLayout;
+    private ICellReferenceController? _headerController;
     private ScrollViewer? _listScroller;
     private ScrollViewer? _rowNumberScroller;
     private bool _syncingScroll;
@@ -134,6 +145,23 @@ public sealed partial class ResultsGrid : UserControl
 
         /// <summary>Whether the cell preview was open for this result; state is per result/tab.</summary>
         public bool PreviewRequested { get; set; }
+    }
+
+    /// <summary>
+    /// The items a result shows, built once and reused. Switching back to a tab must not allocate a
+    /// fresh row list and a fresh row-number list: a new <c>ItemsSource</c> makes the ListView throw
+    /// away its realized containers and rebuild them, which is what made a tab switch feel delayed.
+    /// The layout is the same object every row points at, so column resize/reorder stays live. The
+    /// cache dies with the result, and one wrapper per row is small next to the cell strings it
+    /// already points at.
+    /// </summary>
+    private sealed class ResultPresentation
+    {
+        public required ResultLayout Layout { get; init; }
+
+        public List<ResultRow> Rows { get; } = [];
+
+        public List<int> RowNumbers { get; } = [];
     }
 
     public ResultsGrid()
@@ -246,6 +274,16 @@ public sealed partial class ResultsGrid : UserControl
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
     {
+        // Switching back to the result that is already on screen (away and back, a dock, a second
+        // notification for the same result) must not rebuild anything. The grid already holds the
+        // right rows, scroll position and preview, so the only correct work is none.
+        if (result is not null
+            && ReferenceEquals(result, _result)
+            && string.Equals(accentHex, _accentHex, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         SaveViewState();
         HideCellPreview();
         UpdateGeneratedQuery(result);
@@ -285,14 +323,19 @@ public sealed partial class ResultsGrid : UserControl
 
         // The last line before rows are realized is the one that explains a crash inside the row
         // template: a provider that ignores the row cap and returns megabyte cells shows up here.
-        AppLog.Info(
-            "results",
-            $"show: {result.Rows.Count:N0} row(s) x {result.Columns.Count:N0} column(s), largest cell {LargestCellLength(result):N0} characters");
+        // The scan is O(rows x columns), so it only runs when a log is actually being written.
+        if (AppLog.IsEnabled)
+        {
+            AppLog.Info(
+                "results",
+                $"show: {result.Rows.Count:N0} row(s) x {result.Columns.Count:N0} column(s), largest cell {LargestCellLength(result):N0} characters");
+        }
 
         _result = result;
-        _layout = GetOrBuildLayout(result);
-        _rows = BuildRows(result, _layout);
-        BuildHeader(_layout);
+        var presentation = GetOrBuildPresentation(result);
+        _layout = presentation.Layout;
+        _rows = presentation.Rows;
+        BuildHeaderIfNeeded(_layout);
 
         var state = _viewStates.GetOrCreateValue(result);
         IsTabStop = true;
@@ -303,16 +346,25 @@ public sealed partial class ResultsGrid : UserControl
         _focusColumn = _hasSelection ? Math.Clamp(state.FocusColumn, 0, _layout.Columns.Count - 1) : 0;
 
         EmptyText.Visibility = Visibility.Collapsed;
-        RowsList.ItemsSource = _rows;
-        _rowNumbers = Enumerable.Range(1, _rows.Count).ToList();
-        RowNumberList.ItemsSource = _rowNumbers;
+
+        // Re-assigning an identical ItemsSource is a no-op the framework can skip; skipping it here
+        // keeps a returning tab from re-realizing rows it never needed to rebuild.
+        if (!ReferenceEquals(RowsList.ItemsSource, presentation.Rows))
+        {
+            RowsList.ItemsSource = presentation.Rows;
+        }
+
+        _rowNumbers = presentation.RowNumbers;
+        if (!ReferenceEquals(RowNumberList.ItemsSource, _rowNumbers))
+        {
+            RowNumberList.ItemsSource = _rowNumbers;
+        }
+
         var rowNumberWidth = RowNumberWidth(_rows.Count);
         RowNumberHeader.Width = rowNumberWidth;
         RowNumberList.Width = rowNumberWidth;
         RowNumberHeader.Visibility = Visibility.Visible;
         RowNumberList.Visibility = Visibility.Visible;
-        RowNumberList.UpdateLayout();
-        RowsList.UpdateLayout();
         EnsureListScroller();
         AccentRule.Background = StudioColors.Brush(accentHex);
         AccentRule.Visibility = Visibility.Visible;
@@ -347,6 +399,8 @@ public sealed partial class ResultsGrid : UserControl
         HeaderContent.Width = double.NaN;
         _headerContainers.Clear();
         _headerSurfaces.Clear();
+        _headerLayout = null;
+        _headerController = null;
         HeaderHost.Width = double.NaN;
         AccentRule.Visibility = Visibility.Collapsed;
         EmptyText.Text = string.Empty;
@@ -390,16 +444,34 @@ public sealed partial class ResultsGrid : UserControl
     }
     // ---------------------------------------------------------------- layout + rows
 
-    private ResultLayout GetOrBuildLayout(QueryResult result)
+    private ResultPresentation GetOrBuildPresentation(QueryResult result)
     {
-        if (_layouts.TryGetValue(result, out var cached))
+        if (_presentations.TryGetValue(result, out var cached))
         {
             return cached;
         }
 
         var layout = BuildLayout(result);
-        _layouts.Add(result, layout);
-        return layout;
+        var presentation = new ResultPresentation { Layout = layout };
+        BuildRows(result, layout, presentation.Rows);
+
+        // The row numbers are one contiguous range, so the list is built with the rows, not per show.
+        presentation.RowNumbers.EnsureCapacity(result.Rows.Count);
+        for (var index = 1; index <= result.Rows.Count; index++)
+        {
+            presentation.RowNumbers.Add(index);
+        }
+
+        // A row wrapper plus its list slots costs roughly 70 bytes, so caching a 100k-row result
+        // would pin several megabytes for as long as its tab lives. Ordinary results are the case a
+        // switch actually repeats, so only those are kept; a very large result is rebuilt per show
+        // exactly as before, keeping the memory footprint unchanged there.
+        if (result.Rows.Count <= CachedPresentationRowLimit)
+        {
+            _presentations.Add(result, presentation);
+        }
+
+        return presentation;
     }
 
     private static ResultLayout BuildLayout(QueryResult result)
@@ -461,9 +533,9 @@ public sealed partial class ResultsGrid : UserControl
         return largest;
     }
 
-    private static List<ResultRow> BuildRows(QueryResult result, ResultLayout layout)
+    private static void BuildRows(QueryResult result, ResultLayout layout, List<ResultRow> rows)
     {
-        var rows = new List<ResultRow>(result.Rows.Count);
+        rows.EnsureCapacity(result.Rows.Count);
         for (var index = 0; index < result.Rows.Count; index++)
         {
             rows.Add(new ResultRow
@@ -473,14 +545,29 @@ public sealed partial class ResultsGrid : UserControl
                 Layout = layout,
             });
         }
-
-        return rows;
     }
 
     // ---------------------------------------------------------------- header
 
+    /// <summary>
+    /// Rebuilds the header only when it would actually differ. Recreating a Grid, a Border, a
+    /// TextBlock and a resize handle per column is not free, and re-entering a tab normally keeps
+    /// both the layout object and the reference controller.
+    /// </summary>
+    private void BuildHeaderIfNeeded(ResultLayout layout)
+    {
+        if (ReferenceEquals(layout, _headerLayout) && ReferenceEquals(ReferenceController, _headerController))
+        {
+            return;
+        }
+
+        BuildHeader(layout);
+    }
+
     private void BuildHeader(ResultLayout layout)
     {
+        _headerLayout = layout;
+        _headerController = ReferenceController;
         HeaderHost.Children.Clear();
         _headerContainers.Clear();
         _headerSurfaces.Clear();
@@ -831,7 +918,7 @@ public sealed partial class ResultsGrid : UserControl
         {
             item.Background = IsRowSelected(args.ItemIndex)
                 ? _selectionBrush
-                : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+                : TransparentBrush;
         }
     }
 
@@ -887,7 +974,7 @@ public sealed partial class ResultsGrid : UserControl
             {
                 item.Background = IsRowSelected(index)
                     ? _selectionBrush
-                    : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+                    : TransparentBrush;
             }
         }
     }
@@ -2831,14 +2918,35 @@ public sealed partial class ResultsGrid : UserControl
 
     private void RestoreViewState(ResultViewState state, QueryResult result)
     {
+        var attempts = 0;
+
         void Restore()
         {
-            if (!ReferenceEquals(_result, result) || _listScroller is null)
+            if (!ReferenceEquals(_result, result))
             {
                 return;
             }
 
-            _listScroller.ChangeView(
+            // A results pane that was just revealed has not measured the list yet, so its template
+            // (and therefore the scroller) may still be missing. Look again on the next tick.
+            EnsureListScroller();
+
+            // The scroll extent likewise only exists once the list has been measured: applying an
+            // offset against a zero extent silently lands at the top. Retry, bounded, because a
+            // collapsed pane may never measure and that must not loop.
+            var ready = _listScroller is not null
+                && (state.VerticalOffset <= 0 || _listScroller.ScrollableHeight > 0);
+            if (!ready)
+            {
+                if (++attempts <= 2)
+                {
+                    DispatcherQueue.TryEnqueue(Restore);
+                }
+
+                return;
+            }
+
+            _listScroller!.ChangeView(
                 state.HorizontalOffset,
                 state.VerticalOffset,
                 null,
@@ -2846,10 +2954,13 @@ public sealed partial class ResultsGrid : UserControl
             _rowNumberScroller?.ChangeView(null, state.VerticalOffset, null, disableAnimation: true);
         }
 
-        // Give the new item source a layout pass so the scroll extent exists before restoring.
-        RowsList.UpdateLayout();
+        // Deliberately no synchronous UpdateLayout here: forcing one inside the tab-switch handler
+        // measures the whole page (editor included) and realizes the new rows before the shell has
+        // finished switching, which is the delay the user feels. The immediate attempt covers the
+        // case where the list is already measured (a returning result reuses its item list); the
+        // retry covers a fresh item source, whose extent only exists after the framework's own
+        // layout pass.
         Restore();
-        DispatcherQueue.TryEnqueue(Restore);
     }
 
     // ---------------------------------------------------------------- helpers

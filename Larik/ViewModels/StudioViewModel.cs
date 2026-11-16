@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Larik.Data;
@@ -26,6 +27,10 @@ public partial class StudioViewModel : ObservableObject
 
     // Schemas are per database; keeping them makes switching tabs back to a database instant.
     private readonly Dictionary<string, SchemaSnapshot> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
+
+    // One reference resolver per result (keyed on the result's lifetime), so re-entering a tab does
+    // not reopen the SQLite store and re-parse the statement.
+    private readonly ConditionalWeakTable<QueryResult, CellReferenceController> _referenceControllers = new();
 
     public StudioViewModel()
     {
@@ -900,6 +905,9 @@ public partial class StudioViewModel : ObservableObject
     public void ToggleGroupExpanded(TabGroupViewModel group)
     {
         group.IsExpanded = !group.IsExpanded;
+
+        // Only this folder's child rows change, and the rail mirrors that with inserts/removes:
+        // the header, the other rows and the scroll offset stay exactly where the user left them.
         RefreshTabRail();
         ScheduleSave();
     }
@@ -1882,9 +1890,18 @@ public partial class StudioViewModel : ObservableObject
             return null;
         }
 
+        // Building a controller reads the custom-reference table from SQLite and parses the
+        // statement. That is disk I/O on the UI thread, and it used to happen again on every tab
+        // switch; a result's references cannot change on their own, so one instance per result is
+        // enough. Saving or deleting a reference re-resolves this same instance in place.
+        if (_referenceControllers.TryGetValue(result, out var cached))
+        {
+            return cached;
+        }
+
         var database = result.Database ?? DatabaseNameFor(tab.Space, tab);
 
-        return new CellReferenceController(
+        var controller = new CellReferenceController(
             result,
             string.IsNullOrWhiteSpace(result.Statement) ? tab.Content : result.Statement,
             TablesFor(tab),
@@ -1894,6 +1911,9 @@ public partial class StudioViewModel : ObservableObject
             _store,
             tab.Space.Id,
             database);
+
+        _referenceControllers.Add(result, controller);
+        return controller;
     }
 
     /// <summary>
@@ -2723,64 +2743,98 @@ public partial class StudioViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Rebuilds the two rail bands from the active space. A group's header is followed by its
-    /// tabs only while the group is expanded; collapsed groups contribute one row.
+    /// Mirrors the active workspace into the two rail bands: a group's header is followed by its
+    /// tabs only while the group is expanded, and collapsed groups contribute one row. Only the
+    /// rows that actually changed are touched. A clearing rebuild discarded every row container,
+    /// which reset the rail's scroll offset and dropped hover/drag state for rows that did not
+    /// change: expanding one folder looked like the whole tab list had refreshed.
     /// </summary>
     private void RefreshTabRail()
     {
-        Tabs.Clear();
-        PinnedRail.Clear();
-        UnpinnedRail.Clear();
+        List<TabViewModel> flatTabs = [];
+        List<object> pinnedRail = [];
+        List<object> unpinnedRail = [];
+        var canGroupByDatabase = false;
 
         if (ActiveSpace is { } space)
         {
-            foreach (var tab in space.Tabs)
-            {
-                Tabs.Add(tab);
-            }
+            flatTabs.AddRange(space.Tabs);
 
             foreach (var group in space.Groups.Where(candidate => candidate.IsPinned))
             {
-                PinnedRail.Add(group);
+                pinnedRail.Add(group);
                 if (group.IsExpanded)
                 {
-                    foreach (var tab in group.Tabs)
-                    {
-                        PinnedRail.Add(tab);
-                    }
+                    pinnedRail.AddRange(group.Tabs);
                 }
             }
 
             foreach (var tab in space.Tabs.Where(tab => tab.IsPinned && tab.Group is null))
             {
-                PinnedRail.Add(tab);
+                pinnedRail.Add(tab);
             }
 
             foreach (var group in space.Groups.Where(candidate => !candidate.IsPinned))
             {
-                UnpinnedRail.Add(group);
+                unpinnedRail.Add(group);
                 if (group.IsExpanded)
                 {
-                    foreach (var tab in group.Tabs)
-                    {
-                        UnpinnedRail.Add(tab);
-                    }
+                    unpinnedRail.AddRange(group.Tabs);
                 }
             }
 
             foreach (var tab in space.Tabs.Where(tab => !tab.IsPinned && tab.Group is null))
             {
-                UnpinnedRail.Add(tab);
+                unpinnedRail.Add(tab);
             }
 
-            CanGroupByDatabase = HasUngroupedDatabaseCluster(space);
-        }
-        else
-        {
-            CanGroupByDatabase = false;
+            canGroupByDatabase = HasUngroupedDatabaseCluster(space);
         }
 
+        SyncCollection(Tabs, flatTabs);
+        SyncCollection(PinnedRail, pinnedRail);
+        SyncCollection(UnpinnedRail, unpinnedRail);
+
+        CanGroupByDatabase = canGroupByDatabase;
         HasPinnedTabs = PinnedRail.Count > 0;
+    }
+
+    /// <summary>
+    /// Applies <paramref name="desired"/> to <paramref name="target"/> with the fewest collection
+    /// changes: rows that stay put keep their container, rows that moved are moved, and only new
+    /// rows are inserted. The lists are small (a rail holds a few dozen rows), so the index scans
+    /// cost less than one container rebuild.
+    /// </summary>
+    private static void SyncCollection<T>(ObservableCollection<T> target, IReadOnlyList<T> desired)
+        where T : class
+    {
+        // Drop the rows this band no longer shows, bottom-up so the indices stay valid.
+        for (var index = target.Count - 1; index >= 0; index--)
+        {
+            if (!desired.Contains(target[index]))
+            {
+                target.RemoveAt(index);
+            }
+        }
+
+        for (var index = 0; index < desired.Count; index++)
+        {
+            var item = desired[index];
+            var current = target.IndexOf(item);
+            if (current == index)
+            {
+                continue;
+            }
+
+            if (current >= 0)
+            {
+                target.Move(current, index);
+            }
+            else
+            {
+                target.Insert(index, item);
+            }
+        }
     }
 
     /// <summary>
