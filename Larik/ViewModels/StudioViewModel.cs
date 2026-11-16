@@ -1,4 +1,7 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Larik.Data;
@@ -41,6 +44,10 @@ public partial class StudioViewModel : ObservableObject
             // app never ships someone else's sample workspaces into a real install.
             StatusText = "Create a workspace to get started";
         }
+
+        // The log keeps statement text, so its window is enforced at every launch, not only by the
+        // hourly sweep a short session might never reach.
+        _store.PruneRunLog();
 
         // An empty rail during onboarding is only a 252 px blank column; hide it so the welcome
         // sits in the whole window. The first created workspace opens it again.
@@ -188,9 +195,56 @@ public partial class StudioViewModel : ObservableObject
     /// <summary>The archive list after the history search filter is applied.</summary>
     public ObservableCollection<ArchivedTabViewModel> VisibleArchivedTabs { get; } = [];
 
+    /// <summary>Runs, newest first, day-grouped and filtered by the Runs bar.</summary>
+    public ObservableCollection<RunDayGroup> VisibleRuns { get; } = [];
+
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ArchiveVisibility))]
-    public partial bool IsArchiveOpen { get; set; }
+    public partial bool IsHistoryOpen { get; set; }
+
+    /// <summary>
+    /// Which half of the page is showing. The TABS-header archive button opens Archived; the
+    /// History command opens Runs. The page never remembers a segment across entries, so a
+    /// recovery click cannot land on the wrong list.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunsVisibility))]
+    [NotifyPropertyChangedFor(nameof(ArchivedVisibility))]
+    [NotifyPropertyChangedFor(nameof(HistoryCountLabel))]
+    public partial HistorySegment ActiveHistorySegment { get; set; }
+
+    /// <summary>The Runs search. Separate from <see cref="ArchiveSearch"/>: they mean different lists.</summary>
+    [ObservableProperty]
+    public partial string HistorySearch { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunFilterIsAll))]
+    [NotifyPropertyChangedFor(nameof(RunFilterIsYou))]
+    [NotifyPropertyChangedFor(nameof(RunFilterIsAgent))]
+    [NotifyPropertyChangedFor(nameof(RunFilterIsFailed))]
+    public partial RunActorFilter RunFilter { get; set; }
+
+    /// <summary>
+    /// Off by default: the list shows the workspace you are in. The scope is a Runs filter, not a
+    /// page mode - Archived always spans every workspace, which is how the archive already works.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunScopeLabel))]
+    [NotifyPropertyChangedFor(nameof(ShowAllWorkspacesVisibility))]
+    public partial bool RunsAllWorkspaces { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HistoryCountLabel))]
+    [NotifyPropertyChangedFor(nameof(RunCountLabel))]
+    public partial int RunCount { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RetentionLabel))]
+    public partial int RunLogRetentionDays { get; set; } = 30;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunEmptyVisibility))]
+    [NotifyPropertyChangedFor(nameof(ShowAllWorkspacesVisibility))]
+    public partial bool HasVisibleRuns { get; set; }
 
     [ObservableProperty]
     public partial string ArchiveSearch { get; set; } = string.Empty;
@@ -220,7 +274,66 @@ public partial class StudioViewModel : ObservableObject
     [ObservableProperty]
     public partial bool CheckForUpdates { get; set; } = true;
 
-    public Visibility ArchiveVisibility => IsArchiveOpen ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RunsVisibility =>
+        ActiveHistorySegment == HistorySegment.Runs ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ArchivedVisibility =>
+        ActiveHistorySegment == HistorySegment.Archived ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility RunEmptyVisibility => HasVisibleRuns ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>The way out of an empty scoped list: only when there is somewhere else to look.</summary>
+    public Visibility ShowAllWorkspacesVisibility =>
+        !HasVisibleRuns && !RunsAllWorkspaces ? Visibility.Visible : Visibility.Collapsed;
+
+    public string HistoryCountLabel => ActiveHistorySegment == HistorySegment.Runs
+        ? RunCountLabel
+        : ArchiveCountLabel;
+
+    public string RunCountLabel => RunCount == 1 ? "1 run" : $"{RunCount} runs";
+
+    public string RunScopeLabel => RunsAllWorkspaces ? "All workspaces" : ActiveSpace?.Name ?? "This workspace";
+
+    public string RetentionLabel => $"Keeping {RunLogRetentionDays} days";
+
+    public bool RunFilterIsAll
+    {
+        get => RunFilter == RunActorFilter.All;
+        set => SetRunFilter(RunActorFilter.All, value);
+    }
+
+    public bool RunFilterIsYou
+    {
+        get => RunFilter == RunActorFilter.You;
+        set => SetRunFilter(RunActorFilter.You, value);
+    }
+
+    public bool RunFilterIsAgent
+    {
+        get => RunFilter == RunActorFilter.Agent;
+        set => SetRunFilter(RunActorFilter.Agent, value);
+    }
+
+    public bool RunFilterIsFailed
+    {
+        get => RunFilter == RunActorFilter.Failed;
+        set => SetRunFilter(RunActorFilter.Failed, value);
+    }
+
+    /// <summary>
+    /// Radio buttons report both edges of a click; only the newly checked one changes the filter,
+    /// so re-checking the current value cannot clear it.
+    /// </summary>
+    private void SetRunFilter(RunActorFilter filter, bool isChecked)
+    {
+        if (!isChecked)
+        {
+            return;
+        }
+
+        RunFilter = filter;
+        RefreshRuns();
+    }
 
     public Visibility ArchiveEmptyVisibility => HasVisibleArchivedTabs ? Visibility.Collapsed : Visibility.Visible;
 
@@ -258,6 +371,7 @@ public partial class StudioViewModel : ObservableObject
     public partial bool IsSidebarOpen { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunScopeLabel))]
     public partial SpaceViewModel? ActiveSpace { get; set; }
 
     /// <summary>False on the first run and after the last workspace is deleted.</summary>
@@ -505,18 +619,107 @@ public partial class StudioViewModel : ObservableObject
         }
     }
 
-    // ---------------------------------------------------------------- archive + pinning
+    // ---------------------------------------------------------------- archive + history
 
+    /// <summary>Opens the page on Runs, scoped to the workspace you are in.</summary>
     [RelayCommand]
-    private void OpenArchive()
+    private void OpenHistory() => OpenHistory(HistorySegment.Runs);
+
+    /// <summary>
+    /// The TABS-header archive button's path. Recovery comes first, so it always lands on Archived
+    /// rather than wherever the page was left - a panicked click must not need a second decision.
+    /// </summary>
+    [RelayCommand]
+    private void OpenHistoryArchive() => OpenHistory(HistorySegment.Archived);
+
+    public void OpenHistory(HistorySegment segment)
     {
-        RunAutoArchive();
-        ApplyArchiveFilter();
-        IsArchiveOpen = true;
+        // One read feeds the count, the list and the empty state, so the two halves cannot disagree.
+        RefreshRunLogSettings();
+
+        if (segment == HistorySegment.Archived)
+        {
+            RunAutoArchive();
+            ApplyArchiveFilter();
+        }
+        else
+        {
+            RefreshRuns();
+        }
+
+        ActiveHistorySegment = segment;
+        IsHistoryOpen = true;
     }
 
     [RelayCommand]
-    private void CloseArchive() => IsArchiveOpen = false;
+    private void CloseHistory() => IsHistoryOpen = false;
+
+    [RelayCommand]
+    private void ShowRuns() => OpenHistory(HistorySegment.Runs);
+
+    [RelayCommand]
+    private void ShowArchived() => OpenHistory(HistorySegment.Archived);
+
+    /// <summary>Writes the retention window and prunes at once, so the setting is never just a wish.</summary>
+    public void SetRunLogRetention(int days)
+    {
+        if (!_store.SetRunLogRetentionDays(days))
+        {
+            StatusText = "Could not save the history window.";
+            return;
+        }
+
+        RunLogRetentionDays = _store.GetRunLogRetentionDays();
+        _store.PruneRunLog();
+        RefreshRuns();
+        StatusText = RetentionLabel;
+    }
+
+    /// <summary>
+    /// "All workspaces" widens this list only. Archived deliberately stays cross-workspace: the
+    /// sweep can archive a tab from a workspace you are not sitting in.
+    /// </summary>
+    public void SetRunsAllWorkspaces(bool all)
+    {
+        if (RunsAllWorkspaces == all)
+        {
+            return;
+        }
+
+        RunsAllWorkspaces = all;
+        RefreshRuns();
+    }
+
+    /// <summary>
+    /// Opens a run where it belongs: its own tab when that tab is still open, otherwise the same
+    /// SQL as a new tab in the workspace and database it ran against. Never both.
+    /// </summary>
+    public void OpenRun(RunRowViewModel run)
+    {
+        var space = Spaces.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, run.SpaceId, StringComparison.Ordinal));
+
+        if (space is null)
+        {
+            StatusText = "That run's workspace no longer exists.";
+            return;
+        }
+
+        var tab = run.TabId is { Length: > 0 } tabId
+            ? space.Tabs.FirstOrDefault(candidate => string.Equals(candidate.Id, tabId, StringComparison.Ordinal))
+            : null;
+
+        IsHistoryOpen = false;
+
+        if (tab is not null)
+        {
+            SelectSpace(space, tab);
+            return;
+        }
+
+        SelectSpace(space);
+        CreateTab(string.IsNullOrWhiteSpace(run.DatabaseName) ? null : run.DatabaseName, run.Statement);
+    }
 
     [RelayCommand]
     private void ArchiveInactiveNow()
@@ -528,6 +731,9 @@ public partial class StudioViewModel : ObservableObject
     }
 
     partial void OnArchiveSearchChanged(string value) => ApplyArchiveFilter();
+
+    /// <summary>Typing narrows the Runs list as you type; the page has no Search button.</summary>
+    partial void OnHistorySearchChanged(string value) => RefreshRuns();
 
     partial void OnAutoArchiveEnabledChanged(bool value) => ScheduleSave();
 
@@ -1152,6 +1358,133 @@ public partial class StudioViewModel : ObservableObject
         HasVisibleArchivedTabs = VisibleArchivedTabs.Count > 0;
     }
 
+    // ---------------------------------------------------------------- runs
+
+    /// <summary>
+    /// Rebuilds the Runs list from the store. Everything the bar can do - scope, actor, search -
+    /// is applied here, so the list has exactly one source of truth and no incremental drift.
+    /// </summary>
+    private void RefreshRuns()
+    {
+        VisibleRuns.Clear();
+        RunCount = 0;
+
+        if (ActiveSpace is not { } space)
+        {
+            HasVisibleRuns = false;
+            return;
+        }
+
+        var records = string.IsNullOrWhiteSpace(HistorySearch)
+            ? _store.GetRunLog(RunsAllWorkspaces ? null : space.Id, limit: 500)
+            : _store.SearchRunLog(RunsAllWorkspaces ? null : space.Id, HistorySearch.Trim(), limit: 500);
+
+        // The badge counts the whole scope, not the page that was read: "500 runs" must mean 500.
+        RunCount = _store.CountRunLog(RunsAllWorkspaces ? null : space.Id);
+
+        // Scoped, the workspace name is the same on every row; widening it is worth the space.
+        var showWorkspace = RunsAllWorkspaces;
+
+        // A run remembers the workspace name it was written under. A rename afterwards must not
+        // make the log read as if the run happened somewhere else, so the live name wins.
+        var currentNames = Spaces.ToDictionary(
+            candidate => candidate.Id,
+            candidate => candidate.Name,
+            StringComparer.Ordinal);
+
+        var visible = records
+            .Where(MatchesRunFilter)
+            .Select(record => new RunRowViewModel(
+                record,
+                TabExistsFor(record),
+                showWorkspace,
+                record.SpaceId is { Length: > 0 } id && currentNames.TryGetValue(id, out var name)
+                    ? name
+                    : null))
+            .ToList();
+
+        foreach (var day in visible.GroupBy(run => DateOnly.FromDateTime(run.RecordedAt.ToLocalTime().DateTime)))
+        {
+            VisibleRuns.Add(new RunDayGroup(DayLabel(day.Key), day.ToList()));
+        }
+
+        HasVisibleRuns = visible.Count > 0;
+    }
+
+    /// <summary>
+    /// The tab a run came from, if it is still open. Agent runs have none, which is why the action
+    /// on those rows is "Open in new tab" rather than a jump that would go nowhere.
+    /// </summary>
+    private bool TabExistsFor(RunLogRecord record) =>
+        record.TabId is { Length: > 0 } tabId
+        && Spaces.Any(space => space.Tabs.Any(tab => string.Equals(tab.Id, tabId, StringComparison.Ordinal)));
+
+    private bool MatchesRunFilter(RunLogRecord record) => RunFilter switch
+    {
+        RunActorFilter.You => record.Actor != RunActors.Agent,
+        RunActorFilter.Agent => record.Actor == RunActors.Agent,
+        RunActorFilter.Failed => !string.Equals(record.Status, RunStatuses.Ok, StringComparison.Ordinal),
+        _ => true,
+    };
+
+    private static string DayLabel(DateOnly day)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        if (day == today)
+        {
+            return "Today";
+        }
+
+        if (day == today.AddDays(-1))
+        {
+            return "Yesterday";
+        }
+
+        return day.Year == today.Year
+            ? day.ToString("MMMM d", CultureInfo.CurrentCulture)
+            : day.ToString("MMMM d, yyyy", CultureInfo.CurrentCulture);
+    }
+
+    private void RefreshRunLogSettings() => RunLogRetentionDays = _store.GetRunLogRetentionDays();
+
+    /// <summary>
+    /// The Runs list belongs to the active workspace, so switching workspace re-scopes it instead of
+    /// leaving another workspace's runs under the new name. Archived is cross-workspace and needs
+    /// nothing. The name is watched too: renaming a workspace while the page is open must not leave
+    /// the old name in the scope control.
+    /// </summary>
+    partial void OnActiveSpaceChanged(SpaceViewModel? oldValue, SpaceViewModel? newValue)
+    {
+        if (oldValue is not null)
+        {
+            oldValue.PropertyChanged -= ActiveSpacePropertyChanged;
+        }
+
+        if (newValue is not null)
+        {
+            newValue.PropertyChanged += ActiveSpacePropertyChanged;
+        }
+
+        if (IsHistoryOpen)
+        {
+            RefreshRuns();
+        }
+    }
+
+    private void ActiveSpacePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(SpaceViewModel.Name))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(RunScopeLabel));
+        if (IsHistoryOpen)
+        {
+            RefreshRuns();
+        }
+    }
+
     /// <summary>Creates and activates a tab bound to <paramref name="databaseName"/> (null = unbound).</summary>
     public TabViewModel CreateTab(string? databaseName, string content = "")
     {
@@ -1622,6 +1955,18 @@ public partial class StudioViewModel : ObservableObject
 
         if (executable.Any(HasUnguardedMutation))
         {
+            var refused = executable.First(HasUnguardedMutation);
+            RecordRun(
+                tab,
+                space,
+                DatabaseNameFor(space, tab),
+                refused,
+                RunStatuses.Refused,
+                "modifies rows without a WHERE clause",
+                0,
+                results: null,
+                recording: _store.IsRunRecordingEnabled(space.Id));
+
             ApplyResults(tab, [QueryResult.Error(
                 "Refused: this statement modifies rows without a WHERE clause.",
                 TimeSpan.Zero)], append, "Error");
@@ -1638,6 +1983,8 @@ public partial class StudioViewModel : ObservableObject
         {
             var results = new List<QueryResult>();
             var database = DatabaseNameFor(space, tab);
+            var recording = _store.IsRunRecordingEnabled(space.Id);
+
             for (var index = 0; index < executable.Count; index++)
             {
                 // Only the first batch is re-targeted: a USE in one GO batch must carry into the
@@ -1645,17 +1992,48 @@ public partial class StudioViewModel : ObservableObject
                 // to the tab's database again.
                 // The provider applies the row cap while reading and returns one result per
                 // result set. Each session is the tab's own, including its transaction.
-                var batchResults = await tab.Session.ExecuteBatchAsync(
+                var batchDatabase = index == 0 ? database : null;
+                var batchWatch = Stopwatch.StartNew();
+                IReadOnlyList<QueryResult> batchResults;
+                try
+                {
+                    batchResults = await tab.Session.ExecuteBatchAsync(
+                        executable[index],
+                        batchDatabase,
+                        QueryExecutionOptions.Default,
+                        _lifetime.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The interrupted batch still happened; the log says so, and says it was us.
+                    RecordRun(tab, space, batchDatabase, executable[index], RunStatuses.Cancelled,
+                        "cancelled by the user", batchWatch.ElapsedMilliseconds, results: null, recording);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    RecordRun(tab, space, batchDatabase, executable[index], RunStatuses.Failed,
+                        ex.Message, batchWatch.ElapsedMilliseconds, results: null, recording);
+                    throw;
+                }
+
+                var failure = batchResults.FirstOrDefault(result => result.IsError);
+                RecordRun(
+                    tab,
+                    space,
+                    batchDatabase,
                     executable[index],
-                    index == 0 ? database : null,
-                    QueryExecutionOptions.Default,
-                    _lifetime.Token);
+                    failure is null ? RunStatuses.Ok : RunStatuses.Failed,
+                    failure?.Message,
+                    batchWatch.ElapsedMilliseconds,
+                    batchResults,
+                    recording);
 
                 results.AddRange(batchResults);
 
                 // A GO-delimited script stops at the first failed batch, like the native batch
                 // does inside SQL Server. The tab keeps the error and whatever succeeded before it.
-                if (batchResults.Any(result => result.IsError))
+                if (failure is not null)
                 {
                     break;
                 }
@@ -1675,6 +2053,46 @@ public partial class StudioViewModel : ObservableObject
         {
             ApplyResults(tab, [QueryResult.Error(ex.Message, TimeSpan.Zero)], append);
         }
+    }
+
+    /// <summary>
+    /// Writes one execution to the run log. Best-effort by contract: a query that ran must report
+    /// its result even when the history row could not be written, and a workspace that opts out
+    /// records nothing at all - half a log is worse than none.
+    /// </summary>
+    private void RecordRun(
+        TabViewModel tab,
+        SpaceViewModel space,
+        string? database,
+        string statement,
+        string status,
+        string? reason,
+        long durationMs,
+        IReadOnlyList<QueryResult>? results,
+        bool recording)
+    {
+        if (!recording)
+        {
+            return;
+        }
+
+        var truncated = results?.FirstOrDefault(result => result.IsTruncated);
+        _store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.User,
+            SpaceId = space.Id,
+            SpaceName = space.Name,
+            DatabaseName = database ?? tab.Database,
+            ProviderId = space.Connection.ProviderId,
+            TabId = tab.Id,
+            Statement = statement,
+            Status = status,
+            Reason = reason,
+            DurationMs = durationMs,
+            RowsReturned = results?.Sum(result => result.Rows.Count) ?? 0,
+            RowLimit = truncated?.RowLimit,
+            IsTruncated = truncated is not null,
+        });
     }
 
     [RelayCommand]
@@ -2160,7 +2578,7 @@ public partial class StudioViewModel : ObservableObject
 
         ActiveTab = tab;
         tab.LastAccessedAt = DateTimeOffset.UtcNow;
-        IsArchiveOpen = false;
+        IsHistoryOpen = false;
 
         if (ActiveSpace is not null && ReferenceEquals(tab.Space, ActiveSpace))
         {

@@ -155,4 +155,41 @@ internal sealed class StudioContext(StudioStore store)
     /// <summary>Audits a call with no workspace context (list_connections, a refused lookup).</summary>
     public void AuditGlobal(string tool, string status, string? reason, TimeSpan duration) =>
         Audit(tool, space: null, McpAccess.Off, statement: null, status, reason, duration, rows: 0);
+
+    /// <summary>
+    /// Records one execution in the run log, alongside the approval trail in <c>mcp_log</c>. Both
+    /// rows describe the same call on purpose: one says who decided, the other says what ran - and
+    /// the run log is what lets a person see the agent's work next to their own.
+    /// </summary>
+    public void RecordRun(
+        McpSpaceRecord? space,
+        string? database,
+        string statement,
+        string status,
+        string? reason,
+        TimeSpan duration,
+        IReadOnlyList<QueryResult>? results = null)
+    {
+        if (space is not null && !store.IsRunRecordingEnabled(space.Id))
+        {
+            return;
+        }
+
+        var truncated = results?.FirstOrDefault(result => result.IsTruncated);
+        store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.Agent,
+            SpaceId = space?.Id,
+            SpaceName = space?.Name,
+            DatabaseName = database,
+            ProviderId = space?.ProviderId,
+            Statement = statement,
+            Status = status,
+            Reason = reason,
+            DurationMs = (long)duration.TotalMilliseconds,
+            RowsReturned = results?.Sum(result => result.Rows.Count) ?? 0,
+            RowLimit = truncated?.RowLimit,
+            IsTruncated = truncated is not null,
+        });
+    }
 }

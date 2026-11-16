@@ -52,6 +52,8 @@ public sealed partial class MainPage : Page
     private List<DatabaseViewModel> _paletteDatabases = [];
 
     private bool _schemaPinned;
+    private bool _syncingHistorySegments;
+    private Storyboard? _historyAnimation;
     private readonly Dictionary<string, List<string>> _recentObjects = new(StringComparer.Ordinal);
 
     public StudioViewModel ViewModel { get; } = new();
@@ -443,6 +445,29 @@ public sealed partial class MainPage : Page
             return;
         }
 
+        if (e.PropertyName == nameof(StudioViewModel.ActiveHistorySegment))
+        {
+            if (ViewModel.IsHistoryOpen)
+            {
+                SyncHistorySegments();
+            }
+
+            return;
+        }
+
+        if (e.PropertyName == nameof(StudioViewModel.IsHistoryOpen))
+        {
+            // The page can be opened by a command (the TABS header, Ctrl+Shift+H) or by the
+            // segments themselves; only the command path needs the bar pushed back into place.
+            ShowHistoryPage(ViewModel.IsHistoryOpen);
+            if (ViewModel.IsHistoryOpen)
+            {
+                SyncHistorySegments();
+            }
+
+            return;
+        }
+
         if (e.PropertyName == nameof(StudioViewModel.PoppedOutVisibility))
         {
             // The placeholder replaces the editor + results in place; docking brings them back.
@@ -490,8 +515,72 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void SlideQueryContent(int direction)
+    /// <summary>
+    /// The History page fades and rises over the editor, and fades back out before it is collapsed.
+    /// Reduced motion gets the end state immediately: the page is never a thing that takes time.
+    /// </summary>
+    private void ShowHistoryPage(bool show)
     {
+        _historyAnimation?.Stop();
+
+        if (!new UISettings().AnimationsEnabled)
+        {
+            HistoryPage.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            HistoryPage.Opacity = show ? 1 : 0;
+            HistorySlide.Y = show ? 0 : 8;
+            return;
+        }
+
+        if (show)
+        {
+            // Visible before the first frame so the animation has something to draw into.
+            HistoryPage.Visibility = Visibility.Visible;
+        }
+
+        var duration = new Duration(TimeSpan.FromMilliseconds(show ? 160 : 110));
+        var easing = new CubicEase { EasingMode = show ? EasingMode.EaseOut : EasingMode.EaseIn };
+
+        var fade = new DoubleAnimation
+        {
+            From = show ? 0 : 1,
+            To = show ? 1 : 0,
+            Duration = duration,
+            EasingFunction = easing,
+        };
+        Storyboard.SetTarget(fade, HistoryPage);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        var slide = new DoubleAnimation
+        {
+            From = show ? 8 : 0,
+            To = show ? 0 : 8,
+            Duration = duration,
+            EasingFunction = easing,
+        };
+        Storyboard.SetTarget(slide, HistorySlide);
+        Storyboard.SetTargetProperty(slide, "Y");
+
+        var board = new Storyboard();
+        board.Children.Add(slide);
+        board.Children.Add(fade);
+
+        if (!show)
+        {
+            // Collapse only after the fade, and only if the page was not reopened meanwhile.
+            board.Completed += (_, _) =>
+            {
+                if (!ViewModel.IsHistoryOpen)
+                {
+                    HistoryPage.Visibility = Visibility.Collapsed;
+                }
+            };
+        }
+
+        _historyAnimation = board;
+        board.Begin();
+    }
+
+    private void SlideQueryContent(int direction)    {
         if (!new UISettings().AnimationsEnabled)
         {
             return;
@@ -1122,6 +1211,71 @@ public sealed partial class MainPage : Page
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             ViewModel.ClearArchive();
+        }
+    }
+
+    private void HistoryAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        ViewModel.OpenHistoryCommand.Execute(null);
+        args.Handled = true;
+    }
+
+    /// <summary>
+    /// The segments are the page's only decision. The bar reports a click, the view model owns the
+    /// state, and <see cref="SyncHistorySegments"/> puts the selection back when the page is opened
+    /// by a command instead.
+    /// </summary>
+    private void HistorySegments_SelectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
+    {
+        if (_syncingHistorySegments)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(sender.SelectedItem, RunsSegmentItem))
+        {
+            ViewModel.ShowRunsCommand.Execute(null);
+        }
+        else if (ReferenceEquals(sender.SelectedItem, ArchivedSegmentItem))
+        {
+            ViewModel.ShowArchivedCommand.Execute(null);
+        }
+    }
+
+    private void SyncHistorySegments()
+    {
+        _syncingHistorySegments = true;
+        HistorySegmentBar.SelectedItem = ViewModel.ActiveHistorySegment == HistorySegment.Runs
+            ? RunsSegmentItem
+            : ArchivedSegmentItem;
+        _syncingHistorySegments = false;
+    }
+
+    private void HistorySearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox box)
+        {
+            ViewModel.HistorySearch = box.Text;
+        }
+    }
+
+    private void RunScopeThis_Click(object sender, RoutedEventArgs e) =>
+        ViewModel.SetRunsAllWorkspaces(false);
+
+    private void RunScopeAll_Click(object sender, RoutedEventArgs e) =>
+        ViewModel.SetRunsAllWorkspaces(true);
+
+    private void Retention30_Click(object sender, RoutedEventArgs e) => ViewModel.SetRunLogRetention(30);
+
+    private void Retention90_Click(object sender, RoutedEventArgs e) => ViewModel.SetRunLogRetention(90);
+
+    private void Retention120_Click(object sender, RoutedEventArgs e) => ViewModel.SetRunLogRetention(120);
+
+    private void RunAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: RunRowViewModel run })
+        {
+            ViewModel.OpenRun(run);
         }
     }
 

@@ -210,6 +210,8 @@ internal sealed class StudioTools(StudioContext context)
             {
                 context.Audit("run_query", space, space.Access, query, "denied",
                     decision.Reason, stopwatch.Elapsed, rows: 0, surface);
+                context.RecordRun(space, database, query, RunStatuses.Refused,
+                    decision.Reason, stopwatch.Elapsed);
                 throw new McpException(decision.Reason ?? "The user did not approve this statement.");
             }
         }
@@ -242,6 +244,8 @@ internal sealed class StudioTools(StudioContext context)
         {
             context.Audit("run_query", space, space.Access, query, "error",
                 "statement exceeded the server limit", stopwatch.Elapsed, rows: 0, surface);
+            context.RecordRun(space, target, query, RunStatuses.Failed,
+                "statement exceeded the server limit", stopwatch.Elapsed);
 
             throw new McpException(
                 $"The statement was stopped after {StudioContext.MaxStatementDuration.TotalSeconds:N0} " +
@@ -257,6 +261,8 @@ internal sealed class StudioTools(StudioContext context)
         {
             context.Audit("run_query", space, space.Access, query, "error",
                 "statement exceeded the server limit", stopwatch.Elapsed, rows: 0, surface);
+            context.RecordRun(space, target, query, RunStatuses.Failed,
+                "statement exceeded the server limit", stopwatch.Elapsed);
 
             throw new McpException(
                 $"The statement was stopped after {StudioContext.MaxStatementDuration.TotalSeconds:N0} " +
@@ -273,6 +279,15 @@ internal sealed class StudioTools(StudioContext context)
             stopwatch.Elapsed,
             rows,
             surface);
+
+        context.RecordRun(
+            space,
+            target,
+            query,
+            failed is null ? RunStatuses.Ok : RunStatuses.Failed,
+            failed?.Message,
+            stopwatch.Elapsed,
+            results);
 
         if (failed is not null)
         {

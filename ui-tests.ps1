@@ -1,4 +1,4 @@
-﻿# UI checks for the Larik SQL Studio shell: vertical tabs, spaces, and Tab-accepted snippet completion.
+# UI checks for the Larik SQL Studio shell: vertical tabs, spaces, and Tab-accepted snippet completion.
 # Run from C:\dev\larik-winui\Larik:  powershell -ExecutionPolicy Bypass -File ..\ui-tests.ps1
 #
 # The checks are ONE ordered scenario, not independent tests. They start on the empty onboarding
@@ -130,6 +130,42 @@ function Get-CachedPasses {
 }
 
 $script:CachedPasses = Get-CachedPasses
+
+# The scenario's second half talks to SQL Server LocalDB. When that instance is stopped (or its
+# sqlservr is orphaned so LocalDB cannot start it), roughly twenty checks fail with connection
+# timeouts and the real failure - "there is no database" - is buried. Fail once, up front, and say
+# what to do. A missing LocalDB is only a problem for the checks that need it, so this can be
+# skipped when attaching to an app that is already connected.
+if ($LaunchedHere) {
+    $localDb = Get-Command sqllocaldb -ErrorAction SilentlyContinue
+    if ($null -eq $localDb) {
+        Write-Host "WARN: sqllocaldb is not installed; the SQL Server checks will fail. Install 'SQL Server Express LocalDB' or run the subset that does not need it." -ForegroundColor Yellow
+    }
+    else {
+        # An orphaned sqlservr from a previous session makes every start attempt fail with
+        # "SQL Server process failed to start" while the process still holds the instance files.
+        foreach ($orphan in @(Get-Process -Name sqlservr -ErrorAction SilentlyContinue)) {
+            Write-Host "WARN: stopping an orphaned sqlservr (PID $($orphan.Id)) left by an earlier run." -ForegroundColor Yellow
+            Stop-Process -Id $orphan.Id -Force -ErrorAction SilentlyContinue
+        }
+
+        $state = (& sqllocaldb info MSSQLLocalDB 2>&1 | Out-String)
+        if ($state -notmatch 'State:\s+Running') {
+            & sqllocaldb start MSSQLLocalDB 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+            $state = (& sqllocaldb info MSSQLLocalDB 2>&1 | Out-String)
+        }
+
+        if ($state -match 'State:\s+Running') {
+            Write-Host "LocalDB is running." -ForegroundColor Green
+        }
+        else {
+            # Not fatal for the whole suite: the prefix before the SQL Server checks still means
+            # something, and say so rather than letting them look like product regressions.
+            Write-Host "WARN: MSSQLLocalDB is not running and would not start. Checks that need a database will fail; the rest still run. Try 'sqllocaldb start MSSQLLocalDB' as your own user." -ForegroundColor Yellow
+        }
+    }
+}
 
 # Workspaces persist to a SQLite database under %LOCALAPPDATA%\Larik WinUI (larik-winui-dev.db in
 # Debug builds). A direct/exe run writes there; the packaged app (winapp run or the installed MSIX)
@@ -551,6 +587,11 @@ function Focus-Popout {
 function Send-PopoutKeys {
     param([string]$Keys, [string]$Hwnd, [switch]$Literal)
     Focus-Popout $Hwnd
+    # Raising the window is not enough: without an explicit focus the pop-out's keyboard focus
+    # stays wherever it was (a toolbar button after opening), so send-input has nothing to type
+    # into and the keys vanish silently. Focus the editor the same way the shell checks do.
+    try { Invoke-PopoutUi @('focus', 'Editor') $Hwnd | Out-Null } catch { }
+    Start-Sleep -Milliseconds 150
     Invoke-PopoutUi (@('send-keys', $Keys, '--via', 'send-input') + $(if ($Literal) { @('--verbatim') } else { @() })) $Hwnd | Out-Null
 }
 # The shell's own hwnd (not a pop-out): the largest window of the process.
@@ -1680,7 +1721,19 @@ try {
             $status = $null
             $deadline = (Get-Date).AddSeconds(30)
             while ((Get-Date) -lt $deadline) {
+                # The tall SQL Server form scrolls, so the result can exist in the tree while sitting
+                # below the fold. Scroll it into view before deciding it is missing, otherwise this
+                # check fails on a window size rather than because Test broke.
                 $status = @((Find-Element 'Connected ·').matches) | Where-Object { $_.width -gt 0 } | Select-Object -First 1
+                if (-not $status) {
+                    $any = @((Find-Element 'Connected ·').matches) | Select-Object -First 1
+                    if ($any) {
+                        try { Invoke-Ui @('scroll-into-view', $any.selector) | Out-Null } catch { }
+                        Start-Sleep -Milliseconds 400
+                        $status = @((Find-Element 'Connected ·').matches) | Where-Object { $_.width -gt 0 } | Select-Object -First 1
+                    }
+                }
+
                 if ($status) { break }
                 Start-Sleep -Milliseconds 300
             }
@@ -2665,6 +2718,37 @@ try {
         Start-Sleep -Milliseconds 400
         Click-Element 'RunButton'
         Wait-ForText 'Refused'
+    }
+
+    Test-UI 'history lists the runs it should and opens one where it belongs' {
+        # A real execution on top of the refusal the previous check produced: the log keeps both,
+        # because a blocked statement is the evidence the guard held.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 42 as answer' -Literal
+        Start-Sleep -Milliseconds 300
+        Click-Element 'RunButton'
+        Wait-ForText '1 row' 15
+
+        Send-Keys 'ctrl+shift+h'
+        Wait-ForText 'Search executed SQL' 10
+        Wait-ForText 'select 42 as answer' 10
+        Assert-True ((Find-Element 'refused').matchCount -gt 0) 'the refused statement is missing from the run log'
+        Assert-True ((Find-Element 'Go to tab').matchCount -gt 0) 'a run from an open tab offers no jump back'
+
+        # One row, one action: a run whose tab is still open goes there rather than duplicating it.
+        Click-Element 'Go to tab'
+        Start-Sleep -Milliseconds 600
+        Assert-True ((Get-EditorText) -match 'select 42 as answer') 'the run did not return to its own tab'
+
+        # The other half keeps its own list; it is still cross-workspace, which is how the archive works.
+        Send-Keys 'ctrl+shift+h'
+        Wait-ForText 'Search executed SQL' 10
+        Click-Element 'Archived'
+        Wait-ForText 'Auto archive inactive tabs' 10
+        Wait-ForText 'select 1' 10
+        Click-Element 'Back to workspace'
+        Start-Sleep -Milliseconds 500
     }
 
     Test-UI 'a long server name stays inside the workspace switcher' {

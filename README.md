@@ -54,6 +54,9 @@ instead.
 - **Arc-style tabs.** Vertical query tabs with collapsible groups, pinned folders, drag reorder,
   inline rename, and non-destructive close into an archive with optional auto-archive. **Pop a tab
   into its own always-on-top window** (Ctrl+Alt+O) and dock it back with Ctrl+W.
+- **History that answers "what did I run?".** Every execution — yours or an agent's — is listed by
+  day with its statement, database, timing, row count and outcome, and opens back into the tab it
+  came from. Refused statements are recorded too. `Ctrl+Shift+H`, kept for 30, 90 or 120 days.
 - **A real editor.** Provider-driven syntax highlighting, line numbers, find/replace with visible
   match highlighting, snippet expansion on Tab, and clause-aware completion for tables, columns,
   aliases, joins, CTEs, variables, databases and procedure calls. `Ctrl+K` opens a schema peek that

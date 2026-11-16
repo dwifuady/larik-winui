@@ -171,7 +171,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed partial class StudioStore : IVirtualReferenceStore
 {
-    private const int SchemaVersion = 7;
+    private const int SchemaVersion = 8;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -519,12 +519,37 @@ public sealed partial class StudioStore : IVirtualReferenceStore
             );
 
             CREATE INDEX IF NOT EXISTS idx_mcp_approvals_status ON mcp_approvals(status, created_at);
+
+            -- Version 8: the run log. Executions, not decisions - mcp_log above stays the approval
+            -- trail. Both processes write rows here, and rows are pruned on a retention window
+            -- because statement text is the whole point of the table.
+            CREATE TABLE IF NOT EXISTS run_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                actor TEXT NOT NULL,
+                space_id TEXT,
+                space_name TEXT,
+                database_name TEXT,
+                provider_id TEXT,
+                tab_id TEXT,
+                statement TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                rows_returned INTEGER NOT NULL DEFAULT 0,
+                row_limit INTEGER,
+                is_truncated INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_run_log_recorded_at ON run_log(recorded_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_run_log_space
+                ON run_log(space_id, recorded_at DESC);
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
         // workspace icon. Version 4 adds the rail visibility flag. Version 5 adds tab groups and
         // the archive's group name. Version 6 adds user-defined reference metadata. Version 7 adds
-        // the MCP exposure level and the MCP audit/approval tables.
+        // the MCP exposure level and the MCP audit/approval tables. Version 8 adds the run log.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");
@@ -994,7 +1019,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         }
     }
 
-    private static void SetState(SqliteConnection connection, SqliteTransaction transaction, string key, string value) =>
+    private static void SetState(SqliteConnection connection, SqliteTransaction? transaction, string key, string value) =>
         Execute(
             connection,
             transaction,

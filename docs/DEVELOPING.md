@@ -136,6 +136,20 @@ launching and restores them afterwards. Screenshots are artifacts in `ui-test-ar
 (gitignored). The app is packaged, so a second instance cannot launch while one is running; stop
 an existing instance first.
 
+The suite preflights `MSSQLLocalDB` and prints one warning if it is down, because a stopped instance
+turns about twenty checks into connection timeouts that read like product regressions. Two failure
+modes are worth knowing:
+
+- **An orphaned `sqlservr`.** LocalDB reports `Stopped` while a `sqlservr.exe` from a previous
+  session still holds the instance files, so every start attempt fails with *SQL Server process
+  failed to start* even though its error log shows a clean previous startup. The suite stops the
+  orphan before starting, but if you are debugging by hand: `Get-Process sqlservr | Stop-Process`,
+  then `sqllocaldb start MSSQLLocalDB`.
+- **Never `sqllocaldb delete` casually.** Deleting the instance removes its registry keys and the
+  system databases are recreated empty; any database that lived only in that instance is gone.
+  `stop` / `start` is the reversible step. Recovering needs the orphan killed and the instance
+  recreated with `sqllocaldb create MSSQLLocalDB`.
+
 ## Diagnostics log
 
 `Services/AppLog.cs` writes one file per launch to `<state>\logs\larik-<date>-<time>-<pid>.log`
