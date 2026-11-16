@@ -1582,11 +1582,11 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    // ---------------------------------------------------------------- placeholder helpers
+    // ---------------------------------------------------------------- snippet token helpers
 
     private void InsertCursor_Click(object sender, RoutedEventArgs e) => InsertAtCursor("${cursor}");
 
-    private void InsertPlaceholder_Click(object sender, RoutedEventArgs e) => InsertAtCursor("${1:placeholder}");
+    private void InsertDefault_Click(object sender, RoutedEventArgs e) => InsertAtCursor("${1:default}");
 
     private void InsertPaste_Click(object sender, RoutedEventArgs e) => InsertAtCursor("${paste}");
 

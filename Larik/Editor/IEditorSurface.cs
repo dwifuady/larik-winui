@@ -115,5 +115,11 @@ public interface IEditorSurface
     /// <summary>Raised when the user asks for a shell action from inside the editor.</summary>
     event EventHandler<EditorCommandKind>? CommandRequested;
 
+    /// <summary>
+    /// Raised when the user asks to keep the selected text as a reusable snippet. The shell owns
+    /// the naming dialog and the snippet library; the surface only supplies the SQL.
+    /// </summary>
+    event EventHandler<string>? SnippetRequested;
+
     void FocusEditor();
 }

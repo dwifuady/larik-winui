@@ -139,6 +139,13 @@ public sealed partial class CompletionItem : ObservableObject
     /// <summary>Placeholder span to leave selected after insertion.</summary>
     public (int Start, int Length)? Selection { get; init; }
 
+    /// <summary>
+    /// Raw snippet content when it contains the <c>${paste}</c> token. <see cref="InsertText"/> is
+    /// the clipboard-less preview built while the popup was filled; the surface re-expands this
+    /// when the snippet is accepted, because the clipboard can only be read asynchronously.
+    /// </summary>
+    public string? PasteTemplate { get; init; }
+
     /// <summary>Secondary sort inside a kind (0 = exact trigger prefix).</summary>
     public int RankSort { get; init; }
 

@@ -21,6 +21,7 @@ public sealed class SnippetStore
         using var connection = Open();
         EnsureSchema(connection);
         SeedBuiltins(connection);
+        RepairBuiltinDefaults(connection);
         return Read(connection);
     }
 
@@ -142,6 +143,45 @@ public sealed class SnippetStore
     }
 
     // ---------------------------------------------------------------- read
+
+    /// <summary>
+    /// Built-in content from earlier builds, keyed by stable id. The paste snippet shipped as
+    /// <c>${cursor}</c> (nothing), and the group-by/index/CTE templates repeated <c>${1:...}</c>
+    /// markers as if the editor linked tab stops. Only rows still holding exactly the old default
+    /// are rewritten, so an edited snippet keeps the user's version.
+    /// </summary>
+    private static readonly (string Id, string OldContent)[] LegacyBuiltinDefaults =
+    [
+        ("builtin:all:paste", "${cursor}"),
+        ("builtin:all:selg", "SELECT ${1:column}, COUNT(*) AS Count\nFROM ${2:table}\nGROUP BY ${1:column}\nORDER BY Count DESC"),
+        ("builtin:all:ci", "CREATE INDEX IX_${1:table}_${2:column}\nON ${1:table} (${2:column})"),
+        ("builtin:all:cte", ";WITH ${1:cte_name} AS (\n    ${2:SELECT * FROM table}\n)\nSELECT * FROM ${1:cte_name}${cursor}"),
+        ("builtin:mssql:rcte", ";WITH ${1:cte_name} AS (\n    -- Anchor\n    SELECT ${2:columns}\n    FROM ${3:table}\n    WHERE ${4:condition}\n\n    UNION ALL\n\n    -- Recursive\n    SELECT ${2:columns}\n    FROM ${3:table} t\n    INNER JOIN ${1:cte_name} c ON t.${5:parent_id} = c.${6:id}\n)\nSELECT * FROM ${1:cte_name}${cursor}"),
+    ];
+
+    private static void RepairBuiltinDefaults(SqliteConnection connection)
+    {
+        foreach (var (id, oldContent) in LegacyBuiltinDefaults)
+        {
+            var current = SnippetCatalog.All.FirstOrDefault(snippet =>
+                string.Equals(SnippetCatalog.BuiltinId(snippet), id, StringComparison.Ordinal));
+            if (current is null || string.Equals(current.Content, oldContent, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            Execute(
+                connection,
+                """
+                UPDATE snippets
+                SET content = $content, updated_at = datetime('now')
+                WHERE id = $id AND content = $old;
+                """,
+                ("$content", current.Content),
+                ("$id", id),
+                ("$old", oldContent));
+        }
+    }
 
     private static IReadOnlyList<SnippetRecord> Read(SqliteConnection connection)
     {

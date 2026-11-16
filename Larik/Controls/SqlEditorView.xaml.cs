@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.System;
 using Windows.UI;
@@ -39,6 +40,11 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
 
+    // The built-in TextCommandBarFlyout cannot be extended, so the editor owns the whole context
+    // menu: the standard verbs plus "Add to snippet…" for the current selection.
+    private readonly CommandBarFlyout _contextMenu = new();
+    private readonly List<(AppBarButton Button, Func<bool> CanExecute)> _contextCommands = [];
+
     // Character formatting (syntax highlighting) is undoable in RichEdit, which would make
     // Ctrl+Z reverse colours instead of text. The surface keeps its own text snapshots and
     // leaves the control's undo stack disabled.
@@ -59,6 +65,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         // Own undo: formatting changes must never occupy the undo stack.
         Editor.Document.UndoLimit = 0;
 
+        BuildEditorContextMenu();
+
         // Theme resources change while the app runs; token colours must follow.
         ActualThemeChanged += (_, _) => ApplyHighlighting();
 
@@ -75,6 +83,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     public event EventHandler? CaretChanged;
 
     public event EventHandler<EditorCommandKind>? CommandRequested;
+
+    public event EventHandler<string>? SnippetRequested;
 
     public IEditorCompletionSource? CompletionSource { get; set; }
 
@@ -162,6 +172,116 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     }
 
     public void FocusEditor() => Editor.Focus(FocusState.Programmatic);
+
+    // ---------------------------------------------------------------- context menu
+
+    /// <summary>
+    /// Replaces the control's default text flyout so a selection can become a snippet. The standard
+    /// text commands are recreated here because WinUI owns and seals the default flyout.
+    /// </summary>
+    private void BuildEditorContextMenu()
+    {
+        // Only secondary commands are used, so this is a plain right-click menu; AlwaysExpanded
+        // covers the case where the flyout would otherwise open in its collapsed command-bar mode.
+        _contextMenu.AlwaysExpanded = true;
+        _contextMenu.Opening += (_, _) => UpdateContextMenuState();
+
+        AddContextCommand("Undo", new SymbolIcon(Symbol.Undo), "Ctrl+Z", UndoEdit, () => _undo.Count > 0);
+        AddContextCommand("Redo", new SymbolIcon(Symbol.Redo), "Ctrl+Y", RedoEdit, () => _redo.Count > 0);
+        _contextMenu.SecondaryCommands.Add(new AppBarSeparator());
+
+        AddContextCommand("Cut", new SymbolIcon(Symbol.Cut), "Ctrl+X", CutSelection, () => Selection.Length > 0);
+        AddContextCommand("Copy", new SymbolIcon(Symbol.Copy), "Ctrl+C", CopySelection, () => Selection.Length > 0);
+        AddContextCommand("Paste", new SymbolIcon(Symbol.Paste), "Ctrl+V", PasteClipboard, ClipboardHasText);
+        AddContextCommand(
+            "Select all",
+            new SymbolIcon(Symbol.SelectAll),
+            "Ctrl+A",
+            () => Select(new EditorSpan(0, GetText().Length)),
+            () => GetText().Length > 0);
+
+        _contextMenu.SecondaryCommands.Add(new AppBarSeparator());
+
+        AddContextCommand(
+            "Add to snippet…",
+            new SymbolIcon(Symbol.Add),
+            null,
+            AddSelectionAsSnippet,
+            () => Selection.Length > 0);
+
+        Editor.ContextFlyout = _contextMenu;
+    }
+
+    private AppBarButton AddContextCommand(
+        string label,
+        IconElement icon,
+        string? accelerator,
+        Action action,
+        Func<bool> canExecute)
+    {
+        var button = new AppBarButton { Label = label, Icon = icon };
+        AutomationProperties.SetName(button, label);
+        ToolTipService.SetToolTip(button, accelerator is null ? label : $"{label} ({accelerator})");
+        button.Click += (_, _) => action();
+
+        _contextCommands.Add((button, canExecute));
+        _contextMenu.SecondaryCommands.Add(button);
+        return button;
+    }
+
+    private void UpdateContextMenuState()
+    {
+        foreach (var (button, canExecute) in _contextCommands)
+        {
+            button.IsEnabled = canExecute();
+        }
+    }
+
+    private void CutSelection()
+    {
+        Editor.Document.Selection.Cut();
+        FocusEditor();
+    }
+
+    private void CopySelection()
+    {
+        Editor.Document.Selection.Copy();
+        FocusEditor();
+    }
+
+    private void PasteClipboard()
+    {
+        Editor.Document.Selection.Paste(0);
+        FocusEditor();
+    }
+
+    private static bool ClipboardHasText()
+    {
+        try
+        {
+            return Clipboard.GetContent().Contains(StandardDataFormats.Text);
+        }
+        catch (Exception)
+        {
+            // Another app can hold the clipboard while its owner is closing.
+            return false;
+        }
+    }
+
+    private void AddSelectionAsSnippet()
+    {
+        var selection = Selection;
+        if (selection.IsEmpty)
+        {
+            return;
+        }
+
+        var text = GetText().Substring(selection.Start, selection.Length);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            SnippetRequested?.Invoke(this, text);
+        }
+    }
 
     /// <summary>
     /// Replaces the document as its own undo step. Formatting uses this rather than the
@@ -805,7 +925,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         _selectedIndex = -1;
     }
 
-    private void AcceptCompletion()
+    private async void AcceptCompletion()
     {
         if (_completions is null || _selectedIndex < 0)
         {
@@ -817,6 +937,30 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         var caret = Editor.Document.Selection.StartPosition;
         var (start, _, _) = CompletionEngine.ExtractContext(text, caret);
 
+        var insertText = item.InsertText;
+        var placeholderSpan = item.Selection;
+        var caretOffset = item.CaretOffset;
+
+        // Close first: the clipboard read below yields, and Tab/Enter must not accept twice.
+        HideCompletions();
+
+        if (item.PasteTemplate is { } template)
+        {
+            // ${paste} cannot be filled when the synchronous suggestion list is built, so it is
+            // expanded again here while the popup item is being inserted.
+            var clipboard = await ClipboardText.ReadAsync();
+            var expanded = CompletionEngine.Expand(template, clipboard);
+            insertText = expanded.Text;
+            placeholderSpan = expanded.Selection;
+            caretOffset = expanded.Caret;
+
+            // The read yields; if the caret moved meanwhile the captured span is stale.
+            if (Editor.Document.Selection.StartPosition != caret)
+            {
+                return;
+            }
+        }
+
         _skipCompletionUpdateOnce = true;
         BeginEdit();
         _suppressEvents = true;
@@ -824,17 +968,17 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         {
             var selection = Editor.Document.Selection;
             selection.SetRange(start, caret);
-            selection.Text = item.InsertText;
+            selection.Text = insertText;
 
-            if (item.Selection is { } placeholder)
+            if (placeholderSpan is { } placeholder)
             {
                 selection.SetRange(start + placeholder.Start, start + placeholder.Start + placeholder.Length);
             }
             else
             {
-                var caretAt = item.CaretOffset >= 0
-                    ? start + item.CaretOffset
-                    : start + item.InsertText.Length;
+                var caretAt = caretOffset >= 0
+                    ? start + caretOffset
+                    : start + insertText.Length;
                 selection.SetRange(caretAt, caretAt);
             }
         }
@@ -844,7 +988,6 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         }
 
         EndEdit();
-        HideCompletions();
         RaiseTextChanged();
         RaiseCaretChanged();
         FocusEditor();
@@ -852,7 +995,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         // A snippet often ends at a clause boundary ("SELECT * FROM "). Reopen the popup so the
         // next suggestion (tables after FROM) appears without nudging the keyboard. Placeholders
         // and snippets that end mid-token keep the current behaviour.
-        if (item.Kind == CompletionKind.Snippet && item.Selection is null && EndsAtClauseBoundary(item.InsertText))
+        if (item.Kind == CompletionKind.Snippet && placeholderSpan is null && EndsAtClauseBoundary(insertText))
         {
             UpdateCompletions();
         }

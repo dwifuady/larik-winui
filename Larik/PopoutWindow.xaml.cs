@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Larik.Controls;
 using Larik.Editor;
 using Larik.Services;
 using Larik.ViewModels;
@@ -69,6 +70,7 @@ public sealed partial class PopoutWindow : Window
         Editor.Text = Tab.Content;
         Editor.TextChanged += Editor_TextChanged;
         Editor.CommandRequested += Editor_CommandRequested;
+        Editor.SnippetRequested += Editor_SnippetRequested;
 
         ResultsGrid.OwnerWindow = this;
         ResultsGrid.PreviewWidthChanged += (_, width) => ViewModel.SetCellPreviewWidth(width);
@@ -210,6 +212,17 @@ public sealed partial class PopoutWindow : Window
             default:
                 break;
         }
+    }
+
+    private async void Editor_SnippetRequested(object? sender, string sql)
+    {
+        var snippet = await SnippetCaptureDialog.CaptureAsync(Content.XamlRoot, sql);
+        if (snippet is not null)
+        {
+            ViewModel.StatusText = $"Snippet \"{snippet.Name}\" added — type {snippet.Trigger} and press Tab.";
+        }
+
+        Editor.FocusEditor();
     }
 
     private async Task RunAsync(bool all, bool append = false)
@@ -467,6 +480,7 @@ public sealed partial class PopoutWindow : Window
         Tab.Space.Connection.PropertyChanged -= Connection_PropertyChanged;
         Editor.TextChanged -= Editor_TextChanged;
         Editor.CommandRequested -= Editor_CommandRequested;
+        Editor.SnippetRequested -= Editor_SnippetRequested;
         Editor.CompletionSource = null;
         ResultsGrid.OwnerWindow = null;
     }
