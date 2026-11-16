@@ -76,7 +76,14 @@ public sealed class ResultRowView : Grid
         };
         Children.Add(_matchBar);
 
-        DataContextChanged += (_, _) => UpdateCells();
+        // A recycled container arrives with the coordinates of the row it showed before, so the
+        // grid's current selection is re-applied here rather than waiting for the next selection
+        // change. UpdateCells alone would paint the previous row's selection.
+        DataContextChanged += (_, _) =>
+        {
+            UpdateCells();
+            FindAncestor(this)?.AttachRow(this);
+        };
         Loaded += (_, _) => FindAncestor(this)?.AttachRow(this);
         PointerEntered += (_, _) => Background = _hoverBrush;
         PointerExited += (_, _) => RestoreBackground();
