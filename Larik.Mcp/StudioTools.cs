@@ -168,12 +168,21 @@ internal sealed class StudioTools(StudioContext context)
         "Runs SQL on an exposed connection and returns result sets (columns, rows, a per-set " +
         "'truncated' flag) plus engine messages. Read-only workspaces are enforced by the server: " +
         "writes and session control are refused there. Write workspaces require the user's " +
-        "approval: in Larik when it is running, otherwise in this client when it can ask.")]
+        "approval: in Larik when it is running, otherwise in this client when it can ask. " +
+        "Always pass 'description' - one sentence on why this query is being run; a write workspace " +
+        "refuses a call without it. Pass 'reference' with the ticket or incident the work belongs " +
+        "to (for example 'PROJ-123') so the run is traceable in History.")]
     public async Task<string> RunQueryAsync(
         [Description("Connection id from list_connections.")] string connection,
         [Description("The SQL to run.")] string query,
         [Description("Database to run against; defaults to the connection's saved database.")] string? database = null,
         [Description("Rows per result set: 200 by default, 1000 maximum.")] int? row_limit = null,
+        [Description(
+            "One sentence on why this query is needed. Required on a read-and-write workspace; " +
+            "shown in the user's approval prompt and kept in run history.")] string? description = null,
+        [Description(
+            "Optional ticket, incident or branch this work belongs to, e.g. 'PROJ-123'. Free-form; " +
+            "kept in run history so the run can be found again.")] string? reference = null,
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -195,6 +204,20 @@ internal sealed class StudioTools(StudioContext context)
         var readOnly = space.Access == McpAccess.Read;
         string? surface = null;
 
+        // A write workspace puts every statement in front of a human, and a prompt that says only
+        // "an agent wants to run this" asks the user to judge SQL without the reason it exists.
+        // One sentence is the price of an approval; it is also what run history keeps.
+        if (!readOnly && string.IsNullOrWhiteSpace(description))
+        {
+            context.Audit("run_query", space, space.Access, query, "denied",
+                "a write workspace needs a description", stopwatch.Elapsed, rows: 0);
+
+            throw new McpException(
+                "This workspace is read and write, so every statement needs a 'description': one " +
+                "sentence on why it is needed. It is shown to the user in the approval prompt and " +
+                "kept in run history. Retry with a description.");
+        }
+
         if (readOnly)
         {
             RequireProvenRead(space, provider, query);
@@ -203,7 +226,8 @@ internal sealed class StudioTools(StudioContext context)
         {
             // A write needs a human. The studio is the only place that can ask one, so when it is
             // closed the statement is refused rather than run on the saved login's permissions.
-            var decision = await RequestWriteApprovalAsync(space, query, cancellationToken);
+            var decision = await RequestWriteApprovalAsync(
+                space, query, description, reference, cancellationToken);
             surface = decision.Surface;
 
             if (!decision.Approved)
@@ -211,7 +235,8 @@ internal sealed class StudioTools(StudioContext context)
                 context.Audit("run_query", space, space.Access, query, "denied",
                     decision.Reason, stopwatch.Elapsed, rows: 0, surface);
                 context.RecordRun(space, database, query, RunStatuses.Refused,
-                    decision.Reason, stopwatch.Elapsed);
+                    decision.Reason, stopwatch.Elapsed,
+                    results: null, description: description, reference: reference);
                 throw new McpException(decision.Reason ?? "The user did not approve this statement.");
             }
         }
@@ -245,7 +270,8 @@ internal sealed class StudioTools(StudioContext context)
             context.Audit("run_query", space, space.Access, query, "error",
                 "statement exceeded the server limit", stopwatch.Elapsed, rows: 0, surface);
             context.RecordRun(space, target, query, RunStatuses.Failed,
-                "statement exceeded the server limit", stopwatch.Elapsed);
+                "statement exceeded the server limit", stopwatch.Elapsed,
+                results: null, description: description, reference: reference);
 
             throw new McpException(
                 $"The statement was stopped after {StudioContext.MaxStatementDuration.TotalSeconds:N0} " +
@@ -262,7 +288,8 @@ internal sealed class StudioTools(StudioContext context)
             context.Audit("run_query", space, space.Access, query, "error",
                 "statement exceeded the server limit", stopwatch.Elapsed, rows: 0, surface);
             context.RecordRun(space, target, query, RunStatuses.Failed,
-                "statement exceeded the server limit", stopwatch.Elapsed);
+                "statement exceeded the server limit", stopwatch.Elapsed,
+                results: null, description: description, reference: reference);
 
             throw new McpException(
                 $"The statement was stopped after {StudioContext.MaxStatementDuration.TotalSeconds:N0} " +
@@ -287,7 +314,9 @@ internal sealed class StudioTools(StudioContext context)
             failed is null ? RunStatuses.Ok : RunStatuses.Failed,
             failed?.Message,
             stopwatch.Elapsed,
-            results);
+            results,
+            description,
+            reference);
 
         if (failed is not null)
         {
@@ -443,6 +472,8 @@ internal sealed class StudioTools(StudioContext context)
     private async Task<McpApprovalDecision> RequestWriteApprovalAsync(
         McpSpaceRecord space,
         string query,
+        string? description,
+        string? reference,
         CancellationToken cancellationToken)
     {
         var id = Guid.NewGuid().ToString("n");
@@ -465,6 +496,8 @@ internal sealed class StudioTools(StudioContext context)
                 SpaceName = space.Name,
                 ProviderId = space.ProviderId,
                 Statement = query,
+                Description = CapNote(description, StudioStore.MaxRecordedDescriptionChars),
+                Reference = CapNote(reference, StudioStore.MaxRecordedReferenceChars),
             },
             cancellationToken);
 
@@ -526,6 +559,21 @@ internal sealed class StudioTools(StudioContext context)
         space.Profile.TryGetValue("database", out var database) && !string.IsNullOrWhiteSpace(database)
             ? database
             : null;
+
+    /// <summary>
+    /// Cuts an agent's note to what the run log keeps, so the approval pipe cannot carry an essay
+    /// into a dialog. Blank is absent, and trimming happens before the cut.
+    /// </summary>
+    private static string? CapNote(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length > max ? trimmed[..max] : trimmed;
+    }
 
     /// <summary>The profile without secrets, for descriptions that must never leak credentials.</summary>
     private static ConnectionProfile VisibleProfile(McpSpaceRecord space)

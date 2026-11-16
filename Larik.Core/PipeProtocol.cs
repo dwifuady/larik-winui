@@ -40,6 +40,15 @@ public sealed class McpApprovalRequest
     public required string ProviderId { get; init; }
 
     public required string Statement { get; init; }
+
+    /// <summary>
+    /// Why the agent is running this, in its own words. Shown above the statement so the decision
+    /// is made with the reason in view; null for a server that does not send one.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>The ticket or incident the work belongs to, if the agent named one.</summary>
+    public string? Reference { get; init; }
 }
 
 /// <summary>The studio's answer. <see cref="Surface"/> records who decided, for the audit row.</summary>

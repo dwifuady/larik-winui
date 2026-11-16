@@ -11,13 +11,24 @@ namespace Larik.Services;
 /// <para>
 /// Statement text is stored: without it the log cannot answer "what did I run". It is capped, and
 /// rows are pruned on the retention window, which is the honest counterpart to keeping the text at
-/// all. Nothing here is written when a workspace has run recording turned off.
+/// all. An agent may also attach the reason it ran a statement and the ticket the work belongs to,
+/// which is what the log needs to answer "why". Nothing here is written when a workspace has run
+/// recording turned off.
 /// </para>
 /// </summary>
 public sealed partial class StudioStore
 {
     /// <summary>Longest statement kept per row. Longer text is cut, not rejected.</summary>
     public const int MaxRecordedStatementChars = 32_768;
+
+    /// <summary>Longest agent-supplied reason kept per row: one sentence, not an essay.</summary>
+    public const int MaxRecordedDescriptionChars = 280;
+
+    /// <summary>
+    /// Longest reference kept per row. Deliberately free-form (a ticket, an incident, a branch):
+    /// the log has no business deciding which tracker an agent's user works in.
+    /// </summary>
+    public const int MaxRecordedReferenceChars = 64;
 
     private const string RunLogKeepDaysStateKey = "run_log_days";
     private const string RunRecordingSettingKey = "record_runs";
@@ -34,6 +45,10 @@ public sealed partial class StudioStore
             ? record.Statement[..MaxRecordedStatementChars]
             : record.Statement;
 
+        // Both notes come from an agent, so they are capped like the statement instead of trusted.
+        var description = NormalizeNote(record.Description, MaxRecordedDescriptionChars);
+        var reference = NormalizeNote(record.Reference, MaxRecordedReferenceChars);
+
         try
         {
             using var connection = Open();
@@ -42,9 +57,11 @@ public sealed partial class StudioStore
                 """
                 INSERT INTO run_log
                     (actor, space_id, space_name, database_name, provider_id, tab_id, statement,
-                     status, reason, duration_ms, rows_returned, row_limit, is_truncated)
+                     status, reason, duration_ms, rows_returned, row_limit, is_truncated,
+                     description, reference)
                 VALUES ($actor, $spaceId, $spaceName, $database, $providerId, $tabId, $statement,
-                        $status, $reason, $duration, $rows, $rowLimit, $truncated);
+                        $status, $reason, $duration, $rows, $rowLimit, $truncated,
+                        $description, $reference);
                 SELECT last_insert_rowid();
                 """;
 
@@ -63,6 +80,8 @@ public sealed partial class StudioStore
                 "$rowLimit",
                 (object?)record.RowLimit ?? DBNull.Value);
             command.Parameters.AddWithValue("$truncated", record.IsTruncated ? 1 : 0);
+            command.Parameters.AddWithValue("$description", (object?)description ?? DBNull.Value);
+            command.Parameters.AddWithValue("$reference", (object?)reference ?? DBNull.Value);
 
             return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
         }
@@ -84,7 +103,7 @@ public sealed partial class StudioStore
                 """
                 SELECT id, recorded_at, actor, space_id, space_name, database_name, provider_id,
                        tab_id, statement, status, reason, duration_ms, rows_returned, row_limit,
-                       is_truncated
+                       is_truncated, description, reference
                 FROM run_log
                 WHERE $space IS NULL OR space_id = $space
                 ORDER BY id DESC
@@ -151,12 +170,14 @@ public sealed partial class StudioStore
                 """
                 SELECT id, recorded_at, actor, space_id, space_name, database_name, provider_id,
                        tab_id, statement, status, reason, duration_ms, rows_returned, row_limit,
-                       is_truncated
+                       is_truncated, description, reference
                 FROM run_log
                 WHERE ($space IS NULL OR space_id = $space)
                   AND (statement LIKE $match ESCAPE '\'
                        OR space_name LIKE $match ESCAPE '\'
-                       OR database_name LIKE $match ESCAPE '\')
+                       OR database_name LIKE $match ESCAPE '\'
+                       OR description LIKE $match ESCAPE '\'
+                       OR reference LIKE $match ESCAPE '\')
                 ORDER BY id DESC
                 LIMIT $limit;
                 """;
@@ -185,6 +206,18 @@ public sealed partial class StudioStore
         .Replace("%", "\\%", StringComparison.Ordinal)
         .Replace("_", "\\_", StringComparison.Ordinal);
 
+    /// <summary>Blank is absent; anything longer than the cap is cut, not rejected.</summary>
+    private static string? NormalizeNote(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length > max ? trimmed[..max] : trimmed;
+    }
+
     private static RunLogRecord ReadRecord(SqliteDataReader reader) => new()
     {
         Id = reader.GetInt64(0),
@@ -202,6 +235,8 @@ public sealed partial class StudioStore
         RowsReturned = (int)reader.GetInt64(12),
         RowLimit = reader.IsDBNull(13) ? null : reader.GetInt64(13),
         IsTruncated = reader.GetInt64(14) != 0,
+        Description = reader.IsDBNull(15) ? null : reader.GetString(15),
+        Reference = reader.IsDBNull(16) ? null : reader.GetString(16),
     };
 
     /// <summary>How long executions are kept. Always one of <see cref="RunLogRetentionChoices"/>.</summary>
@@ -356,6 +391,18 @@ public sealed class RunLogRecord
     public long? RowLimit { get; init; }
 
     public bool IsTruncated { get; init; }
+
+    /// <summary>
+    /// Why the run happened, in the actor's own words. Agent-supplied and untrusted: stored as
+    /// text, capped, and never interpreted. Null for a run nobody explained.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// The outside work this run belongs to - a ticket key, an incident, a branch. Free-form on
+    /// purpose, because the tracker is the user's choice, not the log's.
+    /// </summary>
+    public string? Reference { get; init; }
 }
 
 public static class RunActors

@@ -168,7 +168,9 @@ internal sealed class StudioContext(StudioStore store)
         string status,
         string? reason,
         TimeSpan duration,
-        IReadOnlyList<QueryResult>? results = null)
+        IReadOnlyList<QueryResult>? results = null,
+        string? description = null,
+        string? reference = null)
     {
         if (space is not null && !store.IsRunRecordingEnabled(space.Id))
         {
@@ -190,6 +192,9 @@ internal sealed class StudioContext(StudioStore store)
             RowsReturned = results?.Sum(result => result.Rows.Count) ?? 0,
             RowLimit = truncated?.RowLimit,
             IsTruncated = truncated is not null,
+            // The agent's own words: capped and stored as text by the store, never trusted.
+            Description = description,
+            Reference = reference,
         });
     }
 }

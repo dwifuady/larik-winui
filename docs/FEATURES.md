@@ -28,8 +28,8 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   level — **Off**, **Read only** or **Read and write** — and unknown values read as Off. **Four tools**:
   `list_connections`, `list_databases`, `get_schema` (typed columns, primary keys, foreign keys,
   optional routines), `run_query` (200 rows by default, 1000 max, per-set `truncated` flag, engine
-  messages) and `open_in_studio` (drops the agent's statement into a query tab in the right workspace
-  and switches there — nothing runs). Read-only workspaces are enforced in two layers: the provider's fail-closed statement
+  messages, plus the agent's `description` and ticket `reference`) and `open_in_studio` (drops the
+  agent's statement into a query tab in the right workspace and switches there — nothing runs). Read-only workspaces are enforced in two layers: the provider's fail-closed statement
   classifier, and the engine itself — SQL Server runs every read-mode batch in a transaction that is
   always rolled back, PostgreSQL in `BEGIN TRANSACTION READ ONLY`. A statement the classifier cannot
   prove is a read is refused with the reason and the two ways forward. Every call, including refusals,
@@ -42,8 +42,10 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   refusals. A shipped build installs `Larik.Mcp.exe` beside the app and aliases it as **`larik-mcp`**.
 
   **Writes ask first.** On a Read and write workspace every `run_query` parks on a dialog showing the
-  statement — Deny is the default button, so Enter on a prompt nobody read runs nothing. When the
-  window is not in front, a Windows notification and a taskbar flash bring it back; the notification
+  agent's reason and reference above the statement — Deny is the default button, so Enter on a prompt
+  nobody read runs nothing. A call with no `description` is refused before the prompt appears, because
+  "run this" is not something a person can judge. When
+  the window is not in front, a Windows notification and a taskbar flash bring it back; the notification
   carries **Run it** and **Deny** buttons, so a decision can be made from the notification centre
   without finding the window. Two minutes without an answer refuses and the agent gets the reason.
   The agent's call stays blocked the whole time, and the audit row records who decided.
@@ -312,9 +314,10 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   with cascade deletes, schema versioned via `PRAGMA user_version` (v2 adds the tab and archive
   columns/tables in place; v3 adds the workspace icon; v4 adds the rail visibility flag; v5 adds
   tab groups; v6 adds custom reference metadata; v7 adds the MCP exposure level and the audit and
-  approval tables; v8 adds the run log); a
+  approval tables; v8 adds the run log; v9 adds the agent's reason and ticket reference); a
   pre-SQLite `studio.json` is imported once. The **run log** (`run_log`) records each execution —
-  studio or agent, statement text, duration, rows, status and the workspace it ran in — so it is
+  studio or agent, statement text, duration, rows, status and the workspace it ran in, plus the
+  agent's reason and ticket reference when it gave one — so it is
   pruned to a **30 / 90 / 120-day** window instead of kept forever, and a workspace can record
   nothing at all (`record_runs` in `space_settings`). Spaces still start
   disconnected. Provider-declared password fields are kept in Windows Credential Manager (never in
@@ -437,6 +440,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | Gap | Why / next step |
 |---|---|
 | MCP writes need the studio open | The approval prompt is the studio's dialog, so a closed studio means a refused write. Client-side elicitation (MRTR) is implemented in the tool but **not shipped**: the SDK's attribute-tool pipeline turns `InputRequiredException` into a generic `-32603` instead of an `input_required` result (verified against a 2026-07-28 session). It needs `run_query` registered as a low-level handler first. |
+| An agent's note stops at `open_in_studio` | `run_query` records the agent's `description` and `reference`; a statement merely opened as a tab has nowhere to keep them, and the human run of that tab is recorded as a user run. Carrying the note on the tab would close the gap. |
 | `larik-mcp` only resolves in an installed package | The manifest declares the execution alias and `dotnet publish` puts `Larik.Mcp.exe` beside `Larik.exe`, so an installed (MSIX/portable) build has the command on PATH. The `winapp run` dev layout regenerates its `AppX` folder and drops the copied EXE, so a debug-identity package has a dangling alias; Settings falls back to the build-output path there. || SQL Server read-only is best-effort plus one layer | The classifier plus an always-rolled-back transaction stop transactional writes, but non-transactional effects (some extended procedures, linked-server writes reachable from a misjudged read) are outside it. A read-only login remains the only hard guarantee; the UI copy should say so. |
 | MongoDB read-only rests on the gate alone | MongoDB has no server-side read-only session, so the add-on proves reads structurally (the translator for SQL, an allow-list for mongosh) instead of rolling back. A translator bug or an unnoticed write path would not be caught by the server; a read-only login remains the only hard guarantee. |
 | Three providers ship | SQL Server, PostgreSQL and the in-memory Demo. MongoDB ships as an add-on from its own repository (`dwifuady/larik-mongodb`). |

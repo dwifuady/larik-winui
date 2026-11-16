@@ -22,7 +22,8 @@ public enum RunActorFilter
 
 /// <summary>
 /// One execution in the Runs list. The studio and the MCP server both produce rows; the actor is
-/// the only difference the page shows, because "who ran it" is the question the list exists for.
+/// the first difference the page shows, and an agent row may also carry why it ran and the work it
+/// belongs to.
 /// </summary>
 public sealed class RunRowViewModel
 {
@@ -38,6 +39,8 @@ public sealed class RunRowViewModel
         Status = record.Status;
         RecordedAt = ParseTimestamp(record.RecordedAt);
         TabExists = tabExists;
+        Description = record.Description;
+        Reference = record.Reference;
 
         MetaLine = string.Join(
             " · ",
@@ -72,6 +75,24 @@ public sealed class RunRowViewModel
     /// <summary>True when the originating tab is still open, so the row offers "Go to tab".</summary>
     public bool TabExists { get; }
 
+    /// <summary>Why the run happened, when the actor explained it. Agent prose, not instructions.</summary>
+    public string? Description { get; }
+
+    /// <summary>The ticket or incident the run belongs to, when one was named.</summary>
+    public string? Reference { get; }
+
+    /// <summary>The note line is present only when there is something to say.</summary>
+    public Visibility NotesVisibility =>
+        string.IsNullOrWhiteSpace(Description) && string.IsNullOrWhiteSpace(Reference)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+    public Visibility DescriptionVisibility =>
+        string.IsNullOrWhiteSpace(Description) ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility ReferenceVisibility =>
+        string.IsNullOrWhiteSpace(Reference) ? Visibility.Collapsed : Visibility.Visible;
+
     /// <summary>Workspace, database, duration, size and the reason a run failed - in that order.</summary>
     public string MetaLine { get; }
 
@@ -93,7 +114,14 @@ public sealed class RunRowViewModel
 
     /// <summary>One line for screen readers, which cannot see the chips and the colour.</summary>
     public string Announcement =>
-        $"{TimeLabel}, {SpaceName}, {(Actor == RunActors.Agent ? "agent" : "you")}, {Status}, {Statement}";
+        string.Join(
+            ", ",
+            new[]
+            {
+                $"{TimeLabel}, {SpaceName}, {(Actor == RunActors.Agent ? "agent" : "you")}, {Status}, {Statement}",
+                string.IsNullOrWhiteSpace(Description) ? null : $"why: {Description}",
+                string.IsNullOrWhiteSpace(Reference) ? null : $"ref: {Reference}",
+            }.Where(part => !string.IsNullOrEmpty(part)));
 
     private Visibility StatusVisibility(string status) =>
         string.Equals(Status, status, StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;

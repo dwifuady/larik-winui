@@ -56,7 +56,9 @@ instead.
   into its own always-on-top window** (Ctrl+Alt+O) and dock it back with Ctrl+W.
 - **History that answers "what did I run?".** Every execution — yours or an agent's — is listed by
   day with its statement, database, timing, row count and outcome, and opens back into the tab it
-  came from. Refused statements are recorded too. `Ctrl+Shift+H`, kept for 30, 90 or 120 days.
+  came from. Refused statements are recorded too. An agent run carries the agent's one-line reason
+  and the ticket it was working on, and both are searchable. `Ctrl+Shift+H`, kept for 30, 90 or 120
+  days.
 - **A real editor.** Provider-driven syntax highlighting, line numbers, find/replace with visible
   match highlighting, snippet expansion on Tab (including `${paste}` for clipboard text), and
   clause-aware completion for tables, columns,

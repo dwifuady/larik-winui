@@ -33,6 +33,8 @@ public sealed class RunLogStoreTests : IDisposable
             RowsReturned = 10,
             RowLimit = 200,
             IsTruncated = true,
+            Description = "Checking duplicate orders after the Q3 import",
+            Reference = "PROJ-123",
         });
 
         Assert.True(id > 0);
@@ -47,6 +49,49 @@ public sealed class RunLogStoreTests : IDisposable
         Assert.Equal(10, entry.RowsReturned);
         Assert.Equal(200, entry.RowLimit);
         Assert.True(entry.IsTruncated);
+        Assert.Equal("Checking duplicate orders after the Q3 import", entry.Description);
+        Assert.Equal("PROJ-123", entry.Reference);
+    }
+
+    [Fact]
+    public void The_reason_and_reference_are_capped_and_blank_becomes_absent()
+    {
+        var store = new StudioStore(_path);
+
+        store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.Agent,
+            SpaceId = "a",
+            Statement = "select 1",
+            Status = RunStatuses.Ok,
+            // Agent prose, so the cap is the only bound: trim first, then cut.
+            Description = $"  {new string('d', StudioStore.MaxRecordedDescriptionChars + 20)}  ",
+            Reference = "   ",
+        });
+
+        var entry = Assert.Single(store.GetRunLog());
+        Assert.Equal(StudioStore.MaxRecordedDescriptionChars, entry.Description!.Length);
+        Assert.Null(entry.Reference);
+    }
+
+    [Fact]
+    public void Search_finds_a_run_by_its_reason_or_reference()
+    {
+        var store = new StudioStore(_path);
+        store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.Agent,
+            SpaceId = "a",
+            SpaceName = "Production",
+            Statement = "select count(*) from dbo.Orders",
+            Status = RunStatuses.Ok,
+            Description = "Investigating duplicate orders",
+            Reference = "PROJ-123",
+        });
+        store.LogRun(Run(spaceId: "a", statement: "select 2"));
+
+        Assert.Single(store.SearchRunLog(null, "duplicate"));
+        Assert.Single(store.SearchRunLog(null, "PROJ-123"));
     }
 
     [Fact]
@@ -140,6 +185,49 @@ public sealed class RunLogStoreTests : IDisposable
         upgraded.LogRun(Run(spaceId: "a", statement: "select after upgrade"));
         var entry = Assert.Single(upgraded.GetRunLog());
         Assert.Equal("select after upgrade", entry.Statement);
+    }
+
+    [Fact]
+    public void A_store_with_the_v8_run_log_gains_the_reason_columns_on_open()
+    {
+        // Version 8 shipped run_log without the agent's why. Dropping the columns is the honest
+        // shape of that store, so the upgrade path (ALTER TABLE, not CREATE TABLE) is exercised.
+        var store = new StudioStore(_path);
+        store.LogRun(Run(spaceId: "a", statement: "select before the notes"));
+
+        using (var connection = new SqliteConnection($"Data Source={_path}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                ALTER TABLE run_log DROP COLUMN description;
+                ALTER TABLE run_log DROP COLUMN reference;
+                PRAGMA user_version = 8;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var upgraded = new StudioStore(_path);
+
+        // The old row survives the upgrade with the new columns empty, not missing.
+        var kept = Assert.Single(upgraded.GetRunLog());
+        Assert.Null(kept.Description);
+        Assert.Null(kept.Reference);
+
+        upgraded.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.Agent,
+            SpaceId = "a",
+            Statement = "select after the notes",
+            Status = RunStatuses.Ok,
+            Description = "why it ran",
+            Reference = "REF-1",
+        });
+
+        var entry = upgraded.GetRunLog()[0];
+        Assert.Equal("why it ran", entry.Description);
+        Assert.Equal("REF-1", entry.Reference);
     }
 
     [Fact]
