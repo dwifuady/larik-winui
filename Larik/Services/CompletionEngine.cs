@@ -670,7 +670,8 @@ public static partial class CompletionEngine
 
     /// <summary>
     /// Turns snippet markup into insertable text:
-    /// ${cursor} -> final caret, ${n:placeholder} -> selectable placeholder (repeats reuse the first value),
+    /// ${cursor} -> final caret, ${n:default} -> prefilled text (the first marker is left selected
+    /// so typing replaces it; markers are independent defaults, not linked tab stops),
     /// ${paste} -> clipboard.
     /// </summary>
     public static (string Text, int Caret, (int Start, int Length)? Selection) Expand(string content, string clipboard)
@@ -708,6 +709,8 @@ public static partial class CompletionEngine
 
                     if (key.Length > 0 && key.All(char.IsDigit))
                     {
+                        // Reusing a number keeps the first value for older/custom snippets, but the
+                        // editor does not link the copies after insertion.
                         if (markers.TryGetValue(key, out var existing))
                         {
                             builder.Append(existing);
@@ -738,6 +741,13 @@ public static partial class CompletionEngine
         return (text, caretAt, selection);
     }
 
+    /// <summary>
+    /// True when a snippet needs the clipboard. Suggestion building is synchronous, so a snippet
+    /// using <c>${paste}</c> is expanded again by the editor when it is accepted.
+    /// </summary>
+    public static bool UsesClipboard(string content) =>
+        content.Contains("${paste}", StringComparison.OrdinalIgnoreCase);
+
     // ---------------------------------------------------------------- candidates
 
     private static void AddSnippets(List<CompletionItem> results, IReadOnlyList<SnippetDef> snippets, string word, string clipboard)
@@ -759,6 +769,7 @@ public static partial class CompletionEngine
                 InsertText = expanded.Text,
                 CaretOffset = expanded.Caret,
                 Selection = expanded.Selection,
+                PasteTemplate = UsesClipboard(snippet.Content) ? snippet.Content : null,
                 RankSort = triggerMatch ? 0 : 1,
 
                 // A trigger prefix is what the user is typing; a name substring is a search

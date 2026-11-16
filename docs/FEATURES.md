@@ -263,9 +263,13 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   **Tab or Enter accepts**, Esc dismisses, and **Ctrl+Space** asks for the list on demand (it never
   types a space). Space is never intercepted: it types a space, so column
   lists can be typed through and a column is inserted one at a time with Tab/Enter.
-  Expansion honours `${cursor}`, `${1:placeholder}` (left
-  selected), repeat markers, and `alias.`/`table.` column completion resolved through the
-  statement's aliases. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
+  Expansion honours `${cursor}`, `${1:default}` (prefills text and leaves the first marker
+  selected so typing replaces it; markers are independent defaults, not linked tab stops),
+  `${paste}` (clipboard text, read when the snippet is accepted), and
+  `alias.`/`table.` column completion resolved through the
+  statement's aliases. Right-clicking a selection offers **Add to snippet…**, which saves it with a
+  suggested trigger and name; the rest of the context menu keeps undo/redo, cut, copy, paste and
+  select all. Completion is clause-aware: after `FROM`/`JOIN`/`INTO`/`UPDATE`/`TABLE` it
   lists every table in the active database with its schema, and inserts a runnable name in the
   dialect's quoting — `[dbo].[Promotion] AS [p]` on SQL Server (plus a `no alias` variant); typing a
   schema (`FROM dbo.`) narrows the list and is not repeated in the insert. After

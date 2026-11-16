@@ -5,7 +5,9 @@ namespace Larik.Services;
 /// <summary>
 /// Built-in snippets, ported 1:1 from the desktop app's Rust catalog
 /// (src-tauri/src/storage/snippets.rs) so muscle memory carries over.
-/// ${cursor} marks the final caret; ${1:placeholder} marks a selectable placeholder.
+/// ${cursor} marks the final caret; ${1:default} prefills a value and leaves the first marker
+/// selected so typing replaces it. Markers are independent defaults — the editor does not link
+/// repeated numbers into tab stops, so built-ins never repeat one.
 /// </summary>
 public static class SnippetCatalog
 {
@@ -22,7 +24,7 @@ public static class SnippetCatalog
         new() { Trigger = "selw", Name = "SELECT WHERE", Category = "Select", Description = "Select with WHERE clause", Content = "SELECT * FROM ${1:table} WHERE ${cursor}" },
         new() { Trigger = "selj", Name = "SELECT JOIN", Category = "Select", Description = "Select with INNER JOIN", Content = "SELECT ${1:columns}\nFROM ${2:table1} t1\nINNER JOIN ${3:table2} t2 ON t1.${4:id} = t2.${5:id}\nWHERE ${cursor}" },
         new() { Trigger = "sellj", Name = "SELECT LEFT JOIN", Category = "Select", Description = "Select with LEFT JOIN", Content = "SELECT ${1:columns}\nFROM ${2:table1} t1\nLEFT JOIN ${3:table2} t2 ON t1.${4:id} = t2.${5:id}\nWHERE ${cursor}" },
-        new() { Trigger = "selg", Name = "SELECT GROUP BY", Category = "Select", Description = "Select with GROUP BY", Content = "SELECT ${1:column}, COUNT(*) AS Count\nFROM ${2:table}\nGROUP BY ${1:column}\nORDER BY Count DESC" },
+        new() { Trigger = "selg", Name = "SELECT GROUP BY", Category = "Select", Description = "Select with GROUP BY", Content = "SELECT ${1:column}, COUNT(*) AS Count\nFROM ${2:table}\nGROUP BY ${cursor}\nORDER BY Count DESC" },
 
         new() { Trigger = "ins", Name = "INSERT INTO", Category = "Insert", Description = "Insert a single row", Content = "INSERT INTO ${1:table} (${2:columns})\nVALUES (${cursor})" },
         new() { Trigger = "inss", Name = "INSERT SELECT", Category = "Insert", Description = "Insert from a SELECT", Content = "INSERT INTO ${1:target_table} (${2:columns})\nSELECT ${3:columns}\nFROM ${cursor}" },
@@ -36,15 +38,15 @@ public static class SnippetCatalog
         new() { Trigger = "ct", Name = "CREATE TABLE", Category = "DDL", Description = "Create a new table", Content = "CREATE TABLE ${1:table_name} (\n    ${2:id} INT IDENTITY(1,1) PRIMARY KEY,\n    ${cursor}\n)", Dialects = MssqlOnly },
         new() { Trigger = "ata", Name = "ALTER TABLE ADD", Category = "DDL", Description = "Add a column", Content = "ALTER TABLE ${1:table}\nADD ${2:column} ${cursor}" },
         new() { Trigger = "atd", Name = "ALTER TABLE DROP", Category = "DDL", Description = "Drop a column", Content = "ALTER TABLE ${1:table}\nDROP COLUMN ${cursor}" },
-        new() { Trigger = "ci", Name = "CREATE INDEX", Category = "DDL", Description = "Create an index", Content = "CREATE INDEX IX_${1:table}_${2:column}\nON ${1:table} (${2:column})" },
+        new() { Trigger = "ci", Name = "CREATE INDEX", Category = "DDL", Description = "Create an index", Content = "CREATE INDEX IX_${1:index_name}\nON ${2:table} (${cursor})" },
         new() { Trigger = "di", Name = "DROP INDEX", Category = "DDL", Description = "Drop an index", Content = "DROP INDEX ${1:index_name} ON ${cursor}", Dialects = MssqlOnly },
 
-        new() { Trigger = "cte", Name = "CTE", Category = "CTE", Description = "Common table expression", Content = ";WITH ${1:cte_name} AS (\n    ${2:SELECT * FROM table}\n)\nSELECT * FROM ${1:cte_name}${cursor}" },
-        new() { Trigger = "rcte", Name = "Recursive CTE", Category = "CTE", Description = "Recursive CTE", Content = ";WITH ${1:cte_name} AS (\n    -- Anchor\n    SELECT ${2:columns}\n    FROM ${3:table}\n    WHERE ${4:condition}\n\n    UNION ALL\n\n    -- Recursive\n    SELECT ${2:columns}\n    FROM ${3:table} t\n    INNER JOIN ${1:cte_name} c ON t.${5:parent_id} = c.${6:id}\n)\nSELECT * FROM ${1:cte_name}${cursor}", Dialects = MssqlOnly },
+        new() { Trigger = "cte", Name = "CTE", Category = "CTE", Description = "Common table expression", Content = ";WITH ${1:cte_name} AS (\n    ${2:SELECT * FROM table}\n)\nSELECT * FROM ${cursor}" },
+        new() { Trigger = "rcte", Name = "Recursive CTE", Category = "CTE", Description = "Recursive CTE", Content = ";WITH ${1:cte_name} AS (\n    -- Anchor\n    SELECT ${2:columns}\n    FROM ${3:table}\n    WHERE ${4:condition}\n\n    UNION ALL\n\n    -- Recursive\n    SELECT ${5:columns}\n    FROM ${6:table} t\n    INNER JOIN ${7:cte_name} c ON t.${8:parent_id} = c.${9:id}\n)\nSELECT * FROM ${10:cte_name}${cursor}", Dialects = MssqlOnly },
 
         new() { Trigger = "cp", Name = "CREATE PROCEDURE", Category = "Procedure", Description = "Create a stored procedure", Content = "CREATE PROCEDURE ${1:procedure_name}\n    @${2:param} ${3:INT}\nAS\nBEGIN\n    SET NOCOUNT ON;\n    ${cursor}\nEND", Dialects = MssqlOnly },
         new() { Trigger = "tx", Name = "TRANSACTION", Category = "Safety", Description = "Run work inside a transaction", Content = "BEGIN TRANSACTION;\n\n${cursor}\n\nCOMMIT TRANSACTION;" },
-        new() { Trigger = "paste", Name = "Paste clipboard", Category = "Utility", Description = "Insert clipboard contents", Content = "${cursor}" },
+        new() { Trigger = "paste", Name = "Paste clipboard", Category = "Utility", Description = "Insert clipboard contents", Content = "${paste}${cursor}" },
     ];
 
     public static IReadOnlyList<SnippetDef> ForDialect(string dialect) =>

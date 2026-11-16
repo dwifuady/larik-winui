@@ -58,9 +58,10 @@ instead.
   day with its statement, database, timing, row count and outcome, and opens back into the tab it
   came from. Refused statements are recorded too. `Ctrl+Shift+H`, kept for 30, 90 or 120 days.
 - **A real editor.** Provider-driven syntax highlighting, line numbers, find/replace with visible
-  match highlighting, snippet expansion on Tab, and clause-aware completion for tables, columns,
-  aliases, joins, CTEs, variables, databases and procedure calls. `Ctrl+K` opens a schema peek that
-  pins beside the editor.
+  match highlighting, snippet expansion on Tab (including `${paste}` for clipboard text), and
+  clause-aware completion for tables, columns,
+  aliases, joins, CTEs, variables, databases and procedure calls. Right-click a selection to save it
+  as a snippet. `Ctrl+K` opens a schema peek that pins beside the editor.
 - **Real execution.** `Ctrl+Enter` runs the statement under the caret, `F5` runs the document or
   selection and splits `GO` batches, and `Stop` cancels without closing the session. A running
   statement shows a **Running…** pill and a full-width progress bar, not just status-bar text.

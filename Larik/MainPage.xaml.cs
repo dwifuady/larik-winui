@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Larik.Controls;
 using Larik.Data;
 using Larik.Data.Addons;
 using Larik.Editor;
@@ -151,6 +152,7 @@ public sealed partial class MainPage : Page
             SqlEditor.TextChanged += SqlEditor_TextChanged;
             SqlEditor.CaretChanged += SqlEditor_CaretChanged;
             SqlEditor.CommandRequested += SqlEditor_CommandRequested;
+            SqlEditor.SnippetRequested += SqlEditor_SnippetRequested;
 
             ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
             ViewModel.FormatRequested += (_, _) => FormatActiveTab();
@@ -778,6 +780,22 @@ public sealed partial class MainPage : Page
                 OpenSchemaPeek();
                 break;
         }
+    }
+
+    /// <summary>
+    /// The editor owns the selection and the shell owns snippets: the right-click verb supplies
+    /// the SQL, the dialog asks only for a trigger and a name, and completion sees the new snippet
+    /// on the next keystroke through <see cref="SnippetLibrary.Changed"/>.
+    /// </summary>
+    private async void SqlEditor_SnippetRequested(object? sender, string sql)
+    {
+        var snippet = await SnippetCaptureDialog.CaptureAsync(XamlRoot, sql);
+        if (snippet is not null)
+        {
+            ViewModel.StatusText = $"Snippet \"{snippet.Name}\" added — type {snippet.Trigger} and press Tab.";
+        }
+
+        SqlEditor.FocusEditor();
     }
 
     // ---------------------------------------------------------------- running SQL

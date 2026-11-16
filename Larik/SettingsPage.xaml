@@ -703,13 +703,13 @@
                                                         Text="${cursor}" />
                                                 </Button>
                                                 <Button
-                                                    Click="InsertPlaceholder_Click"
+                                                    Click="InsertDefault_Click"
                                                     Style="{StaticResource StudioIconButtonStyle}"
-                                                    ToolTipService.ToolTip="Insert a selected placeholder">
+                                                    ToolTipService.ToolTip="Insert a prefilled default, selected when the snippet expands">
                                                     <TextBlock
                                                         FontFamily="{StaticResource StudioMonoFont}"
                                                         FontSize="10"
-                                                        Text="${1:placeholder}" />
+                                                        Text="${1:default}" />
                                                 </Button>
                                                 <Button
                                                     Click="InsertPaste_Click"
