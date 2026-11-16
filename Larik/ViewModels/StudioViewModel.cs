@@ -1375,12 +1375,15 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        var records = _store.GetRunLog(RunsAllWorkspaces ? null : space.Id, limit: 500);
-        RunCount = records.Count;
+        var records = string.IsNullOrWhiteSpace(HistorySearch)
+            ? _store.GetRunLog(RunsAllWorkspaces ? null : space.Id, limit: 500)
+            : _store.SearchRunLog(RunsAllWorkspaces ? null : space.Id, HistorySearch.Trim(), limit: 500);
+
+        // The badge counts the whole scope, not the page that was read: "500 runs" must mean 500.
+        RunCount = _store.CountRunLog(RunsAllWorkspaces ? null : space.Id);
 
         // Scoped, the workspace name is the same on every row; widening it is worth the space.
         var showWorkspace = RunsAllWorkspaces;
-        var query = HistorySearch?.Trim();
 
         // A run remembers the workspace name it was written under. A rename afterwards must not
         // make the log read as if the run happened somewhere else, so the live name wins.
@@ -1390,7 +1393,7 @@ public partial class StudioViewModel : ObservableObject
             StringComparer.Ordinal);
 
         var visible = records
-            .Where(record => MatchesRunFilter(record) && MatchesRunSearch(record, query))
+            .Where(MatchesRunFilter)
             .Select(record => new RunRowViewModel(
                 record,
                 TabExistsFor(record),
@@ -1423,12 +1426,6 @@ public partial class StudioViewModel : ObservableObject
         RunActorFilter.Failed => !string.Equals(record.Status, RunStatuses.Ok, StringComparison.Ordinal),
         _ => true,
     };
-
-    private static bool MatchesRunSearch(RunLogRecord record, string? query) =>
-        string.IsNullOrEmpty(query)
-        || record.Statement.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || (record.SpaceName ?? string.Empty).Contains(query, StringComparison.OrdinalIgnoreCase)
-        || (record.DatabaseName ?? string.Empty).Contains(query, StringComparison.OrdinalIgnoreCase);
 
     private static string DayLabel(DateOnly day)
     {

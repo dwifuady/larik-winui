@@ -97,24 +97,7 @@ public sealed partial class StudioStore
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                entries.Add(new RunLogRecord
-                {
-                    Id = reader.GetInt64(0),
-                    RecordedAt = reader.GetString(1),
-                    Actor = reader.GetString(2),
-                    SpaceId = reader.IsDBNull(3) ? null : reader.GetString(3),
-                    SpaceName = reader.IsDBNull(4) ? null : reader.GetString(4),
-                    DatabaseName = reader.IsDBNull(5) ? null : reader.GetString(5),
-                    ProviderId = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    TabId = reader.IsDBNull(7) ? null : reader.GetString(7),
-                    Statement = reader.GetString(8),
-                    Status = reader.GetString(9),
-                    Reason = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    DurationMs = reader.GetInt64(11),
-                    RowsReturned = (int)reader.GetInt64(12),
-                    RowLimit = reader.IsDBNull(13) ? null : reader.GetInt64(13),
-                    IsTruncated = reader.GetInt64(14) != 0,
-                });
+                entries.Add(ReadRecord(reader));
             }
 
             return entries;
@@ -124,6 +107,102 @@ public sealed partial class StudioStore
             return [];
         }
     }
+
+    /// <summary>
+    /// How many runs the scope holds, independent of the read cap. The page's badge must not claim
+    /// "500 runs" when the list simply stopped reading at 500.
+    /// </summary>
+    public int CountRunLog(string? spaceId = null)
+    {
+        try
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = spaceId is null
+                ? "SELECT COUNT(*) FROM run_log;"
+                : "SELECT COUNT(*) FROM run_log WHERE space_id = $space;";
+            if (spaceId is not null)
+            {
+                command.Parameters.AddWithValue("$space", spaceId);
+            }
+
+            return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Search runs in SQL, not over the loaded page: a statement older than the read cap must still
+    /// be findable, or the box silently lies about what the log contains.
+    /// </summary>
+    public IReadOnlyList<RunLogRecord> SearchRunLog(
+        string? spaceId,
+        string query,
+        int limit = 500)
+    {
+        try
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id, recorded_at, actor, space_id, space_name, database_name, provider_id,
+                       tab_id, statement, status, reason, duration_ms, rows_returned, row_limit,
+                       is_truncated
+                FROM run_log
+                WHERE ($space IS NULL OR space_id = $space)
+                  AND (statement LIKE $match ESCAPE '\'
+                       OR space_name LIKE $match ESCAPE '\'
+                       OR database_name LIKE $match ESCAPE '\')
+                ORDER BY id DESC
+                LIMIT $limit;
+                """;
+            command.Parameters.AddWithValue("$space", (object?)spaceId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$match", $"%{EscapeLike(query)}%");
+            command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+
+            List<RunLogRecord> entries = [];
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                entries.Add(ReadRecord(reader));
+            }
+
+            return entries;
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>A user's <c>%</c> or <c>_</c> is a character, not a wildcard.</summary>
+    private static string EscapeLike(string value) => value
+        .Replace("\\", "\\\\", StringComparison.Ordinal)
+        .Replace("%", "\\%", StringComparison.Ordinal)
+        .Replace("_", "\\_", StringComparison.Ordinal);
+
+    private static RunLogRecord ReadRecord(SqliteDataReader reader) => new()
+    {
+        Id = reader.GetInt64(0),
+        RecordedAt = reader.GetString(1),
+        Actor = reader.GetString(2),
+        SpaceId = reader.IsDBNull(3) ? null : reader.GetString(3),
+        SpaceName = reader.IsDBNull(4) ? null : reader.GetString(4),
+        DatabaseName = reader.IsDBNull(5) ? null : reader.GetString(5),
+        ProviderId = reader.IsDBNull(6) ? null : reader.GetString(6),
+        TabId = reader.IsDBNull(7) ? null : reader.GetString(7),
+        Statement = reader.GetString(8),
+        Status = reader.GetString(9),
+        Reason = reader.IsDBNull(10) ? null : reader.GetString(10),
+        DurationMs = reader.GetInt64(11),
+        RowsReturned = (int)reader.GetInt64(12),
+        RowLimit = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+        IsTruncated = reader.GetInt64(14) != 0,
+    };
 
     /// <summary>How long executions are kept. Always one of <see cref="RunLogRetentionChoices"/>.</summary>
     public int GetRunLogRetentionDays() => NormalizeRetention(ReadRunLogRetentionDays());

@@ -154,6 +154,86 @@ public sealed class RunLogStoreTests : IDisposable
         Assert.Equal(StudioStore.MaxRecordedStatementChars, entry.Statement.Length);
     }
 
+    [Fact]
+    public void The_count_covers_the_scope_not_the_page_that_was_read()
+    {
+        var store = new StudioStore(_path);
+        for (var i = 0; i < 12; i++)
+        {
+            store.LogRun(Run(spaceId: i % 2 == 0 ? "a" : "b", statement: $"select {i}"));
+        }
+
+        // Reading is capped; counting is not, so a badge cannot claim the cap is the total.
+        Assert.Equal(4, store.GetRunLog("a", limit: 4).Count);
+        Assert.Equal(6, store.CountRunLog("a"));
+        Assert.Equal(12, store.CountRunLog());
+    }
+
+    [Fact]
+    public void Search_reaches_past_the_read_cap()
+    {
+        var store = new StudioStore(_path);
+        store.LogRun(Run(spaceId: "a", statement: "select the needle"));
+        for (var i = 0; i < 30; i++)
+        {
+            store.LogRun(Run(spaceId: "a", statement: $"select haystack {i}"));
+        }
+
+        // The match is the oldest row, so it sits outside a page of 5.
+        Assert.DoesNotContain(
+            store.GetRunLog("a", limit: 5),
+            entry => entry.Statement.Contains("needle", StringComparison.Ordinal));
+
+        var found = Assert.Single(store.SearchRunLog("a", "needle"));
+        Assert.Equal("select the needle", found.Statement);
+    }
+
+    [Fact]
+    public void Search_matches_workspace_and_database_and_uses_sql_injection_safe_parameters()
+    {
+        var store = new StudioStore(_path);
+        store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.User,
+            SpaceId = "a",
+            SpaceName = "Production",
+            DatabaseName = "Sales",
+            Statement = "select 1",
+            Status = RunStatuses.Ok,
+        });
+        store.LogRun(new RunLogRecord
+        {
+            Actor = RunActors.User,
+            SpaceId = "a",
+            SpaceName = "Scratch",
+            DatabaseName = "Warehouse",
+            Statement = "select 2",
+            Status = RunStatuses.Ok,
+        });
+
+        Assert.Single(store.SearchRunLog(null, "production"));
+        Assert.Single(store.SearchRunLog(null, "warehouse"));
+        Assert.Equal(2, store.SearchRunLog(null, "select").Count);
+
+        // A quote is text, not SQL: the whole table must survive being searched for one.
+        Assert.Empty(store.SearchRunLog(null, "'; DROP TABLE run_log; --"));
+        Assert.Equal(2, store.CountRunLog());
+    }
+
+    [Fact]
+    public void Search_treats_wildcards_as_characters()
+    {
+        var store = new StudioStore(_path);
+        store.LogRun(Run(spaceId: "a", statement: "select 100"));
+        store.LogRun(Run(spaceId: "a", statement: "select a_b"));
+        store.LogRun(Run(spaceId: "a", statement: "select axb"));
+
+        // "%" and "_" are the user's characters, not LIKE wildcards.
+        Assert.Empty(store.SearchRunLog(null, "%"));
+        Assert.Single(store.SearchRunLog(null, "a_b"));
+        Assert.Single(store.SearchRunLog(null, "axb"));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
