@@ -76,7 +76,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   the TABS band as loose tabs. Pinned tabs themselves are more compact (36 px); unpinning returns the
   tab to the normal rail. The order and group membership survive a restart and a workspace switch.
   **Double-click a tab title** (or right-click → Rename) to rename it
-  **inline**; Enter commits, Esc cancels, clicking away commits. Closing is non-destructive: the tab
+  **inline**; Enter commits, Esc cancels, clicking away commits. **Middle-click a tab to close it**
+  (the same path as its close button and context menu, so an open transaction still asks first).
+  Closing is non-destructive: the tab
   **moves to the archive** and can be restored into its group.
   **New tabs open at the top of the unpinned section**, and the **New tab row** is a full-width
   tab-like row above them (Arc-style) rather than a small + in the header. Ctrl+T works too, and
@@ -354,7 +356,11 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   virtualized — a `ListView` realizes only
   the visible rows and recycles
   their containers, so a 1,000-row result stays quick and light to switch back to. A real grid with
-  header/row/column rules and a sticky header. A sticky **row-number gutter** stays put while the
+  header/row/column rules and a sticky header. **Middle-click inside the rows to autoscroll**: a
+  pan puck appears at the press point and the grid then scrolls vertically and horizontally with the
+  pointer's distance from it, without holding the button; the sticky header and row-number gutter
+  follow, and a click, Esc, the wheel or any typing ends the mode (that ending click is swallowed,
+  as Windows does). A sticky **row-number gutter** stays put while the
   columns scroll vertically with the rows and narrows to the digit count; clicking a number selects
   the whole row (Shift extends the row range), and a right-click inside a selected block keeps that
   block without requiring Shift. Click a cell or move with the arrow keys; Shift
@@ -411,7 +417,11 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   strings, numbers, variables and comments live with theme-aware tokens (`StudioSyntax*Brush`,
   HighContrast falls back to the system text colour). The editor tokenizes on a 140 ms debounce so
   typing never waits for a repaint. A **line-number gutter** matches the RichEdit line boxes, sizes
-  itself to the line count and scrolls with the document. Character formatting is kept out of the undo stack: the surface
+  itself to the line count and scrolls with the document. **Middle-click in the editor to
+  autoscroll** the document in both directions with the same pan puck: the mode stays after the
+  click is released, the window shows the four-way cursor, and it ends on any click, Esc or a
+  keystroke. It is a view gesture, so the caret and selection are left where they were. Character
+  formatting is kept out of the undo stack: the surface
   owns text snapshots, so Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than
   colours.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,

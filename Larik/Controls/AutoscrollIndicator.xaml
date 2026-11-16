@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Larik.Controls.AutoscrollIndicator"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Width="30"
+    Height="30"
+    AutomationProperties.AccessibilityView="Raw"
+    IsHitTestVisible="False">
+
+    <!--
+        The classic four-way pan puck. It is drawn with the text tokens inverted, so it stays legible
+        over both the near-black and the near-white editor surfaces without a new colour.
+    -->
+    <Border
+        Width="30"
+        Height="30"
+        Background="{ThemeResource StudioTextPrimaryBrush}"
+        CornerRadius="15"
+        Opacity="0.9">
+        <Canvas Width="30" Height="30">
+            <Path Data="M 15,3 L 20.5,8.5 L 9.5,8.5 Z" Fill="{ThemeResource StudioBackgroundBrush}" />
+            <Path Data="M 15,27 L 20.5,21.5 L 9.5,21.5 Z" Fill="{ThemeResource StudioBackgroundBrush}" />
+            <Path Data="M 3,15 L 8.5,9.5 L 8.5,20.5 Z" Fill="{ThemeResource StudioBackgroundBrush}" />
+            <Path Data="M 27,15 L 21.5,9.5 L 21.5,20.5 Z" Fill="{ThemeResource StudioBackgroundBrush}" />
+            <Ellipse
+                Canvas.Left="13"
+                Canvas.Top="13"
+                Width="4"
+                Height="4"
+                Fill="{ThemeResource StudioBackgroundBrush}" />
+        </Canvas>
+    </Border>
+</UserControl>

@@ -35,6 +35,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private bool _restoringHistory;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _highlightTimer;
     private ScrollViewer? _editorScroller;
+    private (int Start, int End)? _autoscrollSelection;
     private double _lineHeight = 18;
     private int _lineNumberCount = -1;
     private IReadOnlyList<CompletionItem>? _completions;
@@ -66,6 +67,16 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         Editor.Document.UndoLimit = 0;
 
         BuildEditorContextMenu();
+
+        // Middle-button autoscroll pans the document through the editor's own scroller. A pan is
+        // not an edit, so the caret and selection are put back when it ends.
+        var autoscroll = new MiddleClickAutoScroll(
+            Editor,
+            AutoscrollLayer,
+            AutoscrollPointer,
+            () => _editorScroller ??= FindDescendant<ScrollViewer>(Editor));
+        autoscroll.Started += (_, _) => RememberSelectionForAutoscroll();
+        autoscroll.Ended += (_, _) => RestoreSelectionAfterAutoscroll();
 
         // Theme resources change while the app runs; token colours must follow.
         ActualThemeChanged += (_, _) => ApplyHighlighting();
@@ -503,6 +514,33 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             _editorScroller.VerticalOffset,
             null,
             disableAnimation: true);
+    }
+
+    /// <summary>
+    /// RichEdit moves its caret for a pointer press on the document. Middle-click scrolling is a
+    /// view gesture, so the selection is captured before the pan and restored after it.
+    /// </summary>
+    private void RememberSelectionForAutoscroll()
+    {
+        var selection = Editor.Document.Selection;
+        _autoscrollSelection = (
+            Math.Min(selection.StartPosition, selection.EndPosition),
+            Math.Max(selection.StartPosition, selection.EndPosition));
+    }
+
+    private void RestoreSelectionAfterAutoscroll()
+    {
+        if (_autoscrollSelection is not { } saved)
+        {
+            return;
+        }
+
+        _autoscrollSelection = null;
+        var selection = Editor.Document.Selection;
+        if (selection.StartPosition != saved.Start || selection.EndPosition != saved.End)
+        {
+            selection.SetRange(saved.Start, saved.End);
+        }
     }
 
     /// <summary>

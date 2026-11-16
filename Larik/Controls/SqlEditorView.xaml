@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:Larik.Controls"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:Larik.Models"
     mc:Ignorable="d">
@@ -86,6 +87,14 @@
                         <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent" />
                     </RichEditBox.Resources>
                 </RichEditBox>
+
+                <!--
+                    Middle-button autoscroll. The layer stays in layout (never hit-tested) so the
+                    puck can be placed with real coordinates; only the puck toggles.
+                -->
+                <Canvas x:Name="AutoscrollLayer" Grid.Column="1" IsHitTestVisible="False">
+                    <local:AutoscrollIndicator x:Name="AutoscrollPointer" Visibility="Collapsed" />
+                </Canvas>
             </Grid>
         </Border>
 
