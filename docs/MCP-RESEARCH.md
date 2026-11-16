@@ -373,7 +373,7 @@ Settings → MCP page renders a quiet read-only list (reuse the Archive page pat
 | `list_connections` | true/–/true/false | id, name, provider name, `DescribeEndpoint`, identity, access level. **Never** profile values or secrets; Mongo URI lives in Credential Manager here, and a `redact_host` port guards anyway |
 | `list_databases` | true/–/true/false | `GetDatabaseDetailsAsync` (accessible-first, Tauri parity) |
 | `get_schema` | true/–/true/false | `database` required, optional `table` filter (client-side, like Tauri's `fetch_table_columns` narrowing) and `include_routines`. Returns **column types** (`ColumnDetails`), PK, FK with `ReferencedSchema`, and **routine signatures with ordered params** — strictly richer than Tauri's cached tables/relationships |
-| `run_query` | false/true/false/false | row_limit 200 default/1000 max, 120 s timeout, ~1 MiB response guard, per-result-set `truncated`/`row_limit`, `messages` (PRINT/RAISERROR — new), `generated_query` (Mongo parity), split via the provider language, classifier + `ReadOnly` enforcement on read spaces, approvals on write spaces |
+| `run_query` | false/true/false/false | row_limit 200 default/1000 max, 120 s timeout, ~1 MiB response guard, per-result-set `truncated`/`row_limit`, `messages` (PRINT/RAISERROR — new), `generated_query` (Mongo parity), split via the provider language, classifier + `ReadOnly` enforcement on read spaces, approvals on write spaces (description required, reference optional, both kept in the run log) |
 | `open_in_studio` (new) | true/–/true/false | `connection`, `query` → pipe → app opens a tab. Error with a clear remedy when the app is closed |
 
 `serverInfo.instructions` (first 512 chars self-contained — Codex documents that it reads this)

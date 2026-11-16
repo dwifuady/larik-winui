@@ -171,7 +171,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed partial class StudioStore : IVirtualReferenceStore
 {
-    private const int SchemaVersion = 8;
+    private const int SchemaVersion = 9;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -538,7 +538,9 @@ public sealed partial class StudioStore : IVirtualReferenceStore
                 duration_ms INTEGER NOT NULL DEFAULT 0,
                 rows_returned INTEGER NOT NULL DEFAULT 0,
                 row_limit INTEGER,
-                is_truncated INTEGER NOT NULL DEFAULT 0
+                is_truncated INTEGER NOT NULL DEFAULT 0,
+                description TEXT,
+                reference TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_run_log_recorded_at ON run_log(recorded_at DESC);
@@ -550,6 +552,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         // workspace icon. Version 4 adds the rail visibility flag. Version 5 adds tab groups and
         // the archive's group name. Version 6 adds user-defined reference metadata. Version 7 adds
         // the MCP exposure level and the MCP audit/approval tables. Version 8 adds the run log.
+        // Version 9 adds the agent's reason and ticket reference to a run.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");
@@ -557,6 +560,8 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         EnsureColumn(connection, transaction, "spaces", "icon", "TEXT");
         EnsureColumn(connection, transaction, "spaces", "hidden", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "spaces", "mcp_access", "TEXT NOT NULL DEFAULT 'off'");
+        EnsureColumn(connection, transaction, "run_log", "description", "TEXT");
+        EnsureColumn(connection, transaction, "run_log", "reference", "TEXT");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();

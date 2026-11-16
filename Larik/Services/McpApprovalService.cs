@@ -222,11 +222,38 @@ public static class McpApprovalService
                 IsTextSelectionEnabled = true,
             };
 
+            // The reason goes above the statement: a person asked to approve SQL should judge it
+            // against why the agent wants it, not just what it says.
+            var content = new StackPanel { Spacing = 10 };
+
+            if (!string.IsNullOrWhiteSpace(request.Description))
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = request.Description,
+                    MaxWidth = 520,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.Reference))
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = $"Ref: {request.Reference}",
+                    FontSize = 11,
+                    IsTextSelectionEnabled = true,
+                });
+            }
+
+            content.Children.Add(new ScrollViewer { Content = statement, MaxHeight = 320 });
+
             var dialog = new ContentDialog
             {
                 XamlRoot = xamlRoot,
                 Title = $"An agent wants to run this in {request.SpaceName}",
-                Content = new ScrollViewer { Content = statement, MaxHeight = 320 },
+                Content = content,
                 PrimaryButtonText = "Run it",
                 CloseButtonText = "Deny",
                 // Deny is the default: Enter on a prompt nobody read must not execute SQL.
@@ -391,9 +418,14 @@ public static class McpApprovalService
                 ? request.Statement
                 : request.Statement[..160] + "…";
 
+            // The why is more useful than the first line of SQL when the prompt is a toast.
+            var body = string.IsNullOrWhiteSpace(request.Description)
+                ? $"{request.SpaceName}: {preview}"
+                : $"{request.SpaceName}: {request.Description}";
+
             var notification = new AppNotificationBuilder()
                 .AddText("An agent wants to run a statement")
-                .AddText($"{request.SpaceName}: {preview}")
+                .AddText(body)
                 // Answering from the notification is the whole point of an approval prompt: the user
                 // should not have to find the window first.
                 .AddButton(new AppNotificationButton("Run it")

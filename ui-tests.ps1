@@ -2911,7 +2911,17 @@ try {
                 jsonrpc = '2.0'
                 id      = 3
                 method  = 'tools/call'
-                params  = @{ name = 'run_query'; arguments = @{ connection = $target.id; query = 'select 1 as one' } }
+                params  = @{
+                    name      = 'run_query'
+                    arguments = @{
+                        connection  = $target.id
+                        query       = 'select 1 as one'
+                        # A write workspace refuses a call that does not say why, so this is also
+                        # the path a real agent takes.
+                        description = 'Checking the fixture write path after an approval'
+                        reference   = 'FIX-101'
+                    }
+                }
             }
             $session.StandardInput.WriteLine(($message | ConvertTo-Json -Depth 12 -Compress))
             $session.StandardInput.Flush()
@@ -2919,6 +2929,12 @@ try {
             # Nothing may execute before a human answers.
             Wait-ForText 'An agent wants to run this in' 20
             Start-Sleep -Milliseconds 500
+
+            # The prompt carries the reason and the reference, not just the statement.
+            Assert-True ((Find-Element 'Checking the fixture write path after an approval').matchCount -gt 0) `
+                'the approval prompt does not show why the agent wants to run this'
+            Assert-True ((Find-Element 'Ref: FIX-101').matchCount -gt 0) `
+                'the approval prompt does not show the reference'
 
             Click-Element 'Run it'
 
@@ -2940,6 +2956,12 @@ try {
             # hide it. The statement text is what proves this call, not just any call.
             Assert-True ((Get-StudioStateText) -match 'select 1 as one') 'the approved statement was not audited'
 
+            # The run log keeps the reason and the reference with the statement, so history can
+            # answer "why" after the dialog is long gone.
+            $logged = Get-StudioStateText
+            Assert-True ($logged -match 'Checking the fixture write path') 'the run log lost the reason'
+            Assert-True ($logged -match 'FIX-101') 'the run log lost the reference'
+
             # The activity card can sit below the fold in a small window, and its list refreshes on a
             # timer; give it a beat, then force a render the way a user would.
             try { Invoke-Ui @('scroll', 'Recent agent activity', '--to', 'bottom') | Out-Null } catch { }
@@ -2960,6 +2982,19 @@ try {
             }
 
             Assert-True ((& $showsRow)) 'the activity list did not record the approved call'
+
+            # The same workspace refuses a write that does not say why, before any prompt appears.
+            $noWhy = Invoke-McpRpc $session 4 'tools/call' @{
+                name      = 'run_query'
+                arguments = @{ connection = $target.id; query = 'select 1 as one' }
+            }
+            $noWhyText = if ($null -ne $noWhy.error) {
+                $noWhy.error | ConvertTo-Json -Depth 8 -Compress
+            }
+            else {
+                $noWhy.result.content[0].text
+            }
+            Assert-True ($noWhyText -match 'description') "a write without a reason was not refused: $noWhyText"
         }
         finally {
             Stop-McpSession $session
@@ -2968,6 +3003,26 @@ try {
         Invoke-Ui @('invoke', 'AgentsToggle', '--action', 'toggle-off') | Out-Null
         Start-Sleep -Milliseconds 500
         Click-Element 'Back'
+        Wait-ForText 'Switch workspace' 10
+
+        # History is where agent work is reviewed, so the reason and reference must survive there.
+        # All workspaces: the exposed workspace is not necessarily the active one.
+        Focus-App
+        Send-Keys 'ctrl+shift+h'
+        Wait-ForText 'Search executed SQL' 10
+        Click-Element 'Run workspace'
+        Start-Sleep -Milliseconds 300
+        Click-Element 'All workspaces'
+        Start-Sleep -Milliseconds 600
+        Wait-ForText 'Checking the fixture write path after an approval' 10
+        Assert-True ((Find-Element 'FIX-101').matchCount -gt 0) 'the run history lost the reference'
+
+        # Leave the scope as the rest of the suite expects it.
+        Click-Element 'Run workspace'
+        Start-Sleep -Milliseconds 300
+        Click-Element 'This workspace'
+        Start-Sleep -Milliseconds 400
+        Click-Element 'Back to workspace'
         Wait-ForText 'Switch workspace' 10
     }
 
