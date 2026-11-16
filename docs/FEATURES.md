@@ -404,6 +404,21 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   row. The provider caps each result at 5,000 rows (100,000 ceiling) while reading, and a truncated
   result says **Showing first 5,000 rows**. Switching query tabs restores that tab's result tabs;
   running a query while another tab is active writes to the tab that started it.
+  **Edit a row in place** when the result proves which row it came from: double-click a cell (or
+  press F2) and a compact editor opens over it with Apply/Cancel; the NULL button (or Ctrl+0) writes
+  NULL instead of an empty string. A change is *staged*, not written: the cell keeps a tint and a
+  dot, a bar under the grid counts the changes, **Ctrl+Z** undoes the last one, **Discard** reverts
+  them all, and **Save changes…** shows the exact UPDATE/DELETE statements before anything runs.
+  All staged changes save as one batch inside a transaction on that tab's session, and the grid is
+  patched in place afterwards (when the engine reports affected rows) so it never jumps to the top.
+  Deleting is staged the same way (**Delete** key or the row menu), danger-styled in the review.
+  Editing requires a single plain SELECT whose mapped table reports a primary key that the result
+  also includes — a join is editable when each table's key is selected, and the select list's
+  qualifiers (`[s].[Id]`) are what attribute a column when both tables have that name. Views,
+  tables without a key, GROUP BY/DISTINCT/UNION, wildcard projections, computed expressions and
+  CTEs stay read-only and the status bar says why; identity, computed and date/time key columns are
+  never written. A double-click on a cell that cannot be edited explains itself in one line instead
+  of opening a dialog.
 - **Find and replace**: Ctrl+F opens a compact bar over the top of the editor (Ctrl+H opens it with
   the replace row revealed); the bar counts matches (`3 of 12`, `No results`) and Enter / Shift+Enter
   or F3 / Shift+F3 walk them with wrap-around. A selection seeds the query, so select a word and
@@ -460,10 +475,11 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | PostgreSQL overloads collapse to one routine | The contract identifies a routine by schema + name, so the provider keeps the first overload's signature instead of showing two `CALL` candidates with the same name. A contract-level routine identity is the fix. |
 | Pinned inspector is session-only | The pin and its 300 px width reset on restart; persist them in `app_state` with the window rectangle if it becomes part of the daily layout. |
 | Completion context is token-based | Subquery aliases and `UPDATE ... FROM alias` targets still need full statement parsing (the Tauri app uses an AST). Join fallbacks for providers without foreign keys stay name heuristics. Keyword/function/table-context lists come from the active dialect (`TSqlDialect`/`PostgresDialect` today). |
-| Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. Aliased output columns, duplicate names across joined tables and multi-statement batches fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
+| Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. A qualified select-list column (`[s].[Id]`, `s.Id AS x`) is attributed by its qualifier, but an unqualified column whose name exists on several joined tables, a wildcard projection (`s.*`) and a multi-statement batch fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; PostgreSQL adds dollar-quoted bodies, `E'...'` strings, quoted identifiers and nested comments. Semicolons inside parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and nested `BEGIN/END` awareness still need the same AST work as completion. |
 | A native crash leaves breadcrumbs, not a dump | The diagnostics log catches managed exceptions and writes the action in progress, so a provider that dies natively (access violation, stack overflow) still shows the last operation. There is no minidump or crash-upload path yet; adding `MiniDumpWriteDump` behind an opt-in setting is the next step if driver crashes keep showing up. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
+| Inline grid editing needs a provable row identity | A cell is writable only when the result maps each column to one base table and includes that table's complete primary key. Qualified and aliased columns are attributed from the select list; CTEs/derived tables, views, tables without a key, wildcard projections (`s.*`) and date/time key columns stay read-only (the status bar says why). A rowversion concurrency token would detect a row changed by someone else between reading and saving. |
 | File settings browse existing files only | **Browse…** opens a file open picker. Creating a new database file is done by typing the path (the provider's create-if-missing setting decides what happens next); a save picker would add a "new vs open" decision to a form that does not need one until users ask. |
 | A failing statement stops the rest of its GO batch | SQL Server executes a GO batch natively, so the first server error ends the remaining statements in that batch. F5 already sends each `GO` batch separately; split-and-execute per statement as well (as the Tauri drivers do) if every statement must report independently. |
 | `GO n` repeat counts are parsed but not expanded | The splitter accepts `GO 10` and sends the batch once. Expand it in `SplitBatches` if scripts rely on SSMS's repeat behaviour. |

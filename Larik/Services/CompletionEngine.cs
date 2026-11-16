@@ -31,6 +31,12 @@ public sealed record StatementTarget(TableSchema Table, bool Assignment);
 /// <summary>A table named by FROM/JOIN in the statement under the caret.</summary>
 public sealed record TableReference(TableSchema? Table, string Name, string? Alias);
 
+/// <summary>
+/// One SELECT-list item that is a plain column reference: the qualifier as written (<c>s</c>,
+/// <c>dbo.Settings</c> or nothing), the source column and the name the result column receives.
+/// </summary>
+public sealed record SelectProjection(string? Qualifier, string Column, string OutputName);
+
 /// <summary>Everything the engine needs to answer one query, resolved by the completion source.</summary>
 public sealed record CompletionRequest(
     string Word,
@@ -1464,6 +1470,132 @@ public static partial class CompletionEngine
         }
 
         return columns;
+    }
+
+    /// <summary>
+    /// The SELECT list aligned with the result's columns: one entry per projected item, or null for
+    /// an item that is an expression rather than a plain column. Returns null as a whole when the
+    /// list cannot be aligned (a wildcard, no FROM, or no recognisable SELECT), so callers keep the
+    /// name-only fallback instead of guessing.
+    /// <para>
+    /// The qualifier is what makes a join safely editable: <c>[s].[Id]</c> names Settings' key even
+    /// when <c>Id</c> also exists on the joined table, which name matching alone cannot resolve.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<SelectProjection?>? SelectProjections(string statement)
+    {
+        var select = SelectListPattern().Match(statement);
+        if (!select.Success)
+        {
+            return null;
+        }
+
+        var from = TopLevelKeyword(statement, "FROM", select.Index + select.Length);
+        if (from < 0)
+        {
+            return null;
+        }
+
+        var items = SplitTopLevel(statement[(select.Index + select.Length)..from], ',').ToList();
+        var projections = new List<SelectProjection?>(items.Count);
+
+        foreach (var item in items)
+        {
+            var expression = item.Trim();
+            if (expression.Length == 0)
+            {
+                return null;
+            }
+
+            // A wildcard stands for a column set we would have to expand from the table.
+            if (expression is "*" || expression.EndsWith(".*", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            string? alias = null;
+            var aliasMatch = SelectAliasPattern().Match(expression);
+            if (aliasMatch.Success)
+            {
+                alias = NormalizeIdentifier(aliasMatch.Groups["alias"].Value);
+                expression = expression[..aliasMatch.Index].TrimEnd();
+            }
+
+            if (!SimpleColumnPattern().IsMatch(expression))
+            {
+                projections.Add(null);
+                continue;
+            }
+
+            var parts = SplitIdentifierPath(expression);
+            if (parts.Count is 0 or > 3 || parts.Any(part => part.Length == 0))
+            {
+                projections.Add(null);
+                continue;
+            }
+
+            var column = parts[^1];
+            var qualifier = parts.Count switch
+            {
+                1 => null,
+                2 => parts[0],
+                _ => $"{parts[0]}.{parts[1]}",
+            };
+
+            projections.Add(new SelectProjection(qualifier, column, alias ?? column));
+        }
+
+        return projections;
+    }
+
+    /// <summary>Splits <c>[dbo].[Settings].[Id]</c> into its parts, trimming brackets and quotes.</summary>
+    private static IReadOnlyList<string> SplitIdentifierPath(string text)
+    {
+        var parts = new List<string>(3);
+        var start = 0;
+        var bracketed = false;
+        var quoted = false;
+
+        for (var index = 0; index < text.Length; index++)
+        {
+            var current = text[index];
+            if (bracketed)
+            {
+                if (current == ']')
+                {
+                    bracketed = false;
+                }
+
+                continue;
+            }
+
+            if (quoted)
+            {
+                if (current == '"')
+                {
+                    quoted = false;
+                }
+
+                continue;
+            }
+
+            switch (current)
+            {
+                case '[':
+                    bracketed = true;
+                    break;
+                case '"':
+                    quoted = true;
+                    break;
+                case '.':
+                    parts.Add(NormalizeIdentifier(text[start..index]));
+                    start = index + 1;
+                    break;
+            }
+        }
+
+        parts.Add(NormalizeIdentifier(text[start..]));
+        return parts;
     }
 
     private static IEnumerable<string> SplitTopLevel(string text, char separator)

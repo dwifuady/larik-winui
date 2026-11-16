@@ -3323,6 +3323,9 @@ public sealed partial class MainPage : Page
         ResultsGrid.ReferenceController = result is null
             ? null
             : ViewModel.CreateCellReferenceController(result);
+        ResultsGrid.EditController = result is null || ViewModel.ActiveTab is not { } activeTab
+            ? null
+            : ViewModel.CreateRowEditController(activeTab, result);
         ResultsGrid.ShowResult(result, ViewModel.ActiveSpace?.ColorHex ?? StudioColors.Palette[0]);
         BringActiveResultTabIntoView();
     }

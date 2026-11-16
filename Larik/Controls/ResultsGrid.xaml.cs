@@ -79,6 +79,18 @@ public sealed partial class ResultsGrid : UserControl
     private Brush _headerBackground = null!;
     private Brush _dividerBrush = null!;
 
+    // Inline editing. Staged changes live per result because ShowResult swaps _result on every
+    // result-tab switch; the editor itself is one overlay, never part of a row template.
+    private const double MinCellEditorWidth = 240;
+    private readonly ConditionalWeakTable<QueryResult, PendingEdits> _pendingEdits = new();
+    private bool _editing;
+    private int _editRow = -1;
+    private int _editColumn = -1;
+    private bool _saving;
+    private long _lastPressTicks;
+    private int _lastPressRow = -1;
+    private int _lastPressColumn = -1;
+
     // Cell preview: the full value of the focused cell, which the grid itself ellipsizes.
     private const int PreviewCharacterLimit = 100_000;
     private const double MinPreviewWidth = 240;
@@ -146,6 +158,34 @@ public sealed partial class ResultsGrid : UserControl
         /// <summary>Whether the cell preview was open for this result; state is per result/tab.</summary>
         public bool PreviewRequested { get; set; }
     }
+
+    /// <summary>
+    /// Staged edits for one result. Keyed on the result's lifetime, so switching result tabs and
+    /// coming back keeps them, while a re-run (which creates a new result) starts clean.
+    /// </summary>
+    private sealed class PendingEdits
+    {
+        /// <summary>Staged cell values by (row index, provider column index). Null means SQL NULL.</summary>
+        public Dictionary<(int Row, int Column), string?> Cells { get; } = [];
+
+        public HashSet<int> DeletedRows { get; } = [];
+
+        /// <summary>Undo history, newest last; Column -1 means a delete toggle.</summary>
+        public List<PendingAction> History { get; } = [];
+
+        public bool IsEmpty => Cells.Count == 0 && DeletedRows.Count == 0;
+
+        public int Count => Cells.Count + DeletedRows.Count;
+
+        public void Clear()
+        {
+            Cells.Clear();
+            DeletedRows.Clear();
+            History.Clear();
+        }
+    }
+
+    private sealed record PendingAction(int Row, int Column, string? Previous, bool HadPrevious);
 
     /// <summary>
     /// The items a result shows, built once and reused. Switching back to a tab must not allocate a
@@ -282,6 +322,13 @@ public sealed partial class ResultsGrid : UserControl
     /// </summary>
     public Window? OwnerWindow { get; set; }
 
+    /// <summary>
+    /// Writes staged edits back to the database. Null when the result can't be edited (no SQL
+    /// dialect, no mapped table, or no primary key), and the grid then explains that instead of
+    /// offering an editor. The shell supplies one per result, like the reference controller.
+    /// </summary>
+    public IRowEditController? EditController { get; set; }
+
     /// <summary>Shows a result, or clears the grid when <paramref name="result"/> is null.</summary>
     public void ShowResult(QueryResult? result, string accentHex)
     {
@@ -295,6 +342,7 @@ public sealed partial class ResultsGrid : UserControl
             return;
         }
 
+        ApplyCellEditor(0);
         SaveViewState();
         HideCellPreview();
         UpdateGeneratedQuery(result);
@@ -319,6 +367,7 @@ public sealed partial class ResultsGrid : UserControl
                 $"show: no grid ({result.Columns.Count:N0} column(s), {result.Rows.Count:N0} row(s), {result.Messages.Count:N0} message(s))");
             Clear();
             _result = result;
+            UpdateChangeBar();
 
             if (result.Messages.Count > 0)
             {
@@ -390,10 +439,13 @@ public sealed partial class ResultsGrid : UserControl
         {
             ShowCellPreview(_focusRow, _focusColumn, _previewMode);
         }
+
+        UpdateChangeBar();
     }
 
     private void Clear()
     {
+        CancelCellEditor();
         HideCellPreview();
         _previewRequested = false;
         _result = null;
@@ -418,6 +470,7 @@ public sealed partial class ResultsGrid : UserControl
         EmptyText.Visibility = Visibility.Collapsed;
         MessagesText.Text = string.Empty;
         MessagesScroll.Visibility = Visibility.Collapsed;
+        UpdateChangeBar();
     }
 
     /// <summary>
@@ -1150,8 +1203,27 @@ public sealed partial class ResultsGrid : UserControl
         _focusColumn = column;
         _hasSelection = true;
 
+        // A double-click is detected here rather than with DoubleTapped: this handler marks the
+        // press handled for selection, which suppresses the gesture's own detection. The interval
+        // matches the Windows default closely enough that muscle memory transfers.
+        var ticks = Environment.TickCount64;
+        var isDoubleClick = point.Properties.IsLeftButtonPressed
+            && ticks - _lastPressTicks <= 500
+            && row.Index == _lastPressRow
+            && column == _lastPressColumn;
+        _lastPressTicks = isDoubleClick ? 0 : ticks;
+        _lastPressRow = isDoubleClick ? -1 : row.Index;
+        _lastPressColumn = isDoubleClick ? -1 : column;
+
         Focus(FocusState.Programmatic);
         UpdateSelectionVisuals();
+
+        if (isDoubleClick)
+        {
+            BeginCellEdit(row.Index, column);
+            e.Handled = true;
+            return;
+        }
 
         if (point.Properties.IsLeftButtonPressed)
         {
@@ -1175,6 +1247,19 @@ public sealed partial class ResultsGrid : UserControl
 
     private void ResultsGrid_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // The cell editor owns its keys; PreviewKeyDown reaches this handler before the TextBox does.
+        if (_editing)
+        {
+            // Esc must cancel from the overlay's buttons too, not only from the text box.
+            if (e.Key == VirtualKey.Escape && CellEditorBox.FocusState == FocusState.Unfocused)
+            {
+                CancelCellEditor();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
         var control = IsKeyDown(VirtualKey.Control);
 
         // Ctrl+F finds in the open preview; with no preview it opens the focused cell first so the
@@ -1262,6 +1347,18 @@ public sealed partial class ResultsGrid : UserControl
                 break;
             case VirtualKey.PageDown:
                 MoveCell(VisibleRowCount(), 0, shift);
+                e.Handled = true;
+                break;
+            case VirtualKey.F2:
+                BeginCellEdit(_focusRow, _focusColumn);
+                e.Handled = true;
+                break;
+            case VirtualKey.Delete:
+                ToggleDeleteSelection();
+                e.Handled = true;
+                break;
+            case VirtualKey.Z when control:
+                UndoLastChange();
                 e.Handled = true;
                 break;
             case VirtualKey.C when control:
@@ -1405,6 +1502,771 @@ public sealed partial class ResultsGrid : UserControl
         {
             _listScroller.ChangeView(left + width - viewport, null, null, disableAnimation: true);
         }
+    }
+
+    // ---------------------------------------------------------------- inline editing
+
+    internal bool IsRowMarkedDeleted(int rowIndex) =>
+        PeekEdits()?.DeletedRows.Contains(rowIndex) == true;
+
+    private PendingEdits? PeekEdits() =>
+        _result is not null && _pendingEdits.TryGetValue(_result, out var edits) ? edits : null;
+
+    private PendingEdits EditsFor(QueryResult result) => _pendingEdits.GetOrCreateValue(result);
+
+    /// <summary>
+    /// The value a cell should show: the staged edit when there is one, otherwise what the provider
+    /// returned. Everything that reads a cell (paint, copy, preview, the editor) goes through this,
+    /// so the grid never shows one value and copies another.
+    /// </summary>
+    internal string? DisplayValue(int rowIndex, int sourceColumn)
+    {
+        if (PeekEdits() is { } edits && edits.Cells.TryGetValue((rowIndex, sourceColumn), out var staged))
+        {
+            return staged;
+        }
+
+        return rowIndex >= 0
+               && rowIndex < _rows.Count
+               && sourceColumn >= 0
+               && sourceColumn < _rows[rowIndex].Cells.Count
+            ? _rows[rowIndex].Cells[sourceColumn]
+            : null;
+    }
+
+    /// <summary>True when the cell has a staged edit, with its value (null means a staged NULL).</summary>
+    internal bool TryGetStagedValue(int rowIndex, int sourceColumn, out string? value)
+    {
+        if (PeekEdits() is { } edits && edits.Cells.TryGetValue((rowIndex, sourceColumn), out var staged))
+        {
+            value = staged;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Opens the editor over a cell. Refuses with a status line (never a dialog) when the result
+    /// cannot prove the row's identity, so the reason is available without breaking the flow.
+    /// </summary>
+    private void BeginCellEdit(int row, int column)
+    {
+        if (_result is null || _layout is null || _saving || row < 0 || row >= _rows.Count)
+        {
+            return;
+        }
+
+        column = Math.Clamp(column, 0, _layout.Columns.Count - 1);
+        var source = SourceIndexFor(column);
+
+        if (EditController is not { } controller)
+        {
+            ReportEditRefusal("This result can't be edited.");
+            return;
+        }
+
+        if (!controller.CanEdit(source))
+        {
+            ReportEditRefusal(controller.RefuseReason(source));
+            return;
+        }
+
+        if (PeekEdits()?.DeletedRows.Contains(row) == true)
+        {
+            ReportEditRefusal("This row is marked for deletion. Undo that first.");
+            return;
+        }
+
+        if (DisplayValue(row, source) is { Length: > 8000 })
+        {
+            ReportEditRefusal("This value is too large to edit inline. Use the cell preview to read or copy it.");
+            return;
+        }
+
+        // Moving from another cell stages that draft instead of dropping it.
+        if (_editing)
+        {
+            ApplyCellEditor(0);
+        }
+
+        _editRow = row;
+        _editColumn = column;
+        _anchorRow = row;
+        _anchorColumn = column;
+        _focusRow = row;
+        _focusColumn = column;
+        _hasSelection = true;
+        UpdateSelectionVisuals();
+        EnsureCellVisible();
+
+        var value = DisplayValue(row, source);
+        var multiline = value is { Length: > 160 } || (value?.Contains('\n') ?? false);
+        CellEditorBox.AcceptsReturn = multiline;
+        CellEditorBox.TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        CellEditorBox.MinHeight = multiline ? 64 : 28;
+        CellEditorBox.MaxHeight = multiline ? 180 : 28;
+        CellEditorBox.Text = value ?? string.Empty;
+        CellEditorNull.IsChecked = value is null;
+
+        _editing = true;
+        CellEditorLayer.Visibility = Visibility.Visible;
+        PlaceCellEditor();
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            CellEditorBox.Focus(FocusState.Programmatic);
+            CellEditorBox.SelectAll();
+        });
+    }
+
+    private void ReportEditRefusal(string reason)
+    {
+        StatusChanged?.Invoke(this, reason);
+        Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>
+    /// Puts the overlay over the cell from layout math rather than the realized row, so it works even
+    /// while the container is being scrolled into view.
+    /// </summary>
+    private void PlaceCellEditor()
+    {
+        if (_layout is null || _editColumn < 0 || _editRow < 0)
+        {
+            return;
+        }
+
+        var left = 0d;
+        for (var index = 0; index < _editColumn && index < _layout.Columns.Count; index++)
+        {
+            left += _layout.Columns[index].Width;
+        }
+
+        var offsetX = _listScroller?.HorizontalOffset ?? 0;
+        var offsetY = _listScroller?.VerticalOffset ?? 0;
+        var width = Math.Max(_layout.Columns[_editColumn].Width, MinCellEditorWidth);
+        var x = Math.Max(0, left - offsetX);
+        var y = Math.Max(0, (_editRow * RowHeight) - offsetY);
+
+        // The canvas is exactly the rows column, so the clamp keeps the card out of the preview pane.
+        var available = CellEditorLayer.ActualWidth > 0 ? CellEditorLayer.ActualWidth : ActualWidth;
+        if (available > 0 && x + width > available - 8)
+        {
+            x = Math.Max(0, available - width - 8);
+        }
+
+        CellEditorHost.Width = width;
+        Canvas.SetLeft(CellEditorHost, x);
+        Canvas.SetTop(CellEditorHost, y);
+    }
+
+    /// <summary>Stages the draft into the pending set and closes the editor.</summary>
+    private void ApplyCellEditor(int moveDelta)
+    {
+        if (!_editing)
+        {
+            return;
+        }
+
+        var row = _editRow;
+        var column = _editColumn;
+        var value = CellEditorNull.IsChecked == true ? null : CellEditorBox.Text;
+        CancelCellEditor();
+        StageCell(row, column, value);
+
+        if (moveDelta != 0)
+        {
+            MoveTo(row, column + moveDelta, false);
+        }
+    }
+
+    private void CancelCellEditor()
+    {
+        if (!_editing)
+        {
+            return;
+        }
+
+        var hadFocus = CellEditorBox.FocusState != FocusState.Unfocused;
+        _editing = false;
+        _editRow = -1;
+        _editColumn = -1;
+        CellEditorLayer.Visibility = Visibility.Collapsed;
+        CellEditorBox.Text = string.Empty;
+        CellEditorNull.IsChecked = false;
+
+        if (hadFocus)
+        {
+            Focus(FocusState.Programmatic);
+        }
+    }
+
+    /// <summary>
+    /// Records one cell value. A value equal to the database's is not a change, so it reverts
+    /// instead of being staged — that is what keeps an untouched decimal from being rewritten with
+    /// the grid's rounded text.
+    /// </summary>
+    private void StageCell(int row, int displayColumn, string? value)
+    {
+        if (_result is null || row < 0 || row >= _rows.Count)
+        {
+            return;
+        }
+
+        var source = SourceIndexFor(displayColumn);
+        var edits = EditsFor(_result);
+        var key = (row, source);
+        var hadPrevious = edits.Cells.TryGetValue(key, out var previous);
+
+        // Re-applying the same staged value must not grow the undo history.
+        if (hadPrevious && string.Equals(previous, value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var original = source < _rows[row].Cells.Count ? _rows[row].Cells[source] : null;
+
+        if (string.Equals(original, value, StringComparison.Ordinal))
+        {
+            if (!hadPrevious)
+            {
+                return;
+            }
+
+            edits.History.Add(new PendingAction(row, source, previous, true));
+            edits.Cells.Remove(key);
+        }
+        else
+        {
+            edits.History.Add(new PendingAction(row, source, previous, hadPrevious));
+            edits.Cells[key] = value;
+        }
+
+        RefreshRow(row);
+        RefreshPreviewIfOpen();
+        UpdateChangeBar();
+    }
+
+    private void SetRowDeleted(int row, bool deleted)
+    {
+        if (_result is null)
+        {
+            return;
+        }
+
+        var edits = EditsFor(_result);
+        if (deleted)
+        {
+            // A delete wins over that row's cell edits; they would never be written.
+            foreach (var key in edits.Cells.Keys.Where(key => key.Row == row).ToList())
+            {
+                edits.Cells.Remove(key);
+            }
+
+            if (edits.DeletedRows.Add(row))
+            {
+                edits.History.Add(new PendingAction(row, -1, null, false));
+            }
+        }
+        else if (edits.DeletedRows.Remove(row))
+        {
+            edits.History.Add(new PendingAction(row, -1, null, false));
+        }
+
+        RefreshRow(row);
+        UpdateChangeBar();
+    }
+
+    private void ToggleDeleteSelection()
+    {
+        if (_result is null || EditController is null)
+        {
+            ReportEditRefusal("This result can't be edited.");
+            return;
+        }
+
+        // A row is addressable only if one of its tables is; the focused cell is the closest proxy.
+        var source = SourceIndexFor(_focusColumn);
+        if (!EditController.CanEdit(source))
+        {
+            ReportEditRefusal(EditController.RefuseReason(source));
+            return;
+        }
+
+        if (!TryGetSelection(out var top, out _, out var bottom, out _))
+        {
+            return;
+        }
+
+        var edits = PeekEdits();
+        var allDeleted = true;
+        for (var row = top; row <= bottom; row++)
+        {
+            allDeleted &= edits?.DeletedRows.Contains(row) == true;
+        }
+
+        for (var row = top; row <= bottom; row++)
+        {
+            SetRowDeleted(row, !allDeleted);
+        }
+
+        var count = bottom - top + 1;
+        StatusChanged?.Invoke(
+            this,
+            allDeleted
+                ? "Delete undone"
+                : $"{count} row{(count == 1 ? string.Empty : "s")} marked for deletion");
+    }
+
+    private void UndoLastChange()
+    {
+        if (PeekEdits() is not { History.Count: > 0 } edits)
+        {
+            return;
+        }
+
+        var action = edits.History[^1];
+        edits.History.RemoveAt(edits.History.Count - 1);
+
+        if (action.Column < 0)
+        {
+            if (!edits.DeletedRows.Remove(action.Row))
+            {
+                edits.DeletedRows.Add(action.Row);
+            }
+        }
+        else
+        {
+            var key = (action.Row, action.Column);
+            if (action.HadPrevious)
+            {
+                edits.Cells[key] = action.Previous;
+            }
+            else
+            {
+                edits.Cells.Remove(key);
+            }
+        }
+
+        RefreshRow(action.Row);
+        RefreshPreviewIfOpen();
+        UpdateChangeBar();
+    }
+
+    private void RefreshRow(int row)
+    {
+        if (RowsList.ContainerFromIndex(row) is ListViewItem container
+            && FindDescendant<ResultRowView>(container) is { } view)
+        {
+            view.Reload();
+            return;
+        }
+
+        // A defensive fallback: repaint by data index if the container lookup misses (for example
+        // while the list is still realizing the row).
+        foreach (var candidate in FindDescendants<ResultRowView>(RowsList))
+        {
+            if (candidate.DataContext is ResultRow resultRow && resultRow.Index == row)
+            {
+                candidate.Reload();
+                return;
+            }
+        }
+    }
+
+    private void UpdateChangeBar()
+    {
+        var edits = PeekEdits();
+        if (edits is null || edits.IsEmpty)
+        {
+            ChangeBar.Visibility = Visibility.Collapsed;
+            ChangeText.Text = string.Empty;
+            return;
+        }
+
+        var parts = new List<string>(2);
+        if (edits.Cells.Count > 0)
+        {
+            var cells = edits.Cells.Count;
+            parts.Add($"{cells} cell change{(cells == 1 ? string.Empty : "s")}");
+        }
+
+        if (edits.DeletedRows.Count > 0)
+        {
+            var rows = edits.DeletedRows.Count;
+            parts.Add($"{rows} row{(rows == 1 ? string.Empty : "s")} to delete");
+        }
+
+        ChangeText.Text = string.Join(" · ", parts) + (_saving ? " · Saving…" : string.Empty);
+        SaveChangesButton.IsEnabled = !_saving && EditController is not null;
+        DiscardChangesButton.IsEnabled = !_saving;
+        ChangeBar.Visibility = Visibility.Visible;
+    }
+
+    private async void SaveChanges_Click(object sender, RoutedEventArgs e) => await SaveChangesAsync();
+
+    private void DiscardChanges_Click(object sender, RoutedEventArgs e)
+    {
+        if (PeekEdits() is not { IsEmpty: false } edits)
+        {
+            return;
+        }
+
+        edits.Clear();
+        foreach (var view in FindDescendants<ResultRowView>(RowsList))
+        {
+            view.Reload();
+        }
+
+        RefreshPreviewIfOpen();
+        UpdateChangeBar();
+        StatusChanged?.Invoke(this, "Changes discarded");
+    }
+
+    private void EditCell_Click(object sender, RoutedEventArgs e) =>
+        BeginCellEdit(_focusRow, _focusColumn);
+
+    private void DeleteRow_Click(object sender, RoutedEventArgs e) => ToggleDeleteSelection();
+
+    private void RevertCell_Click(object sender, RoutedEventArgs e)
+    {
+        if (PeekEdits() is not { } edits)
+        {
+            return;
+        }
+
+        var key = (_focusRow, SourceIndexFor(_focusColumn));
+        if (!edits.Cells.Remove(key))
+        {
+            return;
+        }
+
+        edits.History.RemoveAll(action => action.Row == key.Item1 && action.Column == key.Item2);
+        RefreshRow(_focusRow);
+        RefreshPreviewIfOpen();
+        UpdateChangeBar();
+    }
+
+    private void CellEditorBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (CellEditorBox.Text.Length > 0 && CellEditorNull.IsChecked == true)
+        {
+            CellEditorNull.IsChecked = false;
+        }
+    }
+
+    private void CellEditorBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (IsKeyDown(VirtualKey.Control) && e.Key == VirtualKey.Number0)
+        {
+            CellEditorNull.IsChecked = CellEditorNull.IsChecked != true;
+            e.Handled = true;
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case VirtualKey.Escape:
+                CancelCellEditor();
+                e.Handled = true;
+                break;
+
+            case VirtualKey.Enter:
+                // A multi-line value needs Ctrl+Enter so Enter can insert a line break.
+                if (!CellEditorBox.AcceptsReturn || IsKeyDown(VirtualKey.Control))
+                {
+                    ApplyCellEditor(0);
+                    e.Handled = true;
+                }
+
+                break;
+
+            case VirtualKey.Tab:
+                ApplyCellEditor(IsShiftDown() ? -1 : 1);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void CellEditorApply_Click(object sender, RoutedEventArgs e) => ApplyCellEditor(0);
+
+    private void CellEditorCancel_Click(object sender, RoutedEventArgs e) => CancelCellEditor();
+
+    private void CellEditorNull_Click(object sender, RoutedEventArgs e)
+    {
+        if (CellEditorNull.IsChecked == true)
+        {
+            CellEditorBox.Text = string.Empty;
+        }
+
+        CellEditorBox.Focus(FocusState.Programmatic);
+    }
+
+    private async Task SaveChangesAsync()
+    {
+        if (_saving || _result is null || EditController is not { } controller)
+        {
+            return;
+        }
+
+        if (PeekEdits() is not { IsEmpty: false } edits)
+        {
+            return;
+        }
+
+        if (_editing)
+        {
+            ApplyCellEditor(0);
+        }
+
+        var requests = new List<RowEditRequest>();
+        foreach (var group in edits.Cells.GroupBy(pair => pair.Key.Row).OrderBy(group => group.Key))
+        {
+            requests.Add(new RowEditRequest(
+                group.Key,
+                Delete: false,
+                Edits: group.Select(pair => new CellEdit(pair.Key.Column, pair.Value)).ToList()));
+        }
+
+        if (edits.DeletedRows.Count > 0)
+        {
+            // The focused cell names the table when a joined row was marked for deletion.
+            var hint = SourceIndexFor(_focusColumn);
+            foreach (var row in edits.DeletedRows.Order())
+            {
+                requests.Add(new RowEditRequest(row, Delete: true, ResultColumn: hint));
+            }
+        }
+
+        if (controller.Plan(requests, out var error) is not { } plan)
+        {
+            StatusChanged?.Invoke(this, error ?? "Nothing to save.");
+            return;
+        }
+
+        if (!await ConfirmSaveAsync(plan))
+        {
+            return;
+        }
+
+        _saving = true;
+        UpdateChangeBar();
+        try
+        {
+            var outcome = await controller.ApplyAsync(plan);
+            if (!outcome.Success)
+            {
+                StatusChanged?.Invoke(this, $"Save failed: {outcome.Message}");
+                return;
+            }
+
+            // Patching is only honest when the engine said rows changed; otherwise the grid keeps
+            // the old values and the status says to re-run.
+            if (outcome.AffectedRows > 0)
+            {
+                ApplySavedEdits(plan.Requests);
+            }
+
+            var changes = plan.ChangeCount;
+            StatusChanged?.Invoke(
+                this,
+                outcome.AffectedRows > 0
+                    ? $"Saved {changes} change{(changes == 1 ? string.Empty : "s")} · {outcome.AffectedRows} row{(outcome.AffectedRows == 1 ? string.Empty : "s")} affected"
+                    : $"Saved {changes} change{(changes == 1 ? string.Empty : "s")} · no rows were affected; re-run to refresh");
+
+            edits.Clear();
+
+            // Repaint with the staged marks gone; the values were already patched above when the
+            // engine reported affected rows.
+            foreach (var request in plan.Requests.Where(request => !request.Delete))
+            {
+                RefreshRow(request.RowIndex);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("grid", "inline save failed", ex);
+            StatusChanged?.Invoke(this, $"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+            UpdateChangeBar();
+        }
+    }
+
+    /// <summary>
+    /// Shows exactly what will run before anything does — the point of the review. The dialog is the
+    /// one deliberate stop: staged edits are cheap to undo, a write is not.
+    /// </summary>
+    private async Task<bool> ConfirmSaveAsync(RowEditPlan plan)
+    {
+        var statements = plan.Statements.Count;
+        var deletes = plan.DeleteCount;
+        var body = new StackPanel { Spacing = 8 };
+
+        body.Children.Add(new TextBlock
+        {
+            Text = deletes > 0
+                ? $"{statements} statement{(statements == 1 ? string.Empty : "s")} will run in one transaction on this tab's session, including {deletes} delete{(deletes == 1 ? string.Empty : "s")}."
+                : $"{statements} statement{(statements == 1 ? string.Empty : "s")} will run in one transaction on this tab's session.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var blocks = new StackPanel { Spacing = 6 };
+        foreach (var statement in plan.Statements)
+        {
+            var isDelete = statement.Kind == RowEditKind.Delete;
+            var block = new StackPanel { Spacing = 2 };
+
+            block.Children.Add(new TextBlock
+            {
+                Text = isDelete ? "DELETE" : "UPDATE",
+                CharacterSpacing = 80,
+                FontSize = 10,
+                Foreground = isDelete
+                    ? ThemeService.GetBrush("StudioDangerBrush", ActualTheme, StudioColors.Danger)
+                    : ThemeService.GetBrush("StudioTextMutedBrush", ActualTheme, StudioColors.Muted),
+            });
+
+            block.Children.Add(new TextBlock
+            {
+                Text = statement.Sql,
+                FontFamily = (FontFamily)Application.Current.Resources["StudioMonoFont"],
+                FontSize = 12,
+                IsTextSelectionEnabled = true,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            blocks.Children.Add(new Border
+            {
+                Padding = new Thickness(8),
+                CornerRadius = new CornerRadius(4),
+                Background = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted),
+                Child = block,
+            });
+        }
+
+        body.Children.Add(new ScrollViewer
+        {
+            Content = blocks,
+            MaxHeight = 320,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Save changes",
+            Content = body,
+            PrimaryButtonText = "Save changes",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (deletes > 0)
+        {
+            dialog.PrimaryButtonStyle = (Style)Application.Current.Resources["StudioDangerButtonStyle"];
+        }
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    /// <summary>Applies saved values to the in-memory result so the grid does not need a re-run.</summary>
+    private void ApplySavedEdits(IReadOnlyList<RowEditRequest> requests)
+    {
+        var deletes = new List<int>();
+
+        foreach (var request in requests)
+        {
+            if (request.Delete)
+            {
+                deletes.Add(request.RowIndex);
+                continue;
+            }
+
+            if (request.Edits is not { } edits
+                || request.RowIndex < 0
+                || request.RowIndex >= _rows.Count)
+            {
+                continue;
+            }
+
+            // The row wrappers point at the provider's own array, so writing it updates both the
+            // live row and the presentation cached for the next tab switch.
+            if (_rows[request.RowIndex].Cells is not string?[] cells)
+            {
+                continue;
+            }
+
+            foreach (var edit in edits)
+            {
+                if (edit.ResultIndex >= 0 && edit.ResultIndex < cells.Length)
+                {
+                    cells[edit.ResultIndex] = edit.Value;
+                }
+            }
+
+            RefreshRow(request.RowIndex);
+        }
+
+        if (deletes.Count > 0)
+        {
+            RemoveRows(deletes);
+        }
+    }
+
+    private void RemoveRows(List<int> rows)
+    {
+        if (_result is null)
+        {
+            return;
+        }
+
+        // Providers hand the grid a List<string?[]>; when that is not the case the row stays visible
+        // and the status says to re-run rather than showing a row that no longer exists silently.
+        if (_result.Rows is not IList<string?[]> list)
+        {
+            StatusChanged?.Invoke(this, "Deleted. Re-run the query to refresh the grid.");
+            return;
+        }
+
+        foreach (var row in rows.OrderDescending())
+        {
+            if (row >= 0 && row < list.Count)
+            {
+                list.RemoveAt(row);
+            }
+        }
+
+        _presentations.Remove(_result);
+        _pendingEdits.Remove(_result);
+        RebuildPresentation();
+    }
+
+    private void RebuildPresentation()
+    {
+        if (_result is null)
+        {
+            return;
+        }
+
+        var presentation = GetOrBuildPresentation(_result);
+        _layout = presentation.Layout;
+        _rows = presentation.Rows;
+        _rowNumbers = presentation.RowNumbers;
+        RowsList.ItemsSource = presentation.Rows;
+        RowNumberList.ItemsSource = presentation.RowNumbers;
+
+        _hasSelection = _rows.Count > 0 && _layout.Columns.Count > 0;
+        _anchorRow = Math.Clamp(_anchorRow, 0, Math.Max(0, _rows.Count - 1));
+        _focusRow = Math.Clamp(_focusRow, 0, Math.Max(0, _rows.Count - 1));
+        _anchorColumn = Math.Clamp(_anchorColumn, 0, Math.Max(0, _layout.Columns.Count - 1));
+        _focusColumn = Math.Clamp(_focusColumn, 0, Math.Max(0, _layout.Columns.Count - 1));
+        UpdateSelectionVisuals();
     }
 
     // ---------------------------------------------------------------- export
@@ -1563,12 +2425,19 @@ public sealed partial class ResultsGrid : UserControl
 
         var layout = _layout.Columns[column];
         var sourceIndex = layout.SourceIndex;
-        var value = sourceIndex < _rows[row].Cells.Count ? _rows[row].Cells[sourceIndex] : null;
+        var value = DisplayValue(row, sourceIndex);
         var subtitle = string.IsNullOrWhiteSpace(layout.DataType)
             ? $"row {_rows[row].Index + 1}"
             : $"{layout.DataType} · row {_rows[row].Index + 1}";
 
         CellPreviewTitle.Text = layout.Name;
+
+        // The preview shows the staged value too, and says so, so "Space" and the grid never
+        // disagree about what the cell currently is.
+        if (TryGetStagedValue(row, sourceIndex, out _))
+        {
+            subtitle += " · edited, not saved";
+        }
 
         if (value is null)
         {
@@ -2217,6 +3086,29 @@ public sealed partial class ResultsGrid : UserControl
             isCustom ? "Edit custom reference" : "Set custom reference");
 
         RemoveReferenceMenuItem.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+
+        var editable = EditController is not null
+            && _layout is not null
+            && _hasSelection
+            && EditController.CanEdit(sourceIndex);
+        EditCellMenuItem.Visibility = editable ? Visibility.Visible : Visibility.Collapsed;
+
+        var staged = PeekEdits();
+        var rowDeleted = staged?.DeletedRows.Contains(_focusRow) == true;
+        DeleteRowMenuItem.Text = rowDeleted ? "Undo delete" : "Delete row";
+        AutomationProperties.SetName(DeleteRowMenuItem, rowDeleted ? "Undo delete row" : "Delete row");
+        DeleteRowMenuItem.Visibility = EditController is not null ? Visibility.Visible : Visibility.Collapsed;
+
+        RevertCellMenuItem.Visibility = staged?.Cells.ContainsKey((_focusRow, sourceIndex)) == true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        EditMenuSeparator.Visibility =
+            EditCellMenuItem.Visibility == Visibility.Visible
+            || DeleteRowMenuItem.Visibility == Visibility.Visible
+            || RevertCellMenuItem.Visibility == Visibility.Visible
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     private async void SetReference_Click(object sender, RoutedEventArgs e)
@@ -2683,12 +3575,12 @@ public sealed partial class ResultsGrid : UserControl
 
         for (var row = top; row <= bottom; row++)
         {
-            var cells = _rows[row].Cells;
             var rowValues = new List<string>(columns.Count);
             foreach (var column in columns)
             {
-                var value = column.SourceIndex < cells.Count ? cells[column.SourceIndex] : null;
-                var literal = FormatSqlLiteral(value, column.DataType);
+                var value = DisplayValue(row, column.SourceIndex);
+                var literal = EditController?.FormatLiteral(value, column.DataType)
+                    ?? FormatSqlLiteral(value, column.DataType);
                 rowValues.Add(literal);
                 values.Add(literal);
             }
@@ -2804,9 +3696,8 @@ public sealed partial class ResultsGrid : UserControl
 
         for (var row = top; row <= bottom; row++)
         {
-            var cells = _rows[row].Cells;
             lines.Add(string.Join('\t', columns.Select(column =>
-                Escape(column.SourceIndex < cells.Count ? cells[column.SourceIndex] ?? string.Empty : string.Empty))));
+                Escape(DisplayValue(row, column.SourceIndex) ?? string.Empty))));
         }
 
         var package = new DataPackage();
@@ -2890,7 +3781,29 @@ public sealed partial class ResultsGrid : UserControl
             _rowNumberScroller.ChangeView(null, _listScroller.VerticalOffset, null, disableAnimation: true);
         }
 
+        // The editor follows its cell while the rows scroll. Once the cell leaves the viewport the
+        // draft is staged instead of being pinned to the edge forever.
+        if (_editing)
+        {
+            PlaceCellEditor();
+            if (IsEditCellScrolledAway())
+            {
+                ApplyCellEditor(0);
+            }
+        }
+
         UpdateRowNumberSelection();
+    }
+
+    private bool IsEditCellScrolledAway()
+    {
+        if (_listScroller is null || _editRow < 0)
+        {
+            return false;
+        }
+
+        var top = (_editRow * RowHeight) - _listScroller.VerticalOffset;
+        return top < -RowHeight || top > _listScroller.ViewportHeight;
     }
 
     private void HeaderScroller_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)

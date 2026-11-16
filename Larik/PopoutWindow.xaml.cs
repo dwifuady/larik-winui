@@ -374,6 +374,9 @@ public sealed partial class PopoutWindow : Window
         ResultsGrid.ReferenceController = active is null
             ? null
             : ViewModel.CreateCellReferenceController(Tab, active.Result);
+        ResultsGrid.EditController = active is null
+            ? null
+            : ViewModel.CreateRowEditController(Tab, active.Result);
         ResultsGrid.ShowResult(active?.Result, Tab.Space.ColorHex);
 
         var count = Tab.Results.Count;

@@ -172,7 +172,43 @@ public sealed class TSqlDialect : SqlLanguage, ISqlDialect
             return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value : $"0x{value}";
         }
 
+        // The grid shows a datetime as "yyyy-MM-dd HH:mm:ss"; the ISO 8601 'T' separator is read the
+        // same way whatever SET LANGUAGE / DATEFORMAT the session happens to use.
+        if (DateTypes.Contains(type)
+            && value.Length > 10
+            && value[4] == '-'
+            && value[7] == '-'
+            && value[10] == ' ')
+        {
+            value = string.Concat(value.AsSpan(0, 10), "T", value.AsSpan(11));
+        }
+
         return $"N'{value.Replace("'", "''")}'";
+    }
+
+    /// <summary>
+    /// A grid save is several statements that must all land or none, so the batch gets an explicit
+    /// transaction and a CATCH. Without it, an error in the second statement would leave the first
+    /// committed. XACT_ABORT is deliberately not used: it would stay set on the tab's session and
+    /// change how the user's later statements behave.
+    /// </summary>
+    public string DmlBatch(IReadOnlyList<string> statements)
+    {
+        var body = string.Join(
+            "\n",
+            statements.Select(statement => "    " + statement.TrimEnd().TrimEnd(';') + ";"));
+
+        return $"""
+            BEGIN TRY
+                BEGIN TRANSACTION;
+            {body}
+                COMMIT TRANSACTION;
+            END TRY
+            BEGIN CATCH
+                IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+                THROW;
+            END CATCH
+            """;
     }
 
     private static readonly HashSet<string> NumericTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -184,6 +220,11 @@ public sealed class TSqlDialect : SqlLanguage, ISqlDialect
     private static readonly HashSet<string> BinaryTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "binary", "varbinary", "image", "timestamp", "rowversion",
+    };
+
+    private static readonly HashSet<string> DateTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "datetime", "datetime2", "smalldatetime", "date", "time",
     };
 
     public string QuoteIdentifier(string name) => $"[{name.Replace("]", "]]")}]";

@@ -11,15 +11,15 @@ public sealed class AddonContractTests
     [InlineData(">=1.0 <2.0")]
     [InlineData(">=1.1 <2.0")]
     [InlineData(">=1.2 <2.0")]
-    [InlineData(">=1.0.0 <1.3")]
-    [InlineData(">=1.2.0 <1.2.1")]
+    [InlineData(">=1.0.0 <1.4")]
+    [InlineData(">=1.3.0 <1.3.1")]
     public void Contract_range_admits_the_running_version(string range) =>
         Assert.True(LarikDataContract.IsCompatible(range));
 
     [Theory]
     [InlineData(">=1.0.0 <1.0.1")]
     [InlineData(">=0.9 <1.0.1")]
-    [InlineData(">=1.3 <2.0")]
+    [InlineData(">=1.4 <2.0")]
     [InlineData(">=2.0 <3.0")]
     [InlineData("")]
     [InlineData(null)]

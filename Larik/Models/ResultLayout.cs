@@ -29,6 +29,17 @@ public sealed class ResultLayout
 }
 
 /// <summary>
+/// A cell's staged state in the grid's inline editor. Deleted applies to the whole row, so every
+/// cell of it carries the mark.
+/// </summary>
+public enum CellMark
+{
+    None,
+    Edited,
+    Deleted,
+}
+
+/// <summary>
 /// One visible results row. Only rows the list actually realizes need a view, so these stay cheap
 /// and are recreated when the active tab's result changes.
 /// </summary>

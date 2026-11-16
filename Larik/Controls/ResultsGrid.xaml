@@ -85,6 +85,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!--  Empty corner above the row-number gutter, aligned with the column header.  -->
@@ -270,6 +271,24 @@
             <ListView.ContextFlyout>
                 <MenuFlyout Opening="ResultsMenu_Opening">
                     <MenuFlyoutItem
+                        x:Name="EditCellMenuItem"
+                        Click="EditCell_Click"
+                        AutomationProperties.Name="Edit cell"
+                        KeyboardAcceleratorTextOverride="F2"
+                        Text="Edit cell" />
+                    <MenuFlyoutItem
+                        x:Name="DeleteRowMenuItem"
+                        Click="DeleteRow_Click"
+                        AutomationProperties.Name="Delete row"
+                        KeyboardAcceleratorTextOverride="Del"
+                        Text="Delete row" />
+                    <MenuFlyoutItem
+                        x:Name="RevertCellMenuItem"
+                        Click="RevertCell_Click"
+                        AutomationProperties.Name="Revert cell"
+                        Text="Revert cell" />
+                    <MenuFlyoutSeparator x:Name="EditMenuSeparator" />
+                    <MenuFlyoutItem
                         Click="PreviewCell_Click"
                         AutomationProperties.Name="Preview cell"
                         KeyboardAcceleratorTextOverride="Space"
@@ -315,6 +334,79 @@
                 </MenuFlyout>
             </ListView.ContextFlyout>
         </ListView>
+
+        <!--
+            The inline cell editor floats above the rows at the focused cell's rect. Keeping it out of
+            the row template means a virtualized row never carries an editor, and a recycled
+            container can never show another row's text.
+        -->
+        <Canvas
+            x:Name="CellEditorLayer"
+            Grid.Row="2"
+            Grid.Column="1"
+            Visibility="Collapsed">
+            <Border
+                x:Name="CellEditorHost"
+                Width="240"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource StudioAccentBrush}"
+                BorderThickness="1"
+                CornerRadius="6">
+                <StackPanel>
+                    <TextBox
+                        x:Name="CellEditorBox"
+                        MinHeight="28"
+                        Padding="8,4"
+                        AcceptsReturn="False"
+                        AutomationProperties.Name="Cell value"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontFamily="{StaticResource StudioMonoFont}"
+                        FontSize="12"
+                        KeyDown="CellEditorBox_KeyDown"
+                        TextChanged="CellEditorBox_TextChanged"
+                        TextWrapping="NoWrap" />
+
+                    <Grid Padding="4,0,4,4" ColumnSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <ToggleButton
+                            x:Name="CellEditorNull"
+                            Grid.Column="0"
+                            Height="22"
+                            Padding="6,0"
+                            AutomationProperties.Name="Set cell to NULL"
+                            Click="CellEditorNull_Click"
+                            Content="NULL"
+                            FontSize="10"
+                            ToolTipService.ToolTip="Set NULL (Ctrl+0)" />
+
+                        <Button
+                            Grid.Column="2"
+                            Height="22"
+                            Padding="8,0"
+                            AutomationProperties.Name="Apply cell edit"
+                            Click="CellEditorApply_Click"
+                            Content="Apply"
+                            FontSize="11" />
+
+                        <Button
+                            Grid.Column="3"
+                            Height="22"
+                            Padding="8,0"
+                            AutomationProperties.Name="Cancel cell edit"
+                            Click="CellEditorCancel_Click"
+                            Content="Cancel"
+                            FontSize="11" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Canvas>
 
         <!--
             Middle-button autoscroll over the rows. The layer stays in layout (never hit-tested) so
@@ -632,5 +724,56 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!--
+            Staged changes are a state, not a dialog: the bar says how many there are and holds the
+            only two actions a save needs. Hidden until something is changed.
+        -->
+        <Border
+            x:Name="ChangeBar"
+            Grid.Row="3"
+            Grid.ColumnSpan="2"
+            Padding="10,6"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0"
+            Visibility="Collapsed">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="ChangeText"
+                    VerticalAlignment="Center"
+                    AutomationProperties.LiveSetting="Polite"
+                    FontSize="11"
+                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis" />
+
+                <Button
+                    x:Name="DiscardChangesButton"
+                    Grid.Column="1"
+                    Height="24"
+                    Padding="10,0"
+                    AutomationProperties.Name="Discard changes"
+                    Click="DiscardChanges_Click"
+                    Content="Discard"
+                    FontSize="11" />
+
+                <Button
+                    x:Name="SaveChangesButton"
+                    Grid.Column="2"
+                    Height="24"
+                    Padding="10,0"
+                    AutomationProperties.Name="Save changes"
+                    Click="SaveChanges_Click"
+                    Content="Save changes…"
+                    FontSize="11"
+                    Style="{StaticResource AccentButtonStyle}" />
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

@@ -359,7 +359,7 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         // separates them, and sys.columns carries the same column metadata for both.
         await using var command = _connection!.CreateCommand();
         command.CommandText = """
-            SELECT s.name, o.name, o.type, c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable
+            SELECT s.name, o.name, o.type, c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed
             FROM sys.objects AS o
             INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
             INNER JOIN sys.columns AS c ON c.object_id = o.object_id
@@ -391,6 +391,8 @@ internal sealed class SqlServerConnection : IDatabaseConnection
                     reader.GetByte(6),
                     reader.GetByte(7)),
                 IsNullable = reader.GetBoolean(8),
+                IsIdentity = reader.GetBoolean(9),
+                IsComputed = reader.GetBoolean(10),
             });
         }
 

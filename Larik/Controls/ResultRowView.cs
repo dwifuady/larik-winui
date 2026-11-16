@@ -27,6 +27,9 @@ public sealed class ResultRowView : Grid
     private readonly Border _matchBar;
     private readonly List<Border> _cellBorders = [];
     private readonly List<TextBlock> _cells = [];
+    private readonly List<Border> _cellMarks = [];
+    private readonly List<CellMark> _marks = [];
+    private readonly List<string?> _stagedValues = [];
     private readonly FontFamily _monoFont;
     private Brush _mutedBrush;
     private Brush _secondaryBrush;
@@ -34,6 +37,8 @@ public sealed class ResultRowView : Grid
     private Brush _dividerBrush;
     private Brush _hoverBrush;
     private Brush _alternateBrush;
+    private Brush _editedBrush;
+    private Brush _deletedBrush;
 
     private int _selectionAnchorRow = -1;
     private int _selectionAnchorColumn = -1;
@@ -54,6 +59,7 @@ public sealed class ResultRowView : Grid
         _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
         _hoverBrush = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
         _alternateBrush = ThemeService.GetBrush("StudioRowAlternateBrush", ActualTheme, Transparent);
+        (_editedBrush, _deletedBrush) = ResolveMarkBrushes();
 
         _cellsPanel = new StackPanel { Orientation = Orientation.Horizontal };
         Children.Add(_cellsPanel);
@@ -99,6 +105,7 @@ public sealed class ResultRowView : Grid
         _dividerBrush = ThemeService.GetBrush("DividerStrokeColorDefaultBrush", ActualTheme, StudioColors.Muted);
         _hoverBrush = ThemeService.GetBrush("HairlineSubtleBrush", ActualTheme, StudioColors.Muted);
         _alternateBrush = ThemeService.GetBrush("StudioRowAlternateBrush", ActualTheme, Transparent);
+        (_editedBrush, _deletedBrush) = ResolveMarkBrushes();
 
         _bottomLine.Background = _dividerBrush;
         foreach (var cell in _cellBorders)
@@ -172,17 +179,62 @@ public sealed class ResultRowView : Grid
                 VerticalAlignment = VerticalAlignment.Center,
             };
 
+            // A staged change is a dot as well as a tint: colour alone must never be the only signal
+            // that a cell differs from the database.
+            var mark = new Border
+            {
+                Width = 5,
+                Height = 5,
+                CornerRadius = new CornerRadius(2.5),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 3, 2, 0),
+                Background = _editedBrush,
+                Visibility = Visibility.Collapsed,
+            };
+
+            var content = new Grid();
+            content.Children.Add(text);
+            content.Children.Add(mark);
+
             var cell = new Border
             {
                 BorderThickness = new Thickness(0, 0, 1, 0),
                 BorderBrush = _dividerBrush,
                 Padding = new Thickness(12, 5, 12, 5),
-                Child = text,
+                Child = content,
             };
 
             _cells.Add(text);
+            _cellMarks.Add(mark);
             _cellBorders.Add(cell);
             _cellsPanel.Children.Add(cell);
+        }
+
+        // The grid owns the staged state; asking it here keeps a recycled row honest without putting
+        // mutable edit data on the row wrappers, which are shared and cached per result.
+        var grid = FindAncestor(this);
+        var deleted = grid?.IsRowMarkedDeleted(row.Index) == true;
+        _marks.Clear();
+        _stagedValues.Clear();
+        for (var index = 0; index < row.Layout.Columns.Count; index++)
+        {
+            var sourceIndex = row.Layout.Columns[index].SourceIndex;
+            if (deleted)
+            {
+                _marks.Add(CellMark.Deleted);
+                _stagedValues.Add(null);
+            }
+            else if (grid is not null && grid.TryGetStagedValue(row.Index, sourceIndex, out var staged))
+            {
+                _marks.Add(CellMark.Edited);
+                _stagedValues.Add(staged);
+            }
+            else
+            {
+                _marks.Add(CellMark.None);
+                _stagedValues.Add(null);
+            }
         }
 
         for (var index = 0; index < _cellBorders.Count; index++)
@@ -196,12 +248,19 @@ public sealed class ResultRowView : Grid
 
             var column = row.Layout.Columns[index];
             var sourceIndex = column.SourceIndex;
-            var value = sourceIndex < row.Cells.Count ? row.Cells[sourceIndex] : null;
+
+            // A staged edit is shown immediately; that is the whole point of staging.
+            var state = _marks[index];
+            var value = state == CellMark.Edited
+                ? _stagedValues[index]
+                : sourceIndex < row.Cells.Count ? row.Cells[sourceIndex] : null;
 
             cell.Visibility = Visibility.Visible;
             cell.Width = column.Width;
-            // A transparent background makes the whole cell (not just its text glyphs) hit-testable.
-            cell.Background = Transparent;
+
+            // A transparent background (not null) keeps the whole cell, not just its glyphs,
+            // hit-testable for selection and double-click.
+            cell.Background = MarkBrush(state);
 
             var text = _cells[index];
             text.Text = Truncate(value, MaxCellTextLength) ?? "NULL";
@@ -209,10 +268,34 @@ public sealed class ResultRowView : Grid
             text.Foreground = value is null
                 ? _mutedBrush
                 : index == 0 ? _secondaryBrush : _primaryBrush;
+
+            var mark = _cellMarks[index];
+            mark.Background = state == CellMark.Deleted ? _deletedBrush : _editedBrush;
+            mark.Visibility = state == CellMark.None ? Visibility.Collapsed : Visibility.Visible;
             ToolTipService.SetToolTip(text, Truncate(value, MaxTooltipLength));
         }
 
         UpdateSelection();
+    }
+
+    private Brush MarkBrush(CellMark state) => state switch
+    {
+        CellMark.Deleted => _deletedBrush,
+        CellMark.Edited => _editedBrush,
+        _ => Transparent,
+    };
+
+    private (Brush Edited, Brush Deleted) ResolveMarkBrushes()
+    {
+        var accent = ThemeService.GetBrush("StudioAccentBrush", ActualTheme, StudioColors.Muted) as SolidColorBrush;
+        var danger = ThemeService.GetBrush("StudioDangerBrush", ActualTheme, StudioColors.Muted) as SolidColorBrush;
+        return (
+            new SolidColorBrush(StudioColors.WithAlpha(
+                accent?.Color ?? StudioColors.Parse(StudioColors.Palette[0]),
+                0x2A)),
+            new SolidColorBrush(StudioColors.WithAlpha(
+                danger?.Color ?? StudioColors.Parse("#EF4444"),
+                0x2A)));
     }
 
     private void RestoreBackground() =>
@@ -239,7 +322,7 @@ public sealed class ResultRowView : Grid
         {
             var selected = rowSelected && index >= minColumn && index <= maxColumn;
             _cellBorders[index].Background = !selected
-                ? Transparent
+                ? index < _marks.Count ? MarkBrush(_marks[index]) : Transparent
                 : row.Index == _selectionFocusRow && index == _selectionFocusColumn
                     ? _activeCellBrush
                     : _selectionBrush;

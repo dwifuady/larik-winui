@@ -140,9 +140,12 @@ public static class CellReferenceResolver
             return resolutions;
         }
 
-        var knownTables = CompletionEngine
+        var references = CompletionEngine
             .FindTableReferences(text, text.Length, tables)
             .Where(reference => reference.Table is not null)
+            .ToList();
+
+        var knownTables = references
             .Select(reference => reference.Table!)
             .DistinctBy(TableKey, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -152,22 +155,93 @@ public static class CellReferenceResolver
             return resolutions;
         }
 
+        // The select list is the only place that says which table a column came from when a name is
+        // shared by a join ("Id" on both sides). When the projection list aligns with the result,
+        // its qualifier wins; otherwise the name-only uniqueness rule still applies.
+        var projections = CompletionEngine.SelectProjections(text);
+        var aligned = projections is { Count: > 0 } && projections.Count == result.Columns.Count;
+
         for (var index = 0; index < result.Columns.Count; index++)
         {
-            var column = result.Columns[index].Name;
-            var source = FindSourceTable(knownTables, column);
-            if (source is null)
+            var resultColumn = result.Columns[index].Name;
+            var sourceColumn = resultColumn;
+            TableSchema? source = null;
+
+            if (aligned && projections![index] is { } projection)
+            {
+                sourceColumn = projection.Column;
+                source = ResolveProjectionTable(projection.Qualifier, references, tables);
+            }
+
+            source ??= FindSourceTable(knownTables, sourceColumn);
+            if (source is null
+                || !source.Columns.Any(candidate => Equal(candidate, sourceColumn)))
             {
                 continue;
             }
 
-            var resolution = new ReferenceSource(source.Schema ?? string.Empty, source.Name, column);
+            var resolution = new ReferenceSource(source.Schema ?? string.Empty, source.Name, sourceColumn);
             resolutions[index] = new ColumnResolution(
                 resolution,
-                FindReference(source, column, virtualReferences));
+                FindReference(source, sourceColumn, virtualReferences));
         }
 
         return resolutions;
+    }
+
+    /// <summary>
+    /// Resolves a select-list qualifier to the table it names: an alias first, then the table's own
+    /// name, then a schema-qualified name. Null when it doesn't name a table in this statement.
+    /// </summary>
+    private static TableSchema? ResolveProjectionTable(
+        string? qualifier,
+        IReadOnlyList<TableReference> references,
+        IReadOnlyList<TableSchema> tables)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier))
+        {
+            return null;
+        }
+
+        // schema.table (from a three-part column reference) is matched by schema, so two same-named
+        // tables in different schemas can never be confused.
+        var dot = qualifier.LastIndexOf('.');
+        if (dot >= 0)
+        {
+            var schema = qualifier[..dot];
+            var name = qualifier[(dot + 1)..];
+
+            foreach (var reference in references)
+            {
+                if (reference.Table is not null
+                    && Equal(reference.Table.Name, name)
+                    && Equal(reference.Table.Schema ?? string.Empty, schema))
+                {
+                    return reference.Table;
+                }
+            }
+
+            return tables.FirstOrDefault(table =>
+                Equal(table.Name, name) && Equal(table.Schema ?? string.Empty, schema));
+        }
+
+        foreach (var reference in references)
+        {
+            if (reference.Table is not null && Equal(reference.Alias, qualifier))
+            {
+                return reference.Table;
+            }
+        }
+
+        foreach (var reference in references)
+        {
+            if (reference.Table is not null && Equal(reference.Name, qualifier))
+            {
+                return reference.Table;
+            }
+        }
+
+        return tables.FirstOrDefault(table => Equal(table.Name, qualifier));
     }
 
     private static TableSchema? FindSourceTable(IReadOnlyList<TableSchema> tables, string column)

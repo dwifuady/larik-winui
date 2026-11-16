@@ -220,7 +220,55 @@ public interface ISqlDialect : IEditorLanguage
     }
 
     /// <summary>
-    /// Formats a cell value as a SQL literal for <see cref="RowsStatement"/>. The default quotes
+    /// One UPDATE for a row the grid is editing. <paramref name="key"/> is the row's identity
+    /// (its primary key) and is never empty; <paramref name="assignments"/> holds only the cells the
+    /// user actually changed. The default quotes identifiers and formats literals with this dialect,
+    /// which is correct for engines without special DML syntax.
+    /// </summary>
+    string UpdateStatement(
+        string? schema,
+        string table,
+        IReadOnlyList<ColumnAssignment> assignments,
+        IReadOnlyList<RowFilter> key)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(table)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
+        var set = string.Join(
+            ", ",
+            assignments.Select(assignment =>
+                $"{QuoteIdentifier(assignment.Column)} = {FormatLiteral(assignment.Value, assignment.DataType)}"));
+        return $"UPDATE {qualified} SET {set} WHERE {KeyPredicate(key)}";
+    }
+
+    /// <summary>One DELETE addressed by the row's primary key.</summary>
+    string DeleteStatement(string? schema, string table, IReadOnlyList<RowFilter> key)
+    {
+        var qualified = string.IsNullOrWhiteSpace(schema)
+            ? QuoteIdentifier(table)
+            : $"{QuoteIdentifier(schema)}.{QuoteIdentifier(table)}";
+        return $"DELETE FROM {qualified} WHERE {KeyPredicate(key)}";
+    }
+
+    /// <summary>
+    /// Assembles a whole save into one batch. The default joins the statements with semicolons: one
+    /// command, and cancellation still cannot split it. Engines that can wrap the work in an explicit
+    /// transaction (and roll it back on any error) should override this so a multi-row save never
+    /// half-applies.
+    /// </summary>
+    string DmlBatch(IReadOnlyList<string> statements) =>
+        string.Join("\n", statements.Select(statement => statement.TrimEnd().TrimEnd(';') + ";"));
+
+    /// <summary>Equality (or IS NULL) predicate for a row identity; shared by the DML defaults.</summary>
+    private string KeyPredicate(IReadOnlyList<RowFilter> key) =>
+        string.Join(
+            " AND ",
+            key.Select(filter => filter.Value is null
+                ? $"{QuoteIdentifier(filter.Column)} IS NULL"
+                : $"{QuoteIdentifier(filter.Column)} = {FormatLiteral(filter.Value, filter.DataType)}"));
+
+    /// <summary>
+    /// Formats a cell value as a SQL literal for the statement builders above. The default quotes
     /// everything; dialects with native numeric/date/binary literals should override it.
     /// </summary>
     string FormatLiteral(string? value, string? dataType) =>
