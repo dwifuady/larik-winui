@@ -232,6 +232,12 @@ the culprit.
 - A packaged (MSIX) run keeps its state in the package's `LocalState`
   (`%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState`); an unpackaged run uses the real
   `%LOCALAPPDATA%\Larik WinUI`. State checks must look in both places.
+- **The grid's cell editor is an overlay, not a templated cell.** `DoubleTapped` never fires because
+  the row's press handler marks the event handled for selection, so a double-click is detected from
+  the two press timestamps. The overlay is positioned from layout math (row × 28 − scroll offset)
+  rather than from a realized container, and it stages its draft when the cell scrolls out of view or
+  the result changes. Staged edits live on the `QueryResult` instance (a `ConditionalWeakTable`), so
+  a re-run starts clean while switching result tabs keeps them.
 - **A pop-out tab is a second XAML tree in the same process, not a second instance.** `App.Popouts`
   (`PopoutManager`) owns one `PopoutWindow` per tab; the window renders the same `TabViewModel` and
   `QuerySession` as the shell, so results, transactions and SQL are shared and no IPC/payload copy is

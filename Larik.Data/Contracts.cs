@@ -126,6 +126,12 @@ public sealed class QueryExecutionOptions
 public sealed record RowFilter(string Column, string? Value, string? DataType = null);
 
 /// <summary>
+/// One column assigned a new value in a generated UPDATE. <see cref="Value"/> is the cell text as
+/// the grid shows it (null means SQL NULL); the dialect turns it into a literal.
+/// </summary>
+public sealed record ColumnAssignment(string Column, string? Value, string? DataType = null);
+
+/// <summary>
 /// The session's transaction state as reported by the engine. SQL Server fills
 /// <see cref="TransactionCount"/> from <c>@@TRANCOUNT</c> and <see cref="XactState"/> from
 /// <c>XACT_STATE()</c> (1 = committable, 0 = no transaction, -1 = doomed).
@@ -251,6 +257,17 @@ public sealed class TableColumn
 
     /// <summary>Null when the provider cannot tell.</summary>
     public bool? IsNullable { get; init; }
+
+    /// <summary>
+    /// True for an engine-generated key (SQL Server <c>IDENTITY</c>). The grid's inline editor
+    /// leaves these read-only: the server would reject the write anyway, and saying so up front is
+    /// better than a failed save. False when the provider cannot tell, which keeps older providers
+    /// unchanged.
+    /// </summary>
+    public bool IsIdentity { get; init; }
+
+    /// <summary>True for a computed column; its value is derived and cannot be written.</summary>
+    public bool IsComputed { get; init; }
 }
 
 /// <summary>Tables, views and columns, used to feed completion and the schema browser.</summary>

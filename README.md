@@ -74,7 +74,8 @@ instead.
 - **Results that hold up.** One result tab per result set — drag to reorder, double-click to rename
   — a virtualized grid with a sticky row-number gutter, draggable columns, syntax-coloured cell
   preview with JSON/XML formatting and Ctrl+F find, foreign-key and **custom** reference previews,
-  copy as TSV / INSERT / IN clause, and CSV/JSON export.
+  copy as TSV / INSERT / IN clause, and CSV/JSON export. Double-click a cell to edit it in place:
+  changes are staged, reviewed as the exact UPDATE/DELETE SQL, and saved as one transaction.
 - **AI agents, on your terms.** `Larik.Mcp.exe` is an MCP server your agent launches over stdio — no
   port, no token, no credentials shared. Workspaces are exposed per level (Off / Read only / Read and
   write), reads are enforced by the engine (rolled-back transaction on SQL Server, `READ ONLY` on

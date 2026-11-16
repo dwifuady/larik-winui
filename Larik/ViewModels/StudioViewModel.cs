@@ -32,6 +32,9 @@ public partial class StudioViewModel : ObservableObject
     // not reopen the SQLite store and re-parse the statement.
     private readonly ConditionalWeakTable<QueryResult, CellReferenceController> _referenceControllers = new();
 
+    // Inline editing resolves a result the same way references do; keep it beside them.
+    private readonly ConditionalWeakTable<QueryResult, RowEditController> _rowEditControllers = new();
+
     public StudioViewModel()
     {
         StatusText = "Ready";
@@ -1913,6 +1916,48 @@ public partial class StudioViewModel : ObservableObject
             database);
 
         _referenceControllers.Add(result, controller);
+        return controller;
+    }
+
+    /// <summary>
+    /// Creates the inline editor for a result, or null when the provider has no SQL dialect or no
+    /// schema yet. Editing needs the schema's primary keys, so an unloaded schema yields null and the
+    /// next attempt (after the schema arrives) builds a working controller instead of caching a
+    /// refusal.
+    /// </summary>
+    public IRowEditController? CreateRowEditController(TabViewModel tab, QueryResult result)
+    {
+        if (tab.Space.Connection.EditorLanguage is not ISqlDialect dialect)
+        {
+            return null;
+        }
+
+        if (_rowEditControllers.TryGetValue(result, out var cached))
+        {
+            return cached;
+        }
+
+        var tables = TablesFor(tab);
+        if (tables.Count == 0)
+        {
+            return null;
+        }
+
+        if (CreateCellReferenceController(tab, result) is not { } references)
+        {
+            return null;
+        }
+
+        var database = result.Database ?? DatabaseNameFor(tab.Space, tab);
+        var controller = new RowEditController(
+            result,
+            string.IsNullOrWhiteSpace(result.Statement) ? tab.Content : result.Statement,
+            tables,
+            dialect,
+            references,
+            (sql, token) => tab.Session.ExecuteBatchAsync(sql, database, QueryExecutionOptions.Default, token));
+
+        _rowEditControllers.Add(result, controller);
         return controller;
     }
 
