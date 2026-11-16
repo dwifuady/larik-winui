@@ -24,7 +24,8 @@
                 CornerRadius="6"
                 DoubleTapped="TabItem_DoubleTapped"
                 PointerEntered="TabItem_PointerEntered"
-                PointerExited="TabItem_PointerExited">
+                PointerExited="TabItem_PointerExited"
+                PointerPressed="TabItem_PointerPressed">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />

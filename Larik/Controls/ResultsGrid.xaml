@@ -316,6 +316,18 @@
             </ListView.ContextFlyout>
         </ListView>
 
+        <!--
+            Middle-button autoscroll over the rows. The layer stays in layout (never hit-tested) so
+            the puck can be placed with real coordinates; only the puck toggles.
+        -->
+        <Canvas
+            x:Name="AutoscrollLayer"
+            Grid.Row="2"
+            Grid.Column="1"
+            IsHitTestVisible="False">
+            <local:AutoscrollIndicator x:Name="AutoscrollPointer" Visibility="Collapsed" />
+        </Canvas>
+
         <TextBlock
             x:Name="EmptyText"
             Grid.Row="2"

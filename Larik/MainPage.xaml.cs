@@ -1112,6 +1112,42 @@ public sealed partial class MainPage : Page
         }
     }
 
+    /// <summary>Middle-click closes a tab, the same gesture every tabbed app shares.</summary>
+    private async void TabItem_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement container
+            || container.DataContext is not TabViewModel tab
+            || !e.GetCurrentPoint(container).Properties.IsMiddleButtonPressed)
+        {
+            return;
+        }
+
+        // The inline rename box is a text field: a middle click there belongs to the text.
+        if (IsInsideTextInput(e.OriginalSource as DependencyObject, container))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await CloseTabWithConfirmationAsync(tab);
+    }
+
+    /// <summary>True when the press started in a text field inside <paramref name="boundary"/>.</summary>
+    private static bool IsInsideTextInput(DependencyObject? source, DependencyObject boundary)
+    {
+        for (var element = source;
+             element is not null && !ReferenceEquals(element, boundary);
+             element = VisualTreeHelper.GetParent(element))
+        {
+            if (element is TextBox or RichEditBox)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void BeginInlineRename(TabViewModel tab, FrameworkElement container)
     {
         if (!tab.IsRenaming)

@@ -189,6 +189,10 @@ public sealed partial class ResultsGrid : UserControl
             new PointerEventHandler(RowNumberList_PointerWheelChanged),
             handledEventsToo: true);
 
+        // Middle-button autoscroll pans the rows both ways; the sticky header and the row-number
+        // gutter follow through the list's existing ViewChanged handlers.
+        _ = new MiddleClickAutoScroll(RowsList, AutoscrollLayer, AutoscrollPointer, ResolveRowsScroller);
+
         // ListViewItem marks pointer presses handled for its selection bookkeeping; listen for
         // handled events or clicking a row number would never select the row.
         RowNumberList.AddHandler(
@@ -230,6 +234,13 @@ public sealed partial class ResultsGrid : UserControl
         }
 
         _rowNumberScroller = FindDescendant<ScrollViewer>(RowNumberList) ?? _rowNumberScroller;
+    }
+
+    /// <summary>A result can appear before the list has a template scroller, so resolve lazily.</summary>
+    private ScrollViewer? ResolveRowsScroller()
+    {
+        EnsureListScroller();
+        return _listScroller;
     }
 
     private void ApplyPreviewWidth()
