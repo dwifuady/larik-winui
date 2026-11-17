@@ -565,17 +565,8 @@ public partial class StudioViewModel : ObservableObject
             return;
         }
 
-        if (ActiveSpace.Connection.Provider is null)
+        if (TryHandleMissingProvider(ActiveSpace))
         {
-            if (!AddonPolicy.AddonsEnabled)
-            {
-                StatusText = "This driver isn't included in the Store edition. The GitHub build supports more databases.";
-                return;
-            }
-
-            DriverInstallRequested?.Invoke(
-                this,
-                new DriverInstallRequest(ActiveSpace.Connection.ProviderId, ActiveSpace));
             return;
         }
 
@@ -602,6 +593,30 @@ public partial class StudioViewModel : ObservableObject
         {
             await ConnectSpaceAsync(ActiveSpace);
         }
+    }
+
+    /// <summary>
+    /// A workspace whose driver is not loaded cannot connect, so the action becomes an install (or
+    /// an honest Store-edition limit). Returns true when it handled the request.
+    /// </summary>
+    private bool TryHandleMissingProvider(SpaceViewModel space)
+    {
+        if (space.Connection.Provider is not null)
+        {
+            return false;
+        }
+
+        if (!AddonPolicy.AddonsEnabled)
+        {
+            StatusText = "This driver isn't included in the Store edition. The GitHub build supports more databases.";
+            return true;
+        }
+
+        StatusText = $"Install the {space.Connection.ProviderId} driver to run queries.";
+        DriverInstallRequested?.Invoke(
+            this,
+            new DriverInstallRequest(space.Connection.ProviderId, space));
+        return true;
     }
 
     /// <summary>
@@ -1807,7 +1822,11 @@ public partial class StudioViewModel : ObservableObject
     /// or the whole document) on the active tab. The tab pins the database, its own session and
     /// the target result, so switching tabs or spaces while the query runs cannot retarget it.
     /// </summary>
-    public Task RunSqlAsync(string sql, bool append = false) => RunBatchesAsync([sql], append);
+    public Task RunSqlAsync(
+        string sql,
+        bool append = false,
+        Func<SpaceViewModel, Task<bool>>? confirmConnect = null) =>
+        RunBatchesAsync([sql], append, confirmConnect);
 
     /// <summary>
     /// Runs a reference-preview lookup on the active tab's own session without touching the query
@@ -1980,15 +1999,28 @@ public partial class StudioViewModel : ObservableObject
     /// inside a batch, so declared variables and temp tables keep their scope exactly as they do
     /// when SQL Server receives a native batch; <c>GO</c> starts a new server batch.
     /// </summary>
-    public Task RunBatchesAsync(IReadOnlyList<string> batches, bool append = false) =>
-        ActiveTab is { } tab ? RunBatchesAsync(tab, batches, append) : Task.CompletedTask;
+    public Task RunBatchesAsync(
+        IReadOnlyList<string> batches,
+        bool append = false,
+        Func<SpaceViewModel, Task<bool>>? confirmConnect = null) =>
+        ActiveTab is { } tab
+            ? RunBatchesAsync(tab, batches, append, confirmConnect)
+            : Task.CompletedTask;
 
     /// <summary>
     /// Runs batches on a specific tab, whether or not it is the shell's active tab. A tab rendered
     /// in its own window still owns its session, results and status, so the pop-out can run it
     /// while the main window is looking at another tab.
     /// </summary>
-    public async Task RunBatchesAsync(TabViewModel tab, IReadOnlyList<string> batches, bool append = false)
+    /// <param name="confirmConnect">
+    /// Asks the window that started the run whether to open the workspace's connection. The shell
+    /// owns the dialog because only it has the XamlRoot; the view model only knows the decision.
+    /// </param>
+    public async Task RunBatchesAsync(
+        TabViewModel tab,
+        IReadOnlyList<string> batches,
+        bool append = false,
+        Func<SpaceViewModel, Task<bool>>? confirmConnect = null)
     {
         var space = tab.Space;
 
@@ -2026,10 +2058,32 @@ public partial class StudioViewModel : ObservableObject
 
         if (!space.Connection.IsConnected)
         {
-            ApplyResults(tab, [QueryResult.Error(
-                $"Not connected — connect to {space.Name} to run queries.",
-                TimeSpan.Zero)], append, "Disconnected");
-            return;
+            if (TryHandleMissingProvider(space))
+            {
+                tab.StatusText = StatusText;
+                return;
+            }
+
+            // Running is the moment the connection becomes necessary, so the decision to connect
+            // belongs here rather than in the rail. Declining leaves the tab exactly as it was
+            // instead of turning a missing connection into a failed result.
+            if (confirmConnect is null || !await confirmConnect(space))
+            {
+                tab.StatusText = $"Disconnected — connect to {space.Name} to run queries.";
+                if (ReferenceEquals(tab, ActiveTab))
+                {
+                    StatusText = tab.StatusText;
+                }
+
+                return;
+            }
+
+            await ConnectSpaceAsync(space);
+            if (!space.Connection.IsConnected)
+            {
+                // ConnectSpaceAsync already surfaced the failure in the results pane.
+                return;
+            }
         }
 
         if (executable.Any(HasUnguardedMutation))

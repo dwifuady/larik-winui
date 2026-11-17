@@ -238,7 +238,14 @@ public sealed partial class PopoutWindow : Window
     private async Task RunAsync(bool all, bool append = false)
     {
         var batches = QueryRunner.ResolveBatches(Editor, all);
-        await ViewModel.RunBatchesAsync(Tab, batches, append);
+
+        // This window owns the XamlRoot the connect prompt needs; the tab's session and results
+        // still belong to the shared view model.
+        await ViewModel.RunBatchesAsync(
+            Tab,
+            batches,
+            append,
+            space => ConnectPrompt.ShowAsync(Content.XamlRoot, space));
     }
 
     private void RunButton_Click(object sender, RoutedEventArgs e) => _ = RunAsync(all: false);

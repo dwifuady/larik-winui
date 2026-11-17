@@ -954,7 +954,10 @@ internal sealed class SqlServerConnection : IDatabaseConnection
         DateTime dateTime => dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
         DateTimeOffset offset => offset.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture),
         byte[] bytes => $"0x{Convert.ToHexString(bytes)}",
-        bool flag => flag ? "true" : "false",
+        // T-SQL bit has no boolean literal; it is stored and written as 1/0, and the grid's values
+        // double as the edit buffer, so showing "true"/"false" would send back a value the engine
+        // cannot assign to a bit column.
+        bool flag => flag ? "1" : "0",
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString(),
     };
