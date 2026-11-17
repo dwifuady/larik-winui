@@ -1380,6 +1380,85 @@ try {
         Assert-True ((Get-EditorText) -eq "select * from customers where country = 'ID';") "Ctrl+Z did not revert the format: '$((Get-EditorText))'"
     }
 
+    Test-UI 'a note anchors to the statement and follows an inserted line' {
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys "select * from customers where country = 'ID';" -Literal
+        Start-Sleep -Milliseconds 400
+
+        # Ctrl+Alt+N anchors to the statement under the caret, not to a line number.
+        Send-Keys 'ctrl+home'
+        Send-Keys 'ctrl+alt+n'
+        Wait-ForText 'Note text' 8
+
+        # The note editor owns the keyboard; typing must not reach the SQL.
+        Send-Keys 'Finance threshold' -Literal
+        Start-Sleep -Milliseconds 400
+        Assert-True ((Get-EditorText) -eq "select * from customers where country = 'ID';") 'typing in the note changed the SQL'
+        Assert-True ((Find-Element 'Finance threshold').matchCount -gt 0) 'the note body is not in the pane'
+        Assert-True ((Find-Element 'Statement 1').matchCount -gt 0) 'the note card lost its statement label'
+
+        Send-Keys 'escape'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Note on this statement').matchCount -gt 0) 'the statement marker is missing'
+        Assert-True ((Find-Element '1 note').matchCount -gt 0) 'the tab badge does not count the note'
+
+        # A blank line above the statement shifts it; the anchor must move with the text.
+        Send-Keys 'ctrl+home'
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Line 2').matchCount -gt 0) 'the note did not follow the statement to line 2'
+        Assert-True ((Find-Element 'Note on this statement').matchCount -gt 0) 'the marker disappeared after inserting a line'
+    }
+
+    Test-UI 'notes belong to their tab and deleting one leaves the SQL alone' {
+        # A new tab is a different note scope; the original tab keeps its note and badge. Ctrl+T asks
+        # which database the new tab should use, and Enter opens the highlighted one.
+        Send-Keys 'ctrl+t'
+        Wait-ForText 'New tab database search' 8
+        Send-Keys 'enter'
+        Start-Sleep -Milliseconds 900
+        Wait-ForText 'No notes in this tab' 8
+        Assert-True ((Find-Element 'Note on this statement').matchCount -eq 0) 'the new tab shows another tab''s marker'
+
+        # Closing the empty tab returns to the tab that owns the note.
+        Click-Element 'Close tab'
+        Start-Sleep -Milliseconds 800
+        Wait-ForText 'Finance threshold' 8
+        Assert-True ((Find-Element 'Note on this statement').matchCount -gt 0) 'the note marker did not come back with its tab'
+
+        Click-Element 'Note on this statement'
+        Wait-ForText 'Note text' 8
+        Click-Element 'Delete note'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Find-Element 'Finance threshold').matchCount -eq 0) 'the deleted note is still listed'
+        Assert-True ((Find-Element 'Note on this statement').matchCount -eq 0) 'the deleted note kept its marker'
+        Assert-True ((Find-Element 'No notes in this tab').matchCount -gt 0) 'the pane did not return to the empty state'
+        Assert-True ((Find-Element 'Undo note delete').matchCount -gt 0) 'deleting a note offered no undo'
+
+        # Undo restores the note with its anchor, so deletion is never a one-way door.
+        Click-Element 'Undo note delete'
+        Wait-ForText 'Finance threshold' 8
+        Assert-True ((Find-Element 'Note on this statement').matchCount -gt 0) 'undo did not restore the marker'
+
+        # Delete it again so the scenario leaves no note behind.
+        Click-Element 'Note on this statement'
+        Wait-ForText 'Note text' 8
+        Click-Element 'Delete note'
+        Start-Sleep -Milliseconds 700
+        Assert-True ((Get-EditorText) -match 'select \* from customers') 'deleting the note changed the SQL'
+
+        # Remove the blank line the rebase check inserted and restore the fixture text exactly.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+home'
+        Send-Keys 'delete'
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'ctrl+a'
+        Send-Keys "select * from customers where country = 'ID';" -Literal
+        Start-Sleep -Milliseconds 400
+        Click-Element 'Close notes'
+    }
+
     Test-UI 'Ctrl+R toggles the results pane, and a run reopens it' {
         Invoke-Ui @('focus', 'Editor') | Out-Null
         Send-Keys 'ctrl+r'

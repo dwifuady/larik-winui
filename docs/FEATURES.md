@@ -439,6 +439,19 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   formatting is kept out of the undo stack: the surface
   owns text snapshots, so Ctrl+Z/Ctrl+Y still undo typing (and an accepted snippet) rather than
   colours.
+- **Notes**: **Ctrl+Alt+N** (or the Notes pane's **+**) attaches a note to the statement under the
+  caret, or to an explicit selection. The anchor is the statement range, not a line: inserting or
+  deleting lines above rebases it, so the marker and the pane's *Statement 1 · Line 3* follow the
+  text. The note is stored with a text fingerprint (the quoted range plus surrounding characters),
+  so reopening the app re-finds it even after the file changed. When the anchored text is gone the
+  note is **not** deleted or moved silently: it stays in the pane as **Anchor lost** with a
+  **Re-anchor** action, and the tab keeps a note badge. A note on a tab with no statement belongs to
+  the tab itself. Four kinds (Note / TODO / Decision / Observation) are a label with an icon, never
+  a colour-only signal. The right-hand pane lists this tab's notes, every note in the workspace, or
+  only the lost ones; selecting a note picks its statement and opens the editor beside it. Editing is
+  inline (no modal, no Save button): body and kind save after a short pause, Esc closes, and deletion
+  is undoable from the status bar. Notes live in their own `notes` table, survive archiving with the
+  tab, and are pruned only when the tab is permanently deleted.
 - **Design system**: DESIGN.md tokens, Light/Dark/HighContrast dictionaries, mono editor,
   status bar with the transient message + `Ln/Col` (connection state lives in the rail),
   splitter between editor and results. **Settings** (appearance, snippets, about) and the
@@ -478,6 +491,7 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
 | Reference previews need an unambiguous column map | Shift+Space maps a result column to its source table with the same lexical FROM/JOIN resolver as completion. A qualified select-list column (`[s].[Id]`, `s.Id AS x`) is attributed by its qualifier, but an unqualified column whose name exists on several joined tables, a wildcard projection (`s.*`) and a multi-statement batch fall back to the value preview instead of risking the wrong foreign key; a SQL AST would close this. |
 | Current-statement splitting is lexical | Each provider owns its splitter (`IEditorLanguage`). T-SQL handles strings, identifiers, comments, indented `GO` statements and `GO` batch splitting for F5; PostgreSQL adds dollar-quoted bodies, `E'...'` strings, quoted identifiers and nested comments. Semicolons inside parenthesised `CREATE RULE`/`BEGIN ATOMIC` bodies and nested `BEGIN/END` awareness still need the same AST work as completion. |
 | A native crash leaves breadcrumbs, not a dump | The diagnostics log catches managed exceptions and writes the action in progress, so a provider that dies natively (access violation, stack overflow) still shows the last operation. There is no minidump or crash-upload path yet; adding `MiniDumpWriteDump` behind an opt-in setting is the next step if driver crashes keep showing up. |
+| Notes anchor to text, not to a result | A note follows the statement it was written on and survives reloads; formatting or replacing the whole document is one large edit, and if the fingerprint no longer matches the note waits as **Anchor lost** rather than guessing. Notes on a result cell/column and a `-- @note` export are the next step: they need a stable column identity (or a saved result) that a cell does not have. |
 | Result rows are capped, not paged | The provider stops at 5,000 rows (100,000 ceiling) to bound memory. Paging/continuation would need a stable ordering contract per driver; start there if deep result browsing becomes a requirement. |
 | Inline grid editing needs a provable row identity | A cell is writable only when the result maps each column to one base table and includes that table's complete primary key. Qualified and aliased columns are attributed from the select list; CTEs/derived tables, views, tables without a key, wildcard projections (`s.*`) and date/time key columns stay read-only (the status bar says why). A rowversion concurrency token would detect a row changed by someone else between reading and saving. |
 | File settings browse existing files only | **Browse…** opens a file open picker. Creating a new database file is done by typing the path (the provider's create-if-missing setting decides what happens next); a save picker would add a "new vs open" decision to a form that does not need one until users ask. |

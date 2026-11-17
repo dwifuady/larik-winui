@@ -17,6 +17,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.Foundation;
 using Windows.Storage.Pickers;
 using Windows.UI.ViewManagement;
 
@@ -154,7 +155,27 @@ public sealed partial class MainPage : Page
             SqlEditor.CommandRequested += SqlEditor_CommandRequested;
             SqlEditor.SnippetRequested += SqlEditor_SnippetRequested;
 
-            ViewModel.ActiveTabChanged += (_, _) => SyncEditorFromActiveTab();
+            if (SqlEditor is IEditorNoteSurface noteSurface)
+            {
+                noteSurface.NoteMarkerInvoked += SqlEditor_NoteMarkerInvoked;
+            }
+
+            // Note mutations can come from the pane, the editor popover or the status-bar undo; the
+            // shell repaints markers from the model rather than from each click path.
+            ViewModel.NotesChanged += (_, _) =>
+            {
+                RefreshNoteMarkers();
+                UpdateNotesFilterVisuals();
+            };
+
+            ViewModel.ActiveTabChanged += (_, _) =>
+            {
+                // The editor is about to show another document; an anchor popover left open would
+                // describe text that is no longer under it.
+                CloseNoteEditor();
+                SyncEditorFromActiveTab();
+                RefreshNoteMarkers();
+            };
             ViewModel.FormatRequested += (_, _) => FormatActiveTab();
             ViewModel.ResultChanged += (_, _) => RenderResults();
             ViewModel.NewTabRequested += ViewModel_NewTabRequested;
@@ -176,6 +197,8 @@ public sealed partial class MainPage : Page
         ResultsGrid.PreviewWidth = ViewModel.CellPreviewWidth ?? 340;
         SyncEditorFromActiveTab();
         RenderResults();
+        UpdateNotesFilterVisuals();
+        RefreshNoteMarkers();
         SqlEditor.FocusEditor();
     }
 
@@ -708,6 +731,7 @@ public sealed partial class MainPage : Page
         _syncedTab = tab;
         _syncedText = content;
         SqlEditor.Text = content;
+        RefreshNoteMarkers();
     }
 
     /// <summary>
@@ -732,13 +756,26 @@ public sealed partial class MainPage : Page
             return;
         }
 
-        if (ViewModel.ActiveTab is not null)
+        if (ViewModel.ActiveTab is { } tab)
         {
-            ViewModel.ActiveTab.Content = SqlEditor.Text;
+            var oldText = _syncedText;
+            var newText = SqlEditor.Text;
+
+            tab.Content = newText;
 
             // The editor is the source of truth for this tab until another tab is selected.
-            _syncedTab = ViewModel.ActiveTab;
-            _syncedText = ViewModel.ActiveTab.Content;
+            _syncedTab = tab;
+            _syncedText = newText;
+
+            // Rebase against the text the note labels are described from: the tab content is
+            // already the new document, so "Lines 2–5" is computed from the text on screen.
+            ViewModel.RebaseNotes(tab, oldText, newText);
+
+            RefreshNoteMarkers();
+            if (_editingNote is not null)
+            {
+                PositionNotePopup(_editingNote);
+            }
         }
     }
 
@@ -3469,6 +3506,324 @@ public sealed partial class MainPage : Page
     /// <summary>The results ListView owns the gesture; write the new order back to the query tab.</summary>
     private void ResultTabsList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args) =>
         ViewModel.SyncResultOrder();
+
+    // ---------------------------------------------------------------- notes
+
+    private NoteViewModel? _editingNote;
+
+    private void NewNoteAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        CreateNoteAtCaret();
+    }
+
+    private void AddNoteButton_Click(object sender, RoutedEventArgs e) => CreateNoteAtCaret();
+
+    /// <summary>
+    /// A note is anchored to the statement under the caret, or to an explicit selection. That is
+    /// the whole "which block" decision: the query already has meaningful units, so the user never
+    /// has to pick a line number.
+    /// </summary>
+    private void CreateNoteAtCaret()
+    {
+        if (ViewModel.ActiveTab is not { } tab || tab.IsPoppedOut)
+        {
+            return;
+        }
+
+        var text = SqlEditor.Text;
+        var span = ResolveNoteTargetSpan(text);
+
+        // A document with no statement still deserves a note; it belongs to the tab itself.
+        var anchor = span.Length <= 0
+            ? NoteAnchoring.TabNote()
+            : NoteAnchoring.Capture(text, span.Start, span.Length);
+
+        // An unanchored filter would hide the note that was just created; show where it landed.
+        if (ViewModel.NotesScope == NoteScope.Unanchored)
+        {
+            ViewModel.NotesScope = NoteScope.ThisTab;
+        }
+
+        var note = ViewModel.CreateNote(tab, anchor);
+        RefreshNoteMarkers();
+        UpdateNotesFilterVisuals();
+        OpenNoteEditor(note);
+    }
+
+    private EditorSpan ResolveNoteTargetSpan(string text)
+    {
+        var selection = SqlEditor.Selection;
+        if (selection.Length > 0)
+        {
+            return selection;
+        }
+
+        var statement = SqlEditor.EditorLanguage.StatementAt(text, SqlEditor.CaretOffset);
+        if (statement.Length > 0)
+        {
+            return new EditorSpan(statement.Start, statement.Length);
+        }
+
+        var (start, length) = NoteAnchoring.LineSpanAt(text, SqlEditor.CaretOffset);
+        return new EditorSpan(start, length);
+    }
+
+    private void OpenNoteEditor(NoteViewModel note)
+    {
+        if (SqlEditor is not IEditorNoteSurface surface || ViewModel.ActiveTab is { IsPoppedOut: true })
+        {
+            return;
+        }
+
+        _editingNote = note;
+        ViewModel.SetActiveNote(note);
+        NoteEditor.Note = note;
+
+        var span = new EditorSpan(note.Anchor.Start, Math.Max(note.Anchor.Length, 1));
+        surface.RevealSpan(span);
+        surface.SetActiveNoteAnchor(new EditorSpan(note.Anchor.Start, note.Anchor.Length));
+
+        PositionNotePopup(note);
+        NotePopup.IsOpen = true;
+
+        // The pane may have just opened, which moves the editor; place the popover again once the
+        // new layout has run, then hand focus to the note.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!ReferenceEquals(_editingNote, note))
+            {
+                return;
+            }
+
+            PositionNotePopup(note);
+            NoteEditor.FocusBody();
+        });
+    }
+
+    private void CloseNoteEditor()
+    {
+        if (NotePopup.IsOpen)
+        {
+            NotePopup.IsOpen = false;
+        }
+
+        _editingNote = null;
+        NoteEditor.Note = null;
+
+        if (SqlEditor is IEditorNoteSurface surface)
+        {
+            surface.SetActiveNoteAnchor(null);
+        }
+    }
+
+    private void PositionNotePopup(NoteViewModel note)
+    {
+        if (SqlEditor is not IEditorNoteSurface surface)
+        {
+            return;
+        }
+
+        var bounds = surface.GetSpanBounds(new EditorSpan(note.Anchor.Start, Math.Max(note.Anchor.Length, 1)));
+        var origin = SqlEditor.TransformToVisual(Root).TransformPoint(new Point(0, 0));
+        const double width = 384;
+        NotePopupCard.Measure(new Size(width, double.PositiveInfinity));
+        var height = Math.Min(NotePopupCard.DesiredSize.Height, 460);
+
+        // Leave the marker's lane clear: the badge is how the note is found again after the
+        // popover closes, so covering it makes the anchor look like it vanished.
+        var x = origin.X + SqlEditor.ActualWidth - width - 56;
+        var y = origin.Y + bounds.Y - 10;
+
+        x = Math.Clamp(x, 8, Math.Max(8, Root.ActualWidth - width - 8));
+        y = Math.Clamp(y, 8, Math.Max(8, Root.ActualHeight - height - 8));
+
+        NotePopup.HorizontalOffset = x;
+        NotePopup.VerticalOffset = y;
+    }
+
+    private void RefreshNoteMarkers()
+    {
+        if (SqlEditor is not IEditorNoteSurface surface)
+        {
+            return;
+        }
+
+        var tab = ViewModel.ActiveTab;
+        if (tab is null || tab.IsPoppedOut)
+        {
+            surface.SetNoteMarkers([]);
+            return;
+        }
+
+        var markers = tab.Notes
+            .Where(note => note.State != NoteAnchorState.Lost && note.Anchor.Length > 0)
+            .GroupBy(note => (note.Anchor.Start, note.Anchor.Length))
+            .Select(group => new EditorNoteMarker(group.Key.Start, group.Key.Length, group.Count()))
+            .OrderBy(marker => marker.Start)
+            .ToList();
+
+        surface.SetNoteMarkers(markers);
+
+        // Deleting the anchored text while the note is open turns it lost; the list is the honest
+        // place for that, not a popover pointing nowhere.
+        if (_editingNote is { State: NoteAnchorState.Lost })
+        {
+            CloseNoteEditor();
+        }
+    }
+
+    private void SqlEditor_NoteMarkerInvoked(object? sender, EditorNoteMarker marker)
+    {
+        var tab = ViewModel.ActiveTab;
+        if (tab is null)
+        {
+            return;
+        }
+
+        var note = tab.Notes
+            .Where(candidate => candidate.Anchor.Start == marker.Start)
+            .OrderByDescending(candidate => candidate.UpdatedAt)
+            .FirstOrDefault();
+
+        if (note is not null)
+        {
+            OpenNoteEditor(note);
+        }
+    }
+
+    private void NotesList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not NoteViewModel note)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(note.Tab, ViewModel.ActiveTab))
+        {
+            ViewModel.SelectTab(note.Tab);
+        }
+
+        OpenNoteEditor(note);
+    }
+
+    private void NoteReanchor_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: NoteViewModel note })
+        {
+            return;
+        }
+
+        var switchedTab = !ReferenceEquals(note.Tab, ViewModel.ActiveTab);
+        if (switchedTab)
+        {
+            ViewModel.SelectTab(note.Tab);
+        }
+
+        // When the note lives on another tab, start the caret where the note last pointed; on the
+        // tab the user is already editing, their caret is the intended statement.
+        if (switchedTab && SqlEditor is IEditorNoteSurface surface)
+        {
+            surface.RevealSpan(new EditorSpan(note.Anchor.Start, Math.Max(note.Anchor.Length, 1)));
+            SqlEditor.Select(new EditorSpan(note.Anchor.Start, 0));
+        }
+
+        var text = SqlEditor.Text;
+        var span = ResolveNoteTargetSpan(text);
+        if (span.Length <= 0)
+        {
+            ViewModel.StatusText = "Put the caret on the statement the note belongs to";
+            return;
+        }
+
+        ViewModel.ReanchorNote(note, NoteAnchoring.Capture(text, span.Start, span.Length));
+
+        if (ReferenceEquals(_editingNote, note))
+        {
+            NoteEditor.Reload();
+        }
+
+        RefreshNoteMarkers();
+        UpdateNotesFilterVisuals();
+    }
+
+    private void NoteEditor_CloseRequested(object? sender, EventArgs e)
+    {
+        CloseNoteEditor();
+        SqlEditor.FocusEditor();
+    }
+
+    private void NoteEditor_DeleteRequested(object? sender, EventArgs e)
+    {
+        if (_editingNote is not { } note)
+        {
+            return;
+        }
+
+        CloseNoteEditor();
+        ViewModel.DeleteNote(note);
+        RefreshNoteMarkers();
+        UpdateNotesFilterVisuals();
+    }
+
+    private void NotePopup_Closed(object? sender, object e)
+    {
+        _editingNote = null;
+        NoteEditor.Note = null;
+
+        if (SqlEditor is IEditorNoteSurface surface)
+        {
+            surface.SetActiveNoteAnchor(null);
+        }
+    }
+
+    private void ToggleNotesPane_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsActiveTabPoppedOut)
+        {
+            return;
+        }
+
+        ViewModel.IsNotesPaneOpen = !ViewModel.IsNotesPaneOpen;
+
+        if (!ViewModel.IsNotesPaneOpen)
+        {
+            CloseNoteEditor();
+        }
+    }
+
+    private void NotesFilter_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string tag } && Enum.TryParse<NoteScope>(tag, out var scope))
+        {
+            ViewModel.NotesScope = scope;
+            UpdateNotesFilterVisuals();
+        }
+    }
+
+    private void NotesSpaceButton_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.NotesScope = NoteScope.Space;
+        UpdateNotesFilterVisuals();
+    }
+
+    private void UpdateNotesFilterVisuals()
+    {
+        var scope = ViewModel.NotesScope;
+        StyleFilter(NotesThisTabFilter, scope == NoteScope.ThisTab);
+        StyleFilter(NotesSpaceFilter, scope == NoteScope.Space);
+        StyleFilter(NotesLostFilter, scope == NoteScope.Unanchored);
+
+        static void StyleFilter(Button button, bool selected)
+        {
+            button.Background = selected
+                ? ThemeService.GetBrush("StudioAccentSoftBrush", StudioColors.Muted)
+                : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            button.Foreground = selected
+                ? ThemeService.GetBrush("StudioTextPrimaryBrush", StudioColors.Muted)
+                : ThemeService.GetBrush("StudioTextMutedBrush", StudioColors.Muted);
+        }
+    }
 
     // ---------------------------------------------------------------- accelerators
 

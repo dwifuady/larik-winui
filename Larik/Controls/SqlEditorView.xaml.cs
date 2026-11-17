@@ -22,10 +22,11 @@ namespace Larik.Controls;
 /// lightweight syntax highlighting, and a suggestion popup anchored to the real caret
 /// (<c>ITextSelection.GetRect</c>), where Tab or Enter accepts the highlighted snippet.
 /// </summary>
-public sealed partial class SqlEditorView : UserControl, IEditorSurface
+public sealed partial class SqlEditorView : UserControl, IEditorSurface, IEditorNoteSurface
 {
     private const double PopupWidth = 392;
     private const double PopupMaxHeight = 268;
+    private const double NoteMarkerHeight = 22;
 
     private static readonly Brush PrimaryFallbackBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xF5, 0xF7));
 
@@ -40,6 +41,9 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
     private int _lineNumberCount = -1;
     private IReadOnlyList<CompletionItem>? _completions;
     private int _selectedIndex = -1;
+    private IReadOnlyList<EditorNoteMarker> _noteMarkers = [];
+    private EditorSpan? _activeNoteAnchor;
+    private bool _noteLayoutQueued;
 
     // The built-in TextCommandBarFlyout cannot be extended, so the editor owns the whole context
     // menu: the standard verbs plus "Add to snippet…" for the current selection.
@@ -86,7 +90,12 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         {
             EnsureEditorScroller();
             UpdateLineNumbers();
+            PositionNoteMarkers();
         };
+
+        // A resize reflows the document: the markers must move with the lines under them.
+        Editor.SizeChanged += (_, _) => PositionNoteMarkers();
+        NoteMarkerLayer.SizeChanged += (_, _) => PositionNoteMarkers();
     }
 
     public event EventHandler? TextChanged;
@@ -514,6 +523,8 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             _editorScroller.VerticalOffset,
             null,
             disableAnimation: true);
+
+        PositionNoteMarkers();
     }
 
     /// <summary>
@@ -847,6 +858,7 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
         RaiseCaretChanged();
         ScheduleHighlighting();
         EndEdit();
+        PositionNoteMarkers();
 
         if (FindBar.Visibility == Visibility.Visible)
         {
@@ -1624,7 +1636,266 @@ public sealed partial class SqlEditorView : UserControl, IEditorSurface
             EndEdit();
             RaiseTextChanged();
             RaiseCaretChanged();
+            PositionNoteMarkers();
             e.Handled = true;
+        }
+    }
+
+    // ---------------------------------------------------------------- note markers
+
+    public event EventHandler<EditorNoteMarker>? NoteMarkerInvoked;
+
+    public void SetNoteMarkers(IReadOnlyList<EditorNoteMarker> markers)
+    {
+        var next = markers ?? [];
+
+        // Typing inside an anchored statement changes its end, not where its badge belongs. Only
+        // rebuild when a start or count actually moved.
+        if (SameMarkerLayout(_noteMarkers, next))
+        {
+            return;
+        }
+
+        _noteMarkers = next;
+        RebuildNoteMarkers();
+    }
+
+    private static bool SameMarkerLayout(IReadOnlyList<EditorNoteMarker> left, IReadOnlyList<EditorNoteMarker> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (left[index].Start != right[index].Start || left[index].Count != right[index].Count)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public void SetActiveNoteAnchor(EditorSpan? span)
+    {
+        _activeNoteAnchor = span is { Length: > 0 } value ? value : null;
+        QueueNoteLayout();
+    }
+
+    public void RevealSpan(EditorSpan span)
+    {
+        Select(span);
+
+        try
+        {
+            Editor.Document.Selection.ScrollIntoView(PointOptions.None);
+        }
+        catch (Exception)
+        {
+            // A range mid-relayout can be momentarily invalid; the selection itself still applies.
+        }
+
+        // Leave a caret, not a blue document-wide selection: the marker (and the active bar)
+        // shows the anchor, and a selection reads as something the user did.
+        var caret = Math.Clamp(span.Start, 0, GetText().Length);
+        Editor.Document.Selection.SetRange(caret, caret);
+        RaiseCaretChanged();
+    }
+
+    public Rect GetSpanBounds(EditorSpan span)
+    {
+        if (!IsLoaded)
+        {
+            return default;
+        }
+
+        // The popover grows down and to the left from the range's first line; the first character
+        // is the only geometry the shell needs, and it is safe for a range that spans paragraphs.
+        var rect = RangeRect(span.Start, 1);
+        if (rect is null)
+        {
+            return default;
+        }
+
+        var origin = Editor.TransformToVisual(this).TransformPoint(new Point(0, 0));
+        var padding = Editor.Padding;
+        return new Rect(
+            origin.X + padding.Left + rect.Value.X,
+            origin.Y + padding.Top + rect.Value.Y,
+            Math.Max(rect.Value.Width, 1),
+            Math.Max(rect.Value.Height, 1));
+    }
+
+    private void RebuildNoteMarkers()
+    {
+        NoteMarkerLayer.Children.Clear();
+
+        foreach (var marker in _noteMarkers)
+        {
+            if (marker.Length <= 0)
+            {
+                continue;
+            }
+
+            var content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            content.Children.Add(new FontIcon { Glyph = "\uE90A", FontSize = 10 });
+
+            if (marker.Count > 1)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = marker.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            var button = new Button
+            {
+                Tag = marker,
+                Content = content,
+                Style = (Style)Resources["NoteMarkerButtonStyle"],
+                Visibility = Visibility.Collapsed,
+            };
+
+            AutomationProperties.SetName(
+                button,
+                marker.Count == 1 ? "Note on this statement" : $"{marker.Count} notes on this statement");
+            ToolTipService.SetToolTip(button, marker.Count == 1 ? "Open note" : $"Open {marker.Count} notes");
+            button.Click += (_, _) => NoteMarkerInvoked?.Invoke(this, marker);
+
+            NoteMarkerLayer.Children.Add(button);
+        }
+
+        QueueNoteLayout();
+    }
+
+    /// <summary>
+    /// Markers are positioned from the document's own geometry, so they follow wrapping, scrolling
+    /// and resizing without the shell knowing anything about the RichEdit document.
+    /// </summary>
+    private void PositionNoteMarkers()
+    {
+        if (!IsLoaded || Editor.XamlRoot is null)
+        {
+            return;
+        }
+
+        EnsureEditorScroller();
+
+        var origin = Editor.TransformToVisual(NoteMarkerLayer).TransformPoint(new Point(0, 0));
+        var padding = Editor.Padding;
+        var top = origin.Y;
+        var bottom = origin.Y + Editor.ActualHeight;
+        var left = origin.X;
+        var right = origin.X + Editor.ActualWidth;
+
+        foreach (var child in NoteMarkerLayer.Children)
+        {
+            if (child is not Button button || button.Tag is not EditorNoteMarker marker)
+            {
+                continue;
+            }
+
+            var rect = RangeRect(marker.Start, 1);
+            if (rect is null)
+            {
+                button.Visibility = Visibility.Collapsed;
+                continue;
+            }
+
+            button.Measure(new Size(double.PositiveInfinity, NoteMarkerHeight));
+            var width = Math.Max(button.DesiredSize.Width, 24);
+            var x = right - width - 16;
+            var y = origin.Y + padding.Top + rect.Value.Y + Math.Max(0, (rect.Value.Height - NoteMarkerHeight) / 2);
+
+            if (y + NoteMarkerHeight < top || y > bottom || x <= left)
+            {
+                button.Visibility = Visibility.Collapsed;
+                continue;
+            }
+
+            Canvas.SetLeft(button, Math.Clamp(x, left, Math.Max(left, right - width)));
+            Canvas.SetTop(button, Math.Clamp(y, top, Math.Max(top, bottom - NoteMarkerHeight)));
+            button.Visibility = Visibility.Visible;
+        }
+
+        ActiveNoteBar.Visibility = Visibility.Collapsed;
+        if (_activeNoteAnchor is not { Length: > 0 } active)
+        {
+            return;
+        }
+
+        var startRect = RangeRect(active.Start, 1);
+        var endRect = RangeRect(active.Start + active.Length - 1, 1);
+        if (startRect is null || endRect is null)
+        {
+            return;
+        }
+
+        var barTop = origin.Y + padding.Top + startRect.Value.Y;
+        var barBottom = origin.Y + padding.Top + endRect.Value.Y + endRect.Value.Height;
+        if (barBottom <= top || barTop >= bottom || barBottom <= barTop)
+        {
+            return;
+        }
+
+        Canvas.SetLeft(ActiveNoteBar, origin.X + 1);
+        Canvas.SetTop(ActiveNoteBar, Math.Max(barTop, top));
+        ActiveNoteBar.Height = Math.Max(1, Math.Min(barBottom, bottom) - Math.Max(barTop, top));
+        ActiveNoteBar.Visibility = Visibility.Visible;
+    }
+
+    private void QueueNoteLayout()
+    {
+        if (_noteLayoutQueued)
+        {
+            return;
+        }
+
+        var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (queue is null)
+        {
+            return;
+        }
+
+        _noteLayoutQueued = true;
+        queue.TryEnqueue(() =>
+        {
+            _noteLayoutQueued = false;
+            PositionNoteMarkers();
+        });
+    }
+
+    private Rect? RangeRect(int start, int length)
+    {
+        var text = GetText();
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        var safeStart = Math.Clamp(start, 0, text.Length - 1);
+        var safeLength = Math.Clamp(length, 1, text.Length - safeStart);
+
+        try
+        {
+            var range = Editor.Document.GetRange(safeStart, safeStart + safeLength);
+            range.GetRect(PointOptions.ClientCoordinates, out var rect, out _);
+            return rect;
+        }
+        catch (Exception)
+        {
+            // A range mid-relayout can be momentarily invalid; the next layout pass retries.
+            return null;
         }
     }
 

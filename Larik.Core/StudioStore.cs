@@ -22,6 +22,9 @@ public sealed class StudioState
 
     public int AutoArchiveDays { get; set; } = 30;
 
+    /// <summary>Whether the notes pane is docked on the right; the notes themselves live in their own table.</summary>
+    public bool NotesPaneOpen { get; set; }
+
     /// <summary>Last window geometry, restored on launch; null on the first run or after a reset.</summary>
     public WindowBoundsState? WindowBounds { get; set; }
 
@@ -171,7 +174,7 @@ internal sealed partial class StudioJsonContext : JsonSerializerContext
 /// </summary>
 public sealed partial class StudioStore : IVirtualReferenceStore
 {
-    private const int SchemaVersion = 9;
+    private const int SchemaVersion = 11;
 
     public StudioStore()
         : this(LarikPaths.DatabasePath)
@@ -546,6 +549,29 @@ public sealed partial class StudioStore : IVirtualReferenceStore
             CREATE INDEX IF NOT EXISTS idx_run_log_recorded_at ON run_log(recorded_at DESC);
             CREATE INDEX IF NOT EXISTS idx_run_log_space
                 ON run_log(space_id, recorded_at DESC);
+
+            -- Version 10: notes. An anchor stores a range plus a text fingerprint, never a line
+            -- number: the range rebases on edit and the fingerprint re-finds it on reload.
+            CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL DEFAULT '',
+                tab_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'note',
+                body TEXT NOT NULL DEFAULT '',
+                anchor_start INTEGER NOT NULL DEFAULT 0,
+                anchor_length INTEGER NOT NULL DEFAULT 0,
+                quote TEXT NOT NULL DEFAULT '',
+                prefix TEXT NOT NULL DEFAULT '',
+                suffix TEXT NOT NULL DEFAULT '',
+                line_hint INTEGER NOT NULL DEFAULT 1,
+                is_unanchored INTEGER NOT NULL DEFAULT 0,
+                is_tab INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notes_tab ON notes(tab_id, anchor_start);
+            CREATE INDEX IF NOT EXISTS idx_notes_space ON notes(space_id);
             """);
 
         // Version 2 adds pin state, the inactivity clock and the archive table. Version 3 adds the
@@ -553,6 +579,8 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         // the archive's group name. Version 6 adds user-defined reference metadata. Version 7 adds
         // the MCP exposure level and the MCP audit/approval tables. Version 8 adds the run log.
         // Version 9 adds the agent's reason and ticket reference to a run.
+        // Version 10 adds notes: an anchor with a text fingerprint, not a line number.
+        // Version 11 adds tab notes: a scratchpad line for a document with no statement yet.
         EnsureColumn(connection, transaction, "tabs", "pinned", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, transaction, "tabs", "last_accessed_at", "TEXT");
         EnsureColumn(connection, transaction, "tabs", "group_id", "TEXT");
@@ -562,6 +590,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         EnsureColumn(connection, transaction, "spaces", "mcp_access", "TEXT NOT NULL DEFAULT 'off'");
         EnsureColumn(connection, transaction, "run_log", "description", "TEXT");
         EnsureColumn(connection, transaction, "run_log", "reference", "TEXT");
+        EnsureColumn(connection, transaction, "notes", "is_tab", "INTEGER NOT NULL DEFAULT 0");
 
         Execute(connection, transaction, $"PRAGMA user_version = {SchemaVersion};");
         transaction.Commit();
@@ -618,6 +647,8 @@ public sealed partial class StudioStore : IVirtualReferenceStore
                 out var days)
                 ? days
                 : 30,
+            NotesPaneOpen = bool.TryParse(ReadState(connection, "notes_pane_open"), out var notesPaneOpen)
+                && notesPaneOpen,
             WindowBounds = ReadWindowBounds(connection),
             ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
             CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
@@ -854,6 +885,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
         SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
         SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        SetState(connection, transaction, "notes_pane_open", state.NotesPaneOpen ? "true" : "false");
         SetState(connection, transaction, "theme", AppThemeText.ToStorage(AppThemeText.Parse(state.Theme)));
         SetState(connection, transaction, "check_for_updates", state.CheckForUpdates ? "true" : "false");
         if (state.ResultsPaneHeight is { } resultsHeight)
@@ -883,6 +915,17 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         }
 
         WriteArchivedTabs(connection, transaction, state.ArchivedTabs);
+
+        // Notes outlive archiving but not deletion: keep the ones whose tab is in either table,
+        // drop the rest (a closed workspace, a tab deleted from the archive). This is also the
+        // cleanup path for an install that predates notes.
+        Execute(
+            connection,
+            transaction,
+            """
+            DELETE FROM notes
+            WHERE tab_id NOT IN (SELECT id FROM tabs UNION SELECT id FROM archived_tabs);
+            """);
     }
 
     private static void WriteProfile(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)

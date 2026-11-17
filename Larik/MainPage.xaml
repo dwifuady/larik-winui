@@ -107,6 +107,28 @@
                         ToolTipService.ToolTip="Open in its own window"
                         Visibility="{x:Bind PopoutGlyphVisibility, Mode=OneWay}" />
 
+                    <!--  Notes are discoverable at the rail level, not only after opening the pane.  -->
+                    <Border
+                        Padding="4,1"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="{x:Bind NotesBadgeLabel, Mode=OneWay}"
+                        Background="{ThemeResource StudioAccentSoftBrush}"
+                        CornerRadius="8"
+                        ToolTipService.ToolTip="{x:Bind NotesBadgeLabel, Mode=OneWay}"
+                        Visibility="{x:Bind NotesBadgeVisibility, Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="3">
+                            <FontIcon
+                                FontSize="8"
+                                Foreground="{ThemeResource StudioAccentBrush}"
+                                Glyph="&#xE90A;" />
+                            <TextBlock
+                                FontSize="8"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioAccentBrush}"
+                                Text="{x:Bind NotesBadgeText, Mode=OneWay}" />
+                        </StackPanel>
+                    </Border>
+
                     <Border
                         Padding="5,1"
                         VerticalAlignment="Center"
@@ -229,6 +251,148 @@
                     Visibility="{x:Bind MonogramVisibility, Mode=OneWay}" />
             </Grid>
         </DataTemplate>
+
+        <!--
+            One note in the pane. The quote is the anchor made visible; the body is the note. A lost
+            anchor keeps its body and offers Re-anchor instead of disappearing.
+        -->
+        <DataTemplate x:Key="NoteCardTemplate" x:DataType="vm:NoteViewModel">
+            <Grid
+                Margin="0,0,0,6"
+                Padding="10,8"
+                AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}"
+                Background="{x:Bind CardBackground, Mode=OneWay}"
+                BorderBrush="{x:Bind CardBorderBrush, Mode=OneWay}"
+                BorderThickness="1"
+                CornerRadius="8"
+                RowSpacing="6">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!--  The active card carries the same 2 px accent strip as the active tab.  -->
+                <Rectangle
+                    Grid.RowSpan="4"
+                    Width="2"
+                    Margin="-10,0,0,0"
+                    HorizontalAlignment="Left"
+                    Fill="{ThemeResource StudioAccentBrush}"
+                    Opacity="{x:Bind CardStripOpacity, Mode=OneWay}"
+                    RadiusX="1"
+                    RadiusY="1" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal"
+                        Spacing="5">
+                        <FontIcon
+                            FontSize="10"
+                            Foreground="{x:Bind KindBrush, Mode=OneWay}"
+                            Glyph="{x:Bind KindGlyph, Mode=OneWay}" />
+                        <TextBlock
+                            CharacterSpacing="50"
+                            FontSize="9.5"
+                            FontWeight="SemiBold"
+                            Foreground="{x:Bind KindBrush, Mode=OneWay}"
+                            Text="{x:Bind KindLabel, Mode=OneWay}" />
+                    </StackPanel>
+
+                    <Button
+                        Grid.Column="1"
+                        Padding="6,1"
+                        AutomationProperties.Name="Re-anchor this note"
+                        Click="NoteReanchor_Click"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioAccentBrush}"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Anchor the note to the statement under the caret"
+                        Visibility="{x:Bind ReanchorVisibility, Mode=OneWay}">
+                        <TextBlock
+                            FontSize="10"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioAccentBrush}"
+                            Text="Re-anchor" />
+                    </Button>
+                </Grid>
+
+                <Border
+                    Grid.Row="1"
+                    Padding="7,3"
+                    Background="{ThemeResource HairlineSubtleBrush}"
+                    BorderBrush="{ThemeResource HairlineBrush}"
+                    BorderThickness="2,0,0,0"
+                    CornerRadius="0,4,4,0"
+                    Visibility="{x:Bind QuoteVisibility, Mode=OneWay}">
+                    <TextBlock
+                        FontFamily="{StaticResource StudioMonoFont}"
+                        FontSize="10.5"
+                        Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                        Text="{x:Bind QuotePreview, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="NoWrap" />
+                </Border>
+
+                <Grid Grid.Row="2">
+                    <TextBlock
+                        FontSize="12"
+                        Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                        MaxLines="4"
+                        Text="{x:Bind Body, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="Wrap"
+                        Visibility="{x:Bind BodyVisibility, Mode=OneWay}" />
+                    <TextBlock
+                        FontSize="12"
+                        FontStyle="Italic"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="Empty note"
+                        Visibility="{x:Bind EmptyBodyVisibility, Mode=OneWay}" />
+                </Grid>
+
+                <StackPanel
+                    Grid.Row="3"
+                    Orientation="Horizontal"
+                    Spacing="5">
+                    <FontIcon
+                        VerticalAlignment="Center"
+                        FontSize="9"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Glyph="&#xE840;" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="{x:Bind AnchorText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="·" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="{x:Bind MetaText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{ThemeResource StudioTextMutedBrush}"
+                        Text="{x:Bind TabTitle, Mode=OneWay}"
+                        Visibility="{x:Bind TabLabelVisibility, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
     </Page.Resources>
 
     <Page.KeyboardAccelerators>
@@ -242,6 +406,7 @@
         <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="ToggleResultsAccelerator_Invoked" />
         <KeyboardAccelerator Key="O" Modifiers="Control,Menu" Invoked="TogglePopoutAccelerator_Invoked" />
         <KeyboardAccelerator Key="H" Modifiers="Control,Shift" Invoked="HistoryAccelerator_Invoked" />
+        <KeyboardAccelerator Key="N" Modifiers="Control,Menu" Invoked="NewNoteAccelerator_Invoked" />
     </Page.KeyboardAccelerators>
 
     <Grid x:Name="Root">
@@ -733,6 +898,10 @@
 
         <!--  ============ MAIN: editor + results ============  -->
         <Grid Grid.Column="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="{x:Bind ViewModel.NotesPaneWidth, Mode=OneWay}" />
+            </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -746,6 +915,7 @@
             <TitleBar
                 x:Name="AppTitleBar"
                 Grid.Row="0"
+                Grid.ColumnSpan="2"
                 Title="Larik SQL Studio"
                 IsBackButtonVisible="False"
                 IsPaneToggleButtonVisible="True"
@@ -815,6 +985,30 @@
                     Orientation="Horizontal"
                     Spacing="6"
                     VerticalAlignment="Center">
+                    <Button
+                        x:Name="NotesButton"
+                        Height="28"
+                        MinWidth="32"
+                        Padding="8,0"
+                        AutomationProperties.Name="Notes"
+                        Click="ToggleNotesPane_Click"
+                        CornerRadius="6"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        ToolTipService.ToolTip="Notes (Ctrl+Alt+N adds one on the current statement)">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <FontIcon
+                                VerticalAlignment="Center"
+                                FontSize="11"
+                                Glyph="&#xE90A;" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                FontSize="10"
+                                FontWeight="SemiBold"
+                                Text="{x:Bind ViewModel.ActiveTab.NotesBadgeText, Mode=OneWay}"
+                                Visibility="{x:Bind ViewModel.ActiveTab.NotesBadgeVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                    </Button>
+
                     <Button
                         Width="32"
                         Height="28"
@@ -1172,9 +1366,234 @@
                 </StackPanel>
             </Grid>
 
+            <!--
+                ============ NOTES ============
+                The pane is the library, the editor popover is the writing surface. The list is
+                the product: it is what makes a note findable after its anchor scrolls away.
+            -->
+            <Border
+                x:Name="NotesPane"
+                Grid.Row="1"
+                Grid.RowSpan="4"
+                Grid.Column="1"
+                Background="{ThemeResource PanelBackgroundBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="1,0,0,0"
+                Visibility="{x:Bind ViewModel.NotesPaneVisibility, Mode=OneWay}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid
+                        Height="46"
+                        Padding="14,0"
+                        BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                        BorderThickness="0,0,0,1"
+                        ColumnSpacing="7">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="13"
+                            FontWeight="SemiBold"
+                            Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                            Text="Notes" />
+
+                        <Border
+                            Grid.Column="1"
+                            Padding="6,1"
+                            VerticalAlignment="Center"
+                            Background="{ThemeResource HairlineBrush}"
+                            CornerRadius="9">
+                            <TextBlock
+                                FontSize="10"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="{x:Bind ViewModel.NotesCountLabel, Mode=OneWay}" />
+                        </Border>
+
+                        <Button
+                            Grid.Column="3"
+                            Width="26"
+                            Height="26"
+                            AutomationProperties.Name="New note"
+                            Click="AddNoteButton_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Add a note on the statement under the caret (Ctrl+Alt+N)">
+                            <FontIcon FontSize="11" Glyph="&#xE710;" />
+                        </Button>
+
+                        <Button
+                            Grid.Column="4"
+                            Width="26"
+                            Height="26"
+                            AutomationProperties.Name="Close notes"
+                            Click="ToggleNotesPane_Click"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            ToolTipService.ToolTip="Close notes">
+                            <FontIcon FontSize="10" Glyph="&#xE711;" />
+                        </Button>
+                    </Grid>
+
+                    <StackPanel
+                        Grid.Row="1"
+                        Padding="10,8,10,6"
+                        Orientation="Horizontal"
+                        Spacing="3">
+                        <Button
+                            x:Name="NotesThisTabFilter"
+                            Height="24"
+                            Padding="9,0"
+                            AutomationProperties.Name="Notes on this tab"
+                            Click="NotesFilter_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            Tag="ThisTab">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock FontSize="11" Text="This tab" />
+                                <TextBlock
+                                    FontSize="9.5"
+                                    Opacity="0.7"
+                                    Text="{x:Bind ViewModel.TabNoteCount, Mode=OneWay}" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button
+                            x:Name="NotesSpaceFilter"
+                            Height="24"
+                            Padding="9,0"
+                            AutomationProperties.Name="Notes in this workspace"
+                            Click="NotesFilter_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            Tag="Space">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock FontSize="11" Text="All" />
+                                <TextBlock
+                                    FontSize="9.5"
+                                    Opacity="0.7"
+                                    Text="{x:Bind ViewModel.SpaceNoteCount, Mode=OneWay}" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button
+                            x:Name="NotesLostFilter"
+                            Height="24"
+                            Padding="9,0"
+                            AutomationProperties.Name="Unanchored notes"
+                            Click="NotesFilter_Click"
+                            CornerRadius="6"
+                            Style="{StaticResource StudioIconButtonStyle}"
+                            Tag="Unanchored">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock FontSize="11" Text="Unanchored" />
+                                <TextBlock
+                                    FontSize="9.5"
+                                    Opacity="0.7"
+                                    Text="{x:Bind ViewModel.LostNoteCount, Mode=OneWay}" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <Grid Grid.Row="2">
+                        <ListView
+                            x:Name="NotesList"
+                            Padding="10,2,10,8"
+                            AutomationProperties.AutomationId="NotesList"
+                            AutomationProperties.Name="Notes"
+                            IsItemClickEnabled="True"
+                            ItemClick="NotesList_ItemClick"
+                            ItemTemplate="{StaticResource NoteCardTemplate}"
+                            ItemsSource="{x:Bind ViewModel.VisibleNotes, Mode=OneWay}"
+                            SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0" />
+                                    <Setter Property="MinHeight" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                        </ListView>
+
+                        <StackPanel
+                            Padding="18,24,18,0"
+                            VerticalAlignment="Top"
+                            IsHitTestVisible="False"
+                            Spacing="7"
+                            Visibility="{x:Bind ViewModel.NotesEmptyVisibility, Mode=OneWay}">
+                            <FontIcon
+                                HorizontalAlignment="Left"
+                                FontSize="20"
+                                Foreground="{ThemeResource StudioTextMutedBrush}"
+                                Glyph="&#xE90A;" />
+                            <TextBlock
+                                FontSize="12.5"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource StudioTextPrimaryBrush}"
+                                Text="{x:Bind ViewModel.NotesEmptyTitle, Mode=OneWay}" />
+                            <TextBlock
+                                FontSize="11"
+                                Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                Text="{x:Bind ViewModel.NotesEmptyDetail, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid
+                        Grid.Row="3"
+                        Height="38"
+                        Padding="14,0"
+                        BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                        BorderThickness="0,1,0,0"
+                        ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{ThemeResource StudioTextMutedBrush}"
+                            Text="{x:Bind ViewModel.NotesSummary, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
+
+                        <Button
+                            Grid.Column="1"
+                            Height="24"
+                            Padding="6,0"
+                            AutomationProperties.Name="Show notes in the workspace"
+                            Click="NotesSpaceButton_Click"
+                            Style="{StaticResource StudioIconButtonStyle}">
+                            <StackPanel Orientation="Horizontal" Spacing="3">
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{ThemeResource StudioTextSecondaryBrush}"
+                                    Text="Space notes" />
+                                <FontIcon
+                                    FontSize="8"
+                                    Foreground="{ThemeResource StudioTextMutedBrush}"
+                                    Glyph="&#xE76C;" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Grid>
+            </Border>
+
             <!--  Status bar  -->
             <Grid
                 Grid.Row="5"
+                Grid.ColumnSpan="2"
                 Padding="16,6,16,6"
                 BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0"
@@ -1206,6 +1625,17 @@
                         FontSize="10"
                         Style="{StaticResource StudioIconButtonStyle}"
                         Visibility="{x:Bind ViewModel.UndoGroupingVisibility, Mode=OneWay}" />
+
+                    <!--  A deleted note is reversible in place, like a grouping mistake.  -->
+                    <Button
+                        Padding="8,1"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Undo note delete"
+                        Command="{x:Bind ViewModel.UndoNoteDeleteCommand}"
+                        Content="Undo"
+                        FontSize="10"
+                        Style="{StaticResource StudioIconButtonStyle}"
+                        Visibility="{x:Bind ViewModel.UndoNoteDeleteVisibility, Mode=OneWay}" />
                 </StackPanel>
 
                 <StackPanel
@@ -1270,6 +1700,7 @@
                 x:Name="WelcomePage"
                 Grid.Row="1"
                 Grid.RowSpan="4"
+                Grid.ColumnSpan="2"
                 Padding="32"
                 Background="{ThemeResource StudioBackgroundBrush}"
                 Visibility="{x:Bind ViewModel.WelcomeVisibility, Mode=OneWay}">
@@ -1326,6 +1757,7 @@
                 x:Name="HistoryPage"
                 Grid.Row="1"
                 Grid.RowSpan="5"
+                Grid.ColumnSpan="2"
                 Padding="24,12,24,18"
                 Background="{ThemeResource StudioBackgroundBrush}"
                 Opacity="0"
@@ -2031,6 +2463,29 @@
                 <controls:SchemaBrowser x:Name="SchemaPeek" />
             </Border>
         </Grid>
+
+        <!--
+            Note editor anchored to the statement's marker. The pane is the library; this is the
+            writing surface. Light dismiss keeps clicking the query the natural way to leave it.
+        -->
+        <Popup
+            x:Name="NotePopup"
+            Closed="NotePopup_Closed"
+            IsLightDismissEnabled="True"
+            ShouldConstrainToRootBounds="True">
+            <Border
+                x:Name="NotePopupCard"
+                Width="384"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+                <controls:NoteEditorView
+                    x:Name="NoteEditor"
+                    CloseRequested="NoteEditor_CloseRequested"
+                    DeleteRequested="NoteEditor_DeleteRequested" />
+            </Border>
+        </Popup>
 
     </Grid>
 </Page>
