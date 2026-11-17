@@ -443,7 +443,7 @@ Current limitations, by design for now:
 | The index is not signed | The SHA-256 in the index detects a swapped zip, but whoever can edit the index can point at their own zip. Signing is specified in [`ADDONS.md`](ADDONS.md). |
 | `%LOCALAPPDATA%` is user-writable | An installed add-on is trusted code running in-process. Only install drivers you trust. |
 | A manually copied add-on still needs a manifest | Create `Plugins\<id>\<version>\larik-addon.json` and `current.json`; a bare DLL is not loaded. |
-| Release builds are self-contained | The WinUI app is never trimmed (`PublishTrimmed=false`) because XAML/x:Bind and reflection-based provider discovery do not survive it; it ships the .NET runtime and the Windows App SDK payload instead. The MCP server *is* trimmed — it has no XAML — with `TrimmerRootAssembly` for `Larik.Data*`, `Larik.Core` and the drivers, so built-in discovery keeps working. Add-ons are runtime-only DLLs the trimmer cannot see: they load, but a missing framework member is a real possibility, so validate a trimmed build against every add-on you ship. |
+| Release builds are self-contained | Nothing is trimmed (`PublishTrimmed=false` for both the app and the MCP server): XAML/x:Bind and reflection-based provider discovery do not survive it, and a trimmed MCP server (37.7 MB instead of 89.5 MB) was measured and then reverted because it broke MCP in real use. Both processes resolve providers through `AssemblyLoadContext` + `GetTypes`, so the cost of trimming is the plugin mechanism, not a build flag. |
 
 **Recommendation:** first-party engines ship as built-in project references in
 `Larik/App.xaml.cs` + `Larik.csproj`, using the same contracts a plugin would. That gives dependency
