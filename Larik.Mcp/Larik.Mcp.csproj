@@ -28,6 +28,51 @@
     <PackageReference Include="ModelContextProtocol" Version="2.4.0" />
   </ItemGroup>
 
+  <!--
+    The server ships self-contained, which means a second copy of the .NET runtime beside the app's
+    (89.5 MB unpacked). Trimming it is safe here in a way it is not for the WinUI shell: this EXE has
+    no XAML and no x:Bind, and everything that is discovered by reflection is rooted explicitly
+    below, so the trimmer can still drop the framework code nothing calls. Measured: 89.5 -> 37.7 MB
+    with the roots in place (27.4 MB without them, but that build discovers no providers).
+  -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Debug'">
+    <PublishTrimmed>true</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <!--
+      Trimming otherwise turns reflection-based System.Text.Json off, and every tool payload here is
+      an anonymous type serialized with JsonSerializer.Serialize. The assemblies that hold those
+      types are rooted below, so the reflection path is safe — it just has to stay enabled.
+    -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <!--
+      IL2026/IL2065/IL2062 are structural here, not oversights: provider types are discovered with
+      GetTypes + Activator, and the add-on loader loads DLLs that only exist at runtime. The
+      assemblies that need those members are rooted below, so the analysis noise buys nothing;
+      IL2104 (third-party drivers) stays visible.
+    -->
+    <NoWarn>$(NoWarn);IL2026;IL2065;IL2062</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Providers are found with Assembly.GetTypes() + Activator, and the drivers bring in their own
+    reflection (SqlClient authentication, Npgsql type mapping). Rooting the assemblies keeps those
+    members intact; without these entries the trimmer reduces Larik.Data.SqlServer to 4.6 KB and the
+    server discovers no providers at all.
+  -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Larik.Mcp" />
+    <TrimmerRootAssembly Include="Larik.Core" />
+    <TrimmerRootAssembly Include="Larik.Data" />
+    <TrimmerRootAssembly Include="Larik.Data.SqlServer" />
+    <TrimmerRootAssembly Include="Larik.Data.Postgres" />
+    <TrimmerRootAssembly Include="Microsoft.Data.SqlClient" />
+    <TrimmerRootAssembly Include="Microsoft.Data.Sqlite" />
+    <TrimmerRootAssembly Include="Npgsql" />
+    <TrimmerRootAssembly Include="SQLitePCLRaw.core" />
+    <TrimmerRootAssembly Include="SQLitePCLRaw.batteries_v2" />
+    <TrimmerRootAssembly Include="SQLitePCLRaw.provider.e_sqlite3" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Larik.Core\Larik.Core.csproj" />
     <ProjectReference Include="..\Larik.Data\Larik.Data.csproj" />
