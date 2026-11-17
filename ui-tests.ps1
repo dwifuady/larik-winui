@@ -1264,6 +1264,21 @@ try {
         # Fresh start: the connection belongs to the workspace and is off until asked for.
         Assert-True ((Find-Element 'Disconnected').matchCount -gt 0) 'workspace did not start disconnected'
         Assert-True ((Find-Element 'Connect').matchCount -gt 0) 'no way to connect'
+
+        # Running while disconnected asks to connect in place. Declining must leave the workspace
+        # as it was and write no failed result under the editor.
+        Invoke-Ui @('focus', 'Editor') | Out-Null
+        Send-Keys 'ctrl+a'
+        Send-Keys 'select 1' -Literal
+        Start-Sleep -Milliseconds 400
+        Send-Keys 'ctrl+enter'
+        Wait-ForText 'Connect to run queries' 10
+        Click-Element 'Not now'
+        Start-Sleep -Milliseconds 500
+        Assert-True ((Find-Element 'Connect to run queries').matchCount -eq 0) 'the connect prompt stayed open'
+        Assert-True ((Find-Element 'Disconnect').matchCount -eq 0) 'declining connected the workspace'
+        Assert-True ((Find-Element 'Not connected').matchCount -eq 0) 'a disconnected run still wrote an error result'
+
         Click-Element 'ConnectionToggleButton'
         Wait-ForText 'Connected' 15
         Assert-True ((Find-Element 'Disconnect').matchCount -gt 0) 'toggle did not offer Disconnect'

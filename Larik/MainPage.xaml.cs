@@ -363,7 +363,7 @@ public sealed partial class MainPage : Page
         var statement = ViewModel.ActiveLanguage is ISqlDialect dialect
             ? dialect.PreviewStatement(table.Schema, table.Name, 100)
             : $"SELECT * FROM {name}";
-        await ViewModel.RunSqlAsync($"{statement};", append: true);
+        await ViewModel.RunSqlAsync($"{statement};", append: true, ConfirmConnectAsync);
     }
 
     /// <summary>A complete procedure call in the active dialect, parameters filled with NULL.</summary>
@@ -817,8 +817,18 @@ public sealed partial class MainPage : Page
 
         // Selection, statement-under-caret and GO batches are decided once, in QueryRunner, so the
         // pop-out window runs exactly what this one would.
-        await ViewModel.RunBatchesAsync(QueryRunner.ResolveBatches(SqlEditor, all), append);
+        await ViewModel.RunBatchesAsync(
+            QueryRunner.ResolveBatches(SqlEditor, all),
+            append,
+            ConfirmConnectAsync);
     }
+
+    /// <summary>
+    /// The dispatcher for a run on a disconnected workspace: the dialog belongs to this window, so
+    /// asking and connecting stay in the same place the user pressed the key.
+    /// </summary>
+    private Task<bool> ConfirmConnectAsync(SpaceViewModel space) =>
+        ConnectPrompt.ShowAsync(XamlRoot, space);
 
     private Task RunStatementAsync(bool append = false) => RunFromEditorAsync(all: false, append);
 

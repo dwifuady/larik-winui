@@ -141,7 +141,9 @@ what it deliberately does not do yet. Update it when behaviour changes, and keep
   switcher, whose chip shows the workspace name; the line beneath carries the connection state (dot
   **and** `Connected`/`Disconnected`) and the one action for it, so **spaces start disconnected**
   and the way to connect is beside the workspace rather than in the status bar. Running a query
-  while disconnected is refused with an explicit message. While a statement runs, a **Running…**
+  while disconnected asks whether to connect first, with **Connect** as the primary action and
+  **Not now** leaving the tab untouched instead of writing a failed result; connecting from that
+  prompt runs the pending query. While a statement runs, a **Running…**
   pill with a progress ring sits in the toolbar (beside Stop) and a full-width indeterminate bar
   under the toolbar keeps the state visible even when the editor has focus. The database row under it is a picker for
   the active tab, filled from the provider once connected, and it is absent while disconnected

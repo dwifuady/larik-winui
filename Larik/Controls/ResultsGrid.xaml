@@ -348,7 +348,7 @@
             <Border
                 x:Name="CellEditorHost"
                 Width="240"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                Background="{ThemeResource ElevatedSurfaceBrush}"
                 BorderBrush="{ThemeResource StudioAccentBrush}"
                 BorderThickness="1"
                 CornerRadius="6">
