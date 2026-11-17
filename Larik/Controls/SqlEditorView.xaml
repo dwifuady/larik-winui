@@ -9,6 +9,26 @@
     xmlns:models="using:Larik.Models"
     mc:Ignorable="d">
 
+    <UserControl.Resources>
+        <!--
+            The note marker sits at the editor's right edge. Badge, not sticker: the colour and
+            shape read as "there is a note here" without becoming the loudest thing in a query.
+        -->
+        <Style x:Key="NoteMarkerButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="22" />
+            <Setter Property="MinWidth" Value="24" />
+            <Setter Property="Padding" Value="6,0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="{ThemeResource StudioAccentSoftBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource StudioAccentBrush}" />
+            <Setter Property="Foreground" Value="{ThemeResource StudioTextPrimaryBrush}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
+        </Style>
+    </UserControl.Resources>
+
     <!--  One implementation of IEditorSurface: RichEditBox + a caret-anchored suggestion popup.  -->
     <Grid>
         <Border
@@ -95,6 +115,23 @@
                 <Canvas x:Name="AutoscrollLayer" Grid.Column="1" IsHitTestVisible="False">
                     <local:AutoscrollIndicator x:Name="AutoscrollPointer" Visibility="Collapsed" />
                 </Canvas>
+
+                <!--  The anchored statement's bar. Decoration: never takes the pointer.  -->
+                <Canvas
+                    x:Name="NoteAnchorLayer"
+                    Grid.Column="1"
+                    IsHitTestVisible="False">
+                    <Border
+                        x:Name="ActiveNoteBar"
+                        Width="3"
+                        HorizontalAlignment="Left"
+                        Background="{ThemeResource StudioAccentBrush}"
+                        CornerRadius="2"
+                        Visibility="Collapsed" />
+                </Canvas>
+
+                <!--  Note markers are real buttons: clickable, focusable, announced.  -->
+                <Canvas x:Name="NoteMarkerLayer" Grid.Column="1" />
             </Grid>
         </Border>
 

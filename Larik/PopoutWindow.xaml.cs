@@ -27,6 +27,7 @@ public sealed partial class PopoutWindow : Window
     private bool _pinned = true;
     private bool _editorCollapsed;
     private bool _updatingContent;
+    private string _lastText = string.Empty;
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -68,6 +69,7 @@ public sealed partial class PopoutWindow : Window
         Editor.CompletionSource = _completionSource;
         Editor.EditorLanguage = Tab.Space.Connection.EditorLanguage;
         Editor.Text = Tab.Content;
+        _lastText = Tab.Content;
         Editor.TextChanged += Editor_TextChanged;
         Editor.CommandRequested += Editor_CommandRequested;
         Editor.SnippetRequested += Editor_SnippetRequested;
@@ -171,12 +173,20 @@ public sealed partial class PopoutWindow : Window
 
     private void Editor_TextChanged(object? sender, EventArgs e)
     {
+        var text = Editor.Text;
+
+        // This window's editor is the visible surface for a popped-out tab, so it is also where
+        // that tab's anchors must rebase. Without this a note would drift while the tab is popped
+        // out and only correct itself on the next reload.
+        ViewModel.RebaseNotes(Tab, _lastText, text);
+        _lastText = text;
+
         // The tab's own content is the source of truth; writing it back keeps saving and docking
         // exact, and the guard stops an external refresh from fighting the caret.
         _updatingContent = true;
         try
         {
-            Tab.Content = Editor.Text;
+            Tab.Content = text;
         }
         finally
         {
@@ -301,6 +311,7 @@ public sealed partial class PopoutWindow : Window
                 if (!string.Equals(Editor.Text, Tab.Content, StringComparison.Ordinal))
                 {
                     Editor.Text = Tab.Content;
+                    _lastText = Tab.Content;
                     ApplyCollapsedQuery();
                 }
 

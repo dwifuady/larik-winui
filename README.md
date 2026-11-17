@@ -71,6 +71,13 @@ instead.
 - **One session per tab.** Temp tables, `SET` options and `BEGIN TRAN` stay on that tab; a `TXN`
   guard offers Commit and Roll back, and `USE` moves the tab, rail and completion to the new
   database.
+- **Notes that follow the code.** `Ctrl+Alt+N` attaches a note to the statement under the caret, or
+  to a selection. The anchor is the statement range and a text fingerprint, not a line number, so
+  inserting lines above moves the note with its SQL and a restart re-finds it by its text. A note
+  whose anchored text was deleted is kept as **Anchor lost** with one-click re-anchor instead of
+  silently pointing at the wrong line. Four kinds (Note / TODO / Decision / Observation) replace a
+  colour picker, the Notes pane lists this tab, the whole workspace or only unanchored notes, and
+  deletion is undoable from the status bar.
 - **Results that hold up.** One result tab per result set — drag to reorder, double-click to rename
   — a virtualized grid with a sticky row-number gutter, draggable columns, syntax-coloured cell
   preview with JSON/XML formatting and Ctrl+F find, foreign-key and **custom** reference previews,

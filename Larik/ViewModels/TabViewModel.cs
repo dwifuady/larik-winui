@@ -30,6 +30,10 @@ public partial class TabViewModel : ObservableObject
         Session = new QuerySession(space.Connection.CreateSession);
         Session.StateChanged += (_, _) => RaiseSessionStateChanged();
 
+        // The rail badge and the notes pane both read from this collection; the shell adds a note
+        // when it is created or loaded, so the count never has to be recomputed from the store.
+        Notes.CollectionChanged += (_, _) => NotifyNotesChanged();
+
         // The workspace colour flows through to the tab strip and tint.
         space.PropertyChanged += (_, args) =>
         {
@@ -104,6 +108,11 @@ public partial class TabViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(TitleBrush));
         OnPropertyChanged(nameof(TransactionBrush));
+
+        foreach (var note in Notes)
+        {
+            note.NotifyThemeChanged();
+        }
     }
 
     [ObservableProperty]
@@ -209,6 +218,31 @@ public partial class TabViewModel : ObservableObject
 
     /// <summary>Result tabs produced by this query tab, in execution order.</summary>
     public ObservableCollection<ResultSetViewModel> Results { get; } = [];
+
+    /// <summary>
+    /// This tab's notes, in document order. They belong to the tab (not to the pane or the active
+    /// selection), so switching tabs, archiving and restoring all keep them with their query.
+    /// </summary>
+    public ObservableCollection<NoteViewModel> Notes { get; } = [];
+
+    public int NoteCount => Notes.Count;
+
+    public bool HasNotes => Notes.Count > 0;
+
+    public Visibility NotesBadgeVisibility => Notes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public string NotesBadgeText => Notes.Count > 99 ? "99+" : Notes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    public string NotesBadgeLabel => Notes.Count == 1 ? "1 note" : $"{Notes.Count} notes";
+
+    private void NotifyNotesChanged()
+    {
+        OnPropertyChanged(nameof(NoteCount));
+        OnPropertyChanged(nameof(HasNotes));
+        OnPropertyChanged(nameof(NotesBadgeVisibility));
+        OnPropertyChanged(nameof(NotesBadgeText));
+        OnPropertyChanged(nameof(NotesBadgeLabel));
+    }
 
     private ResultSetViewModel? _activeResult;
 

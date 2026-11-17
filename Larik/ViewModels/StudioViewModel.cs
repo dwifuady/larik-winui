@@ -70,6 +70,9 @@ public partial class StudioViewModel : ObservableObject
 
         RefreshArchiveView();
 
+        // Notes belong to tabs, not to the rail: a tab leaving the list leaves the pane's scope.
+        RefreshNotes();
+
         Spaces.CollectionChanged += (_, _) =>
         {
             ScheduleSave();
@@ -79,11 +82,14 @@ public partial class StudioViewModel : ObservableObject
         ThemeService.Changed += (_, _) => NotifyThemeChanged();
         PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab))
+            if (args.PropertyName is nameof(ActiveSpace) or nameof(ActiveTab) or nameof(IsNotesPaneOpen))
             {
                 ScheduleSave();
             }
         };
+
+        // Notes are loaded after the tab list exists: resolving an anchor needs each tab's text.
+        LoadNotesFromStore();
     }
 
     public ObservableCollection<SpaceViewModel> Spaces { get; } = [];
@@ -1158,6 +1164,7 @@ public partial class StudioViewModel : ObservableObject
         tab.Group = null;
         space.Tabs.Remove(tab);
         RebuildTabOrder(space);
+        RefreshNotes();
 
         if (ReferenceEquals(space, ActiveSpace))
         {
@@ -1236,6 +1243,9 @@ public partial class StudioViewModel : ObservableObject
 
         RebuildTabOrder(space);
 
+        // Notes are keyed by the tab id, which archiving preserved; load them with the tab.
+        LoadNotesFor(tab);
+
         if (ReferenceEquals(space, ActiveSpace))
         {
             RefreshTabRail();
@@ -1251,6 +1261,8 @@ public partial class StudioViewModel : ObservableObject
     {
         if (ArchivedTabs.Remove(archived))
         {
+            _store.DeleteNotesForTab(archived.Id);
+            RefreshNotes();
             RefreshArchiveView();
             ScheduleSave();
             StatusText = $"Deleted archived tab {archived.Title}";
@@ -1265,7 +1277,9 @@ public partial class StudioViewModel : ObservableObject
         }
 
         var count = ArchivedTabs.Count;
+        _store.DeleteNotesForTabs(ArchivedTabs.Select(tab => tab.Id));
         ArchivedTabs.Clear();
+        RefreshNotes();
         RefreshArchiveView();
         ScheduleSave();
         StatusText = $"Cleared {count} archived tab{(count == 1 ? string.Empty : "s")}";
@@ -2624,6 +2638,8 @@ public partial class StudioViewModel : ObservableObject
         {
             ActiveTab = null;
             SyncResultMirror(null);
+            SetActiveNote(null);
+            RefreshNotes();
             StatusText = "Ready";
             NotifyPopoutChrome();
             return;
@@ -2652,6 +2668,11 @@ public partial class StudioViewModel : ObservableObject
         }
 
         SyncResultMirror(tab);
+
+        // The pane belongs to the tab you are looking at; a note editor left open on the previous
+        // tab must not keep pointing at text that is no longer on screen.
+        SetActiveNote(null);
+        RefreshNotes();
 
         // A run can finish while another tab is active; this restores that tab's own status
         // instead of leaving the shell stuck on "Running…".
@@ -2690,6 +2711,11 @@ public partial class StudioViewModel : ObservableObject
         OnPropertyChanged(nameof(IsActiveTabPoppedOut));
         OnPropertyChanged(nameof(EditorChromeVisibility));
         OnPropertyChanged(nameof(PoppedOutVisibility));
+
+        // Notes are edited beside the visible editor; a popped-out tab's editor is in its own
+        // window, so the docked pane (and its width) goes with the chrome.
+        OnPropertyChanged(nameof(NotesPaneVisibility));
+        OnPropertyChanged(nameof(NotesPaneWidth));
     }
 
     /// <summary>
@@ -3095,6 +3121,7 @@ public partial class StudioViewModel : ObservableObject
     public void SaveNow()
     {
         _saveTimer?.Stop();
+        FlushPendingNotes();
         _store.Save(CaptureState());
     }
 
@@ -3130,6 +3157,7 @@ public partial class StudioViewModel : ObservableObject
         ResultsPaneHeight = ResultsPaneHeight,
         CellPreviewWidth = CellPreviewWidth,
         Theme = ThemeService.ToStorage(Theme),
+        NotesPaneOpen = IsNotesPaneOpen,
         Spaces = Spaces.Select(space => new SpaceState
         {
             Id = space.Id,
@@ -3233,6 +3261,7 @@ public partial class StudioViewModel : ObservableObject
         ResultsPaneHeight = state.ResultsPaneHeight;
         CellPreviewWidth = state.CellPreviewWidth;
         Theme = ThemeService.Parse(state.Theme);
+        IsNotesPaneOpen = state.NotesPaneOpen;
         _queryCounter = Math.Max(0, state.QueryCounter);
         AutoArchiveEnabled = state.AutoArchiveEnabled;
         AutoArchiveDays = Math.Clamp(state.AutoArchiveDays <= 0 ? 30 : state.AutoArchiveDays, 1, 3650);
