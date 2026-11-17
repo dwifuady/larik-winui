@@ -169,6 +169,6 @@
     <!-- A real dotnet process, not a nested MSBuild call: a publish for a runtime identifier needs
          its own restore, and MSBuild skips Restore when it runs inside a build session. -->
     <Exec
-      Command="dotnet publish &quot;$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishTrimmed=true -o &quot;$(PublishDir)mcp&quot; --nologo -v quiet" />
+      Command="dotnet publish &quot;$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishTrimmed=false -o &quot;$(PublishDir)mcp&quot; --nologo -v quiet" />
   </Target>
 </Project>
