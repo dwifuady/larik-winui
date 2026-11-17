@@ -389,6 +389,13 @@ app with it. Mitigations:
 Out-of-process hosting is the real isolation answer and is explicitly out of scope. Do not
 describe add-ons as sandboxed.
 
+One asymmetric case: the released **MCP server is trimmed**, so it loads add-ons best-effort — the
+manifest and entry assembly load as usual, but a framework member the add-on expects may have been
+removed from that process. The WinUI app is never trimmed, and both processes discover the same
+add-ons from `Plugins`, so an add-on can work in the studio and fail inside `Larik.Mcp.exe`. Treat
+that as a known gap (the server reports the failure and stays up); the fix, if it ever bites, is to
+publish `Larik.Mcp` untrimmed for that build rather than to untrim the app.
+
 ---
 
 ## 8. Install, update, remove

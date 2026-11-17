@@ -44,9 +44,11 @@ builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogL
 
 builder.Services.AddSingleton(new StudioStore());
 builder.Services.AddSingleton<StudioContext>();
+// The generic overload, not WithToolsFromAssembly(): the trimmed server cannot rely on the SDK
+// scanning for [McpServerToolType] at runtime, and this list is one type anyway.
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithTools<StudioTools>();
 
 await builder.Build().RunAsync();

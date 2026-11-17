@@ -48,6 +48,23 @@ rebuilds its `AppX` folder and drops the copy (the alias dangles until a real pa
 and the Store build's generated manifest must keep the second `Application` entry — check
 `obj\store\Package.appxmanifest` before a Store submission.
 
+That folder is a second complete runtime, so the released server is **trimmed**: `Larik.Mcp.csproj`
+sets `PublishTrimmed` off Debug and roots (`TrimmerRootAssembly`) the provider, driver and store
+assemblies, because `DatabaseProviderCatalog` finds providers with `GetTypes` + `Activator`.
+Two switches are load-bearing and were both needed to make it work:
+
+- `JsonSerializerIsReflectionEnabledByDefault=true` — trimming otherwise disables reflection-based
+  `System.Text.Json`, and every tool payload is an anonymous type serialized by reflection. The
+  failure is silent: the tool answers "An error occurred invoking 'list_connections'." with the
+  real `InvalidOperationException` only in `--state`-level logs.
+- `WithTools<StudioTools>()` instead of `WithToolsFromAssembly()`.
+
+Measured 89.5 MB → 37.7 MB, verified by driving the published server over stdio: `initialize`,
+`tools/list` (all five tools), `list_connections`, `run_query` against LocalDB returning `select 1`,
+and `get_schema`. Add-ons remain runtime-only DLLs the trimmer cannot see, so a trimmed server loads
+them best-effort; if a third-party driver misbehaves there, publish the MCP project untrimmed rather
+than untrimming the app.
+
 ### Driving the MCP server by hand
 
 The server is a normal stdio process: send newline-delimited JSON-RPC on stdin and read replies on
@@ -65,6 +82,10 @@ In the released layout the EXE sits beside `Larik.exe` and a packaged build alia
 `larik-mcp`, so clients need neither the path nor `--state`. Settings → AI agents renders the exact
 command for each client with this build's real paths.
 
+Piping a single line works for a smoke test, but the host can shut down on stdin EOF before stdout
+is flushed, so a hand-written check sometimes prints nothing: keep the pipe open (an MCP client, or a
+short script that writes, waits, then closes) when you need the reply.
+
 ## Build and run
 
 From the repository root:
@@ -81,6 +102,27 @@ are self-contained and need no separate .NET install.
 `dotnet build -c Release` produces a self-contained WinUI build (trimming is off, so XAML and
 x:Bind survive) and needs no extra flags. Day-to-day runs go through `winapp run`; the release
 workflow uses `dotnet publish` with `WindowsPackageType=None` for the portable artifacts.
+
+### What a release build weighs
+
+Both artifacts are self-contained — .NET 10 plus the Windows App SDK payload — because a clean
+Windows 10 1809 machine has neither, and a WinUI app cannot be trimmed. The size is therefore a
+handful of deliberate choices, each easy to undo by accident:
+
+| Decision | Why it is there | Cost of undoing it (win-x64) |
+|---|---|---|
+| `Microsoft.WindowsAppSDK.{WinUI,DWrite,Runtime}` instead of the meta package | the meta package also brings `.AI`, `.ML`, `.Search`, `.Widgets`: `onnxruntime.dll` 22 MB, `DirectML.dll` 17.8 MB, Search 4 MB, none of which this app loads | +43 MB |
+| `TargetFramework` `windows10.0.19041.0` | the WinRT projection is generated per target platform version: `Microsoft.Windows.SDK.NET.dll` is 23.7 MB at 19041 and 55.8 MB at 26100, and nothing here needs a newer contract | +32 MB |
+| MCP server trimmed, provider and driver assemblies rooted | `mcp\` is a second self-contained runtime; trimming takes it from 89.5 MB to 37.7 MB (see the MCP notes above) | +52 MB |
+| `PublishReadyToRun` on (app only) | cold start; R2R roughly doubles the managed DLLs | 144 MB on disk, ~18 MB zipped |
+
+Measured with
+`dotnet publish Larik/Larik.csproj -c Release -r win-x64 -p:Platform=x64 -p:SelfContained=true -p:WindowsAppSDKSelfContained=true -p:WindowsPackageType=None`:
+0.2.3 (R2R, meta package, TFM 26100, untrimmed MCP) was **390 MB on disk / 155.8 MB zipped / 104.5 MB
+setup**; the current combination is **274 MB / 107 MB / 70 MB**, of which 37.7 MB is the MCP folder.
+The installer is the same `installer/Larik.iss` in both cases (LZMA2 max, solid), so the two setup
+numbers are directly comparable. Package versions are pinned for the same reason: `Version="*"` is
+what let the AI/ML payload appear without a code change.
 
 The Store configuration ships only the built-in providers. Generate its manifest first:
 

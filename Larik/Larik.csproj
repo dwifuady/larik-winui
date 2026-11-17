@@ -1,7 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <!--
+      19041, not 26100: the WinRT projection (Microsoft.Windows.SDK.NET.dll) is generated per target
+      platform version and grows with it — 55.8 MB at 26100 against 23.7 MB at 19041 — and this app
+      uses no API newer than 19041. Raise it only when something actually needs a newer contract.
+    -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Larik</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -74,11 +79,21 @@
     <PropertyGroup> above to opt out.
   -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="*" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="*" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="*" />
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="*" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
+    <!--
+      The component packages, not the Microsoft.WindowsAppSDK meta package: the meta package also
+      drags in .AI, .ML, .Search and .Widgets, whose payload (onnxruntime.dll 22 MB, DirectML.dll
+      17.8 MB, Search 4 MB …) this app never loads — 43 MB of the self-contained payload. Each
+      component contributes its own files to the self-contained copy, so referencing only what is
+      used is what shrinks the install. Versions are pinned: with "*" a restore can silently pull a
+      new payload, which is how the AI/ML files arrived in the first place.
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2957" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.6.5" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.6.5" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.6.5" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.8.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Larik.Core\Larik.Core.csproj" />
@@ -154,6 +169,6 @@
     <!-- A real dotnet process, not a nested MSBuild call: a publish for a runtime identifier needs
          its own restore, and MSBuild skips Restore when it runs inside a build session. -->
     <Exec
-      Command="dotnet publish &quot;$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishTrimmed=false -o &quot;$(PublishDir)mcp&quot; --nologo -v quiet" />
+      Command="dotnet publish &quot;$(MSBuildProjectDirectory)\..\Larik.Mcp\Larik.Mcp.csproj&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishTrimmed=true -o &quot;$(PublishDir)mcp&quot; --nologo -v quiet" />
   </Target>
 </Project>
