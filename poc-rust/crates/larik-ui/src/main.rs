@@ -7,7 +7,10 @@ mod theme;
 use std::sync::Arc;
 
 use gpui_kit::assets::AllAssets;
-use gpui_kit::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use gpui_kit::component::TitleBar;
+use gpui_kit::{
+    AppContext as _, Bounds, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size,
+};
 use larik_core::session::SessionManager;
 use larik_core::store::StudioStore;
 use larik_data::ProviderCatalog;
@@ -34,15 +37,13 @@ fn main() {
             let bounds = Bounds::centered(None, size(px(1360.0), px(860.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Larik — Rust GPUI PoC".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                window_min_size: Some(size(px(900.0), px(600.0))),
+                window_background: WindowBackgroundAppearance::MicaBackdrop,
+                ..TitleBar::window_options()
             };
 
             gpui_kit::open_window(options, cx, |window, cx| {
-                window.set_window_title("Larik — Rust GPUI PoC");
+                window.set_window_title("Larik SQL Studio");
                 cx.new(|cx| {
                     StudioView::new(catalog.clone(), store, sessions.clone(), window, cx)
                 })

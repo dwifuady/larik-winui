@@ -3,23 +3,27 @@ use std::sync::{Arc, RwLock};
 use anyhow::Result;
 use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt};
 use gpui_kit::{App, Task, Window};
-use larik_data::sql_language::{CompletionKind, SqlLanguage, suggest_completions};
-use larik_data::{EditorLanguage, TableSchema};
+use larik_data::sql_language::{
+    CompletionKind, SqlLanguage, suggest_completions_with_context,
+};
+use larik_data::{DatabaseInfo, EditorLanguage, TableSchema};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse,
-    CompletionTextEdit, Range, TextEdit,
+    CompletionTextEdit, CompletionTriggerKind, Range, TextEdit,
 };
 
 #[derive(Clone)]
 pub struct CompletionSnapshot {
-    pub tables: Vec<TableSchema>,
+    pub tables: Arc<Vec<TableSchema>>,
+    pub databases: Arc<Vec<DatabaseInfo>>,
     pub language: Arc<dyn EditorLanguage>,
 }
 
 impl Default for CompletionSnapshot {
     fn default() -> Self {
         Self {
-            tables: Vec::new(),
+            tables: Arc::new(Vec::new()),
+            databases: Arc::new(Vec::new()),
             language: Arc::new(SqlLanguage::tsql()),
         }
     }
@@ -41,7 +45,7 @@ impl CompletionProvider for SqlCompletionProvider {
         &self,
         text: &Rope,
         offset: usize,
-        _trigger: CompletionContext,
+        trigger: CompletionContext,
         _window: &mut Window,
         _cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
@@ -52,8 +56,15 @@ impl CompletionProvider for SqlCompletionProvider {
             .map(|g| g.clone())
             .unwrap_or_default();
 
-        let (word_start, candidates) =
-            suggest_completions(&sql, offset, &snap.tables, snap.language.as_ref());
+        let is_explicit = trigger.trigger_kind == CompletionTriggerKind::INVOKED;
+        let (word_start, candidates) = suggest_completions_with_context(
+            &sql,
+            offset,
+            snap.tables.as_slice(),
+            snap.databases.as_slice(),
+            snap.language.as_ref(),
+            is_explicit,
+        );
 
         let start_pos = text.offset_to_position(word_start);
         let end_pos = text.offset_to_position(offset);
@@ -69,8 +80,13 @@ impl CompletionProvider for SqlCompletionProvider {
                     CompletionKind::Column => CompletionItemKind::FIELD,
                     CompletionKind::Keyword => CompletionItemKind::KEYWORD,
                     CompletionKind::Function => CompletionItemKind::FUNCTION,
+                    CompletionKind::Join => CompletionItemKind::SNIPPET,
+                    CompletionKind::Database => CompletionItemKind::MODULE,
+                    CompletionKind::Variable => CompletionItemKind::VARIABLE,
+                    CompletionKind::Cte => CompletionItemKind::CLASS,
                 }),
                 detail: c.detail,
+                filter_text: c.filter_text,
                 sort_text: Some(format!("{idx:04}")),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: replace_range,
@@ -85,6 +101,9 @@ impl CompletionProvider for SqlCompletionProvider {
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         new_text == "."
+            || new_text == " "
+            || new_text == "["
+            || new_text == "@"
             || new_text
                 .chars()
                 .last()

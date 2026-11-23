@@ -55,6 +55,12 @@ pub struct SpaceState {
     pub active_database: Option<String>,
     pub active_tab_id: Option<String>,
     pub tabs: Vec<TabState>,
+    #[serde(default)]
+    pub is_hidden: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +71,8 @@ pub struct StudioState {
     pub query_counter: u32,
     pub theme: ThemePreference,
     pub schema_pane_open: bool,
+    #[serde(default = "default_true")]
+    pub rail_open: bool,
 }
 
 impl StudioState {
@@ -109,6 +117,7 @@ FROM dbo.products p;\n"
                         .into(),
                 },
             ],
+            is_hidden: false,
         };
 
         let mut spaces = vec![demo_space];
@@ -138,6 +147,7 @@ FROM sys.databases\n\
 ORDER BY name;\n"
                         .into(),
                 }],
+                is_hidden: false,
             });
         }
 
@@ -148,6 +158,7 @@ ORDER BY name;\n"
             query_counter: 3,
             theme: ThemePreference::Dark,
             schema_pane_open: false,
+            rail_open: true,
         }
     }
 

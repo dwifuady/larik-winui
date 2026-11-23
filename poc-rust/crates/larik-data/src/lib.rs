@@ -259,6 +259,11 @@ pub trait EditorLanguage: Send + Sync {
 
     /// Dialect built-in functions offered in editor completion.
     fn functions(&self) -> &'static [&'static str];
+
+    /// Quote a SQL identifier using this dialect's delimiters (default: T-SQL `[name]`).
+    fn quote_identifier(&self, identifier: &str) -> String {
+        format!("[{}]", identifier.replace(']', "]]"))
+    }
 }
 
 /// One live session to a database engine. Each query tab owns its own connection.

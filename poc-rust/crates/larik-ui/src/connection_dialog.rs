@@ -29,14 +29,18 @@ pub struct ConnectionModal {
     pub show_advanced: bool,
     pub testing: bool,
     pub test_status: Option<Result<String, String>>,
+    pub can_delete: bool,
+    pub confirming_delete: bool,
 }
 
 impl ConnectionModal {
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         space_id: String,
         space_name: &str,
         space_color: &str,
         profile: &ConnectionProfile,
+        can_delete: bool,
         catalog: &ProviderCatalog,
         window: &mut Window,
         cx: &mut App,
@@ -57,6 +61,8 @@ impl ConnectionModal {
             show_advanced: false,
             testing: false,
             test_status: None,
+            can_delete,
+            confirming_delete: false,
         };
         modal.rebuild_fields(profile, catalog, window, cx);
         modal
@@ -169,13 +175,15 @@ pub fn render_connection_modal<V: 'static>(
     catalog: &ProviderCatalog,
     palette: StudioPalette,
     cx: &mut Context<V>,
-    on_close: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    on_close: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
     on_switch_provider: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
     on_pick_color: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
     on_toggle_bool: impl Fn(&mut V, String, bool, &mut Window, &mut Context<V>) + 'static + Clone,
     on_toggle_advanced: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
     on_test: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
     on_save_connect: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    on_toggle_delete_confirm: impl Fn(&mut V, bool, &mut Window, &mut Context<V>) + 'static + Clone,
+    on_confirm_delete: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
 ) -> impl IntoElement {
     let providers: Vec<Arc<dyn DatabaseProvider>> = catalog.all().to_vec();
     let active_provider = catalog.find(&modal.provider_id);
@@ -188,16 +196,29 @@ pub fn render_connection_modal<V: 'static>(
         .map(|p| p.settings().iter().filter(|s| s.is_advanced).collect())
         .unwrap_or_default();
 
-    let close_backdrop = cx.listener(move |this, _, window, cx| on_close(this, window, cx));
+    let on_close_backdrop = on_close.clone();
+    let on_close_header = on_close.clone();
+    let on_close_footer = on_close;
+
+    let close_backdrop =
+        cx.listener(move |this, _, window, cx| on_close_backdrop(this, window, cx));
+    let close_header = cx.listener(move |this, _, window, cx| on_close_header(this, window, cx));
+    let close_footer = cx.listener(move |this, _, window, cx| on_close_footer(this, window, cx));
     let on_test_click = cx.listener(move |this, _, window, cx| on_test(this, window, cx));
     let on_save_click = cx.listener(move |this, _, window, cx| on_save_connect(this, window, cx));
     let on_adv_click = cx.listener(move |this, _, window, cx| on_toggle_advanced(this, window, cx));
+    let on_del_arm_fn = on_toggle_delete_confirm.clone();
+    let on_del_arm = cx.listener(move |this, _, window, cx| on_del_arm_fn(this, true, window, cx));
+    let on_del_cancel =
+        cx.listener(move |this, _, window, cx| on_toggle_delete_confirm(this, false, window, cx));
+    let on_del_confirm =
+        cx.listener(move |this, _, window, cx| on_confirm_delete(this, window, cx));
 
     div()
         .id("connection-modal-backdrop")
         .absolute()
         .inset_0()
-        .bg(hsla(0.0, 0.0, 0.0, 0.56))
+        .bg(hsla(0.0, 0.0, 0.0, 0.58))
         .flex()
         .items_center()
         .justify_center()
@@ -205,13 +226,13 @@ pub fn render_connection_modal<V: 'static>(
         .child(
             div()
                 .id("connection-modal-card")
-                .w(px(520.0))
-                .max_h(px(680.0))
-                .rounded(px(12.0))
-                .bg(palette.rail_bg)
+                .w(px(540.0))
+                .max_h(px(690.0))
+                .rounded(px(10.0))
+                .bg(palette.modal_bg)
                 .border_1()
-                .border_color(palette.hairline)
-                .shadow_xl()
+                .border_color(palette.card_border)
+                .shadow_2xl()
                 .flex()
                 .flex_col()
                 .overflow_hidden()
@@ -223,10 +244,12 @@ pub fn render_connection_modal<V: 'static>(
                     h_flex()
                         .px_5()
                         .py_3p5()
+                        .bg(palette.subtle_fill.opacity(0.45))
                         .border_b_1()
                         .border_color(palette.hairline)
                         .items_center()
                         .justify_between()
+                        .gap_3()
                         .child(
                             v_flex()
                                 .gap_0p5()
@@ -241,8 +264,18 @@ pub fn render_connection_modal<V: 'static>(
                                     div()
                                         .text_xs()
                                         .text_color(palette.text_muted)
-                                        .child("Fields are generated directly from the selected provider."),
+                                        .child(
+                                            "Fields are generated directly from the selected provider.",
+                                        ),
                                 ),
+                        )
+                        .child(
+                            Button::new("modal-close-x")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::X)
+                                .tooltip("Close (Esc)")
+                                .on_click(close_header),
                         ),
                 )
                 // Body
@@ -436,6 +469,57 @@ pub fn render_connection_modal<V: 'static>(
                                                     .child(msg),
                                             ),
                                     )
+                                })
+                                // Confirmed workspace deletion (archived tabs survive)
+                                .when(modal.can_delete, |el| {
+                                    let confirming = modal.confirming_delete;
+                                    el.child(
+                                        h_flex()
+                                            .mt_2()
+                                            .pt_3()
+                                            .border_t_1()
+                                            .border_color(palette.hairline_subtle)
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(palette.text_muted)
+                                                    .child(if confirming {
+                                                        "Delete this workspace? Archived tabs survive."
+                                                    } else {
+                                                        "Remove workspace (archived tabs survive)."
+                                                    }),
+                                            )
+                                            .child(if confirming {
+                                                h_flex()
+                                                    .gap_1p5()
+                                                    .child(
+                                                        Button::new("modal-del-cancel")
+                                                            .ghost()
+                                                            .xsmall()
+                                                            .label("Keep")
+                                                            .on_click(on_del_cancel),
+                                                    )
+                                                    .child(
+                                                        Button::new("modal-del-confirm")
+                                                            .danger()
+                                                            .xsmall()
+                                                            .label("Delete workspace")
+                                                            .on_click(on_del_confirm),
+                                                    )
+                                                    .into_any_element()
+                                            } else {
+                                                Button::new("modal-del-arm")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Trash)
+                                                    .label("Delete…")
+                                                    .on_click(on_del_arm)
+                                                    .into_any_element()
+                                            }),
+                                    )
                                 }),
                         ),
                 )
@@ -444,6 +528,7 @@ pub fn render_connection_modal<V: 'static>(
                     h_flex()
                         .px_5()
                         .py_3()
+                        .bg(palette.subtle_fill.opacity(0.45))
                         .border_t_1()
                         .border_color(palette.hairline)
                         .items_center()
@@ -464,6 +549,13 @@ pub fn render_connection_modal<V: 'static>(
                         .child(
                             h_flex()
                                 .gap_2()
+                                .child(
+                                    Button::new("modal-cancel")
+                                        .ghost()
+                                        .small()
+                                        .label("Cancel")
+                                        .on_click(close_footer),
+                                )
                                 .child(
                                     Button::new("modal-save-connect")
                                         .primary()
