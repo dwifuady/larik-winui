@@ -1,0 +1,15 @@
+[package]
+name = "larik-provider-mssql"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+larik-data.workspace = true
+tiberius.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

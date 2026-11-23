@@ -1,0 +1,17 @@
+[package]
+name = "larik-ui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+gpui-kit.workspace = true
+larik-core.workspace = true
+larik-data.workspace = true
+larik-provider-demo.workspace = true
+larik-provider-mssql.workspace = true
+lsp-types.workspace = true
+tokio.workspace = true
+uuid.workspace = true

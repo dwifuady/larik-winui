@@ -1,0 +1,11 @@
+[package]
+name = "larik-provider-demo"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+larik-data.workspace = true
+tokio.workspace = true
