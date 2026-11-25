@@ -1,28 +1,89 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::{DatabaseInfo, EditorLanguage, ForeignKeySchema, TableKind, TableSchema, TextSpan};
+pub use crate::{CompletionCandidate, CompletionKind};
+use crate::{
+    DatabaseInfo, EditorLanguage, ForeignKeySchema, SnippetDef, TableKind, TableSchema, TextSpan,
+    expand_snippet,
+};
 
-/// Generic SQL + T-SQL dialect implementation for statement/batch splitting and completion metadata.
+/// Identifier quoting style used by a SQL dialect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentifierQuoteStyle {
+    /// T-SQL brackets: `[name]`, escaping `]` as `]]`.
+    Brackets,
+    /// ANSI SQL / PostgreSQL / SQLite double quotes: `"name"`, escaping `"` as `""`.
+    DoubleQuotes,
+    /// MySQL backticks: `` `name` ``, escaping `` ` `` as `` `` ``.
+    Backticks,
+}
+
+impl IdentifierQuoteStyle {
+    pub fn quote(&self, identifier: &str) -> String {
+        match self {
+            Self::Brackets => format!("[{}]", identifier.replace(']', "]]")),
+            Self::DoubleQuotes => format!("\"{}\"", identifier.replace('"', "\"\"")),
+            Self::Backticks => format!("`{}`", identifier.replace('`', "``")),
+        }
+    }
+}
+
+/// Multi-dialect SQL implementation for statement/batch splitting and completion metadata.
 #[derive(Debug, Clone)]
 pub struct SqlLanguage {
     pub supports_go_batches: bool,
+    pub quote_style: IdentifierQuoteStyle,
+    keywords: &'static [&'static str],
+    functions: &'static [&'static str],
 }
 
 impl SqlLanguage {
     pub const fn generic() -> Self {
         Self {
             supports_go_batches: false,
+            quote_style: IdentifierQuoteStyle::DoubleQuotes,
+            keywords: GENERIC_SQL_KEYWORDS,
+            functions: GENERIC_SQL_FUNCTIONS,
         }
     }
 
     pub const fn tsql() -> Self {
         Self {
             supports_go_batches: true,
+            quote_style: IdentifierQuoteStyle::Brackets,
+            keywords: TSQL_KEYWORDS,
+            functions: TSQL_FUNCTIONS,
+        }
+    }
+
+    pub const fn postgres() -> Self {
+        Self {
+            supports_go_batches: false,
+            quote_style: IdentifierQuoteStyle::DoubleQuotes,
+            keywords: POSTGRES_KEYWORDS,
+            functions: POSTGRES_FUNCTIONS,
+        }
+    }
+
+    pub const fn sqlite() -> Self {
+        Self {
+            supports_go_batches: false,
+            quote_style: IdentifierQuoteStyle::DoubleQuotes,
+            keywords: SQLITE_KEYWORDS,
+            functions: SQLITE_FUNCTIONS,
+        }
+    }
+
+    pub const fn mysql() -> Self {
+        Self {
+            supports_go_batches: false,
+            quote_style: IdentifierQuoteStyle::Backticks,
+            keywords: MYSQL_KEYWORDS,
+            functions: MYSQL_FUNCTIONS,
         }
     }
 }
 
-pub const SQL_KEYWORDS: &[&str] = &[
+pub const TSQL_KEYWORDS: &[&str] = &[
     "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL OUTER JOIN",
     "CROSS JOIN", "ON", "AS", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS NULL",
     "IS NOT NULL", "ORDER BY", "GROUP BY", "HAVING", "TOP", "DISTINCT", "UNION", "UNION ALL",
@@ -33,7 +94,7 @@ pub const SQL_KEYWORDS: &[&str] = &[
     "PRINT", "TRY", "CATCH", "THROW", "RAISERROR", "NULL", "TRUE", "FALSE",
 ];
 
-pub const SQL_FUNCTIONS: &[&str] = &[
+pub const TSQL_FUNCTIONS: &[&str] = &[
     "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "ISNULL", "NULLIF", "CAST", "CONVERT",
     "GETDATE", "GETUTCDATE", "SYSDATETIME", "DATEADD", "DATEDIFF", "DATENAME", "DATEPART",
     "FORMAT", "LEN", "DATALENGTH", "LOWER", "UPPER", "LTRIM", "RTRIM", "TRIM", "SUBSTRING",
@@ -41,6 +102,90 @@ pub const SQL_FUNCTIONS: &[&str] = &[
     "DENSE_RANK", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "IIF", "CHOOSE", "NEWID",
     "SCOPE_IDENTITY", "OBJECT_ID", "DB_NAME", "SUSER_SNAME", "JSON_VALUE", "JSON_QUERY",
     "OPENJSON", "ABS", "ROUND", "CEILING", "FLOOR",
+];
+
+pub const SQL_KEYWORDS: &[&str] = TSQL_KEYWORDS;
+pub const SQL_FUNCTIONS: &[&str] = TSQL_FUNCTIONS;
+
+pub const POSTGRES_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL OUTER JOIN",
+    "CROSS JOIN", "LATERAL", "ON", "AS", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE",
+    "ILIKE", "SIMILAR TO", "IS NULL", "IS NOT NULL", "IS DISTINCT FROM", "ORDER BY", "GROUP BY",
+    "HAVING", "LIMIT", "OFFSET", "FETCH FIRST", "ROWS ONLY", "DISTINCT", "DISTINCT ON", "UNION",
+    "UNION ALL", "EXCEPT", "INTERSECT", "INSERT INTO", "VALUES", "ON CONFLICT", "CONFLICT",
+    "DO NOTHING", "DO UPDATE", "UPDATE", "SET", "DELETE FROM", "RETURNING", "CREATE TABLE",
+    "ALTER TABLE", "DROP TABLE", "CREATE VIEW", "CREATE INDEX", "WITH", "RECURSIVE", "CASE",
+    "WHEN", "THEN", "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK", "OVER", "PARTITION BY", "ASC",
+    "DESC", "NULLS FIRST", "NULLS LAST", "EXPLAIN", "ANALYZE", "NULL", "TRUE", "FALSE",
+];
+
+pub const POSTGRES_FUNCTIONS: &[&str] = &[
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "GREATEST", "LEAST", "CAST",
+    "NOW", "CURRENT_TIMESTAMP", "CURRENT_DATE", "DATE_TRUNC", "DATE_PART", "EXTRACT", "AGE",
+    "TO_CHAR", "TO_DATE", "TO_TIMESTAMP", "LENGTH", "CHAR_LENGTH", "LOWER", "UPPER", "BTRIM",
+    "LTRIM", "RTRIM", "TRIM", "SUBSTRING", "POSITION", "SPLIT_PART", "REGEXP_REPLACE", "REPLACE",
+    "STRING_AGG", "ARRAY_AGG", "CONCAT", "CONCAT_WS", "JSONB_BUILD_OBJECT", "JSONB_BUILD_ARRAY",
+    "JSONB_EXTRACT_PATH", "JSONB_EXTRACT_PATH_TEXT", "JSON_BUILD_OBJECT", "JSON_AGG", "JSONB_AGG",
+    "GENERATE_SERIES", "UNNEST", "ROW_NUMBER", "RANK", "DENSE_RANK", "LAG", "LEAD",
+    "FIRST_VALUE", "LAST_VALUE", "ABS", "ROUND", "CEIL", "FLOOR",
+];
+
+pub const SQLITE_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "CROSS JOIN", "ON", "AS", "AND",
+    "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "GLOB", "IS NULL", "IS NOT NULL", "ORDER BY",
+    "GROUP BY", "HAVING", "LIMIT", "OFFSET", "DISTINCT", "UNION", "UNION ALL", "EXCEPT",
+    "INTERSECT", "INSERT INTO", "REPLACE INTO", "VALUES", "ON CONFLICT", "DO NOTHING", "DO UPDATE",
+    "UPDATE", "SET", "DELETE FROM", "RETURNING", "CREATE TABLE", "ALTER TABLE", "DROP TABLE",
+    "CREATE VIEW", "CREATE INDEX", "AUTOINCREMENT", "WITHOUT ROWID", "STRICT", "WITH", "RECURSIVE",
+    "CASE", "WHEN", "THEN", "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK", "PRAGMA", "VACUUM",
+    "EXPLAIN", "OVER", "PARTITION BY", "ASC", "DESC", "NULL", "TRUE", "FALSE",
+];
+
+pub const SQLITE_FUNCTIONS: &[&str] = &[
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "IFNULL", "COALESCE", "NULLIF", "IIF", "CAST", "DATE",
+    "TIME", "DATETIME", "JULIANDAY", "UNIXEPOCH", "STRFTIME", "LENGTH", "LOWER", "UPPER", "LTRIM",
+    "RTRIM", "TRIM", "SUBSTR", "INSTR", "REPLACE", "GROUP_CONCAT", "PRINTF", "FORMAT", "JSON",
+    "JSON_EXTRACT", "JSON_TYPE", "JSON_OBJECT", "JSON_ARRAY", "JSON_GROUP_ARRAY", "TYPEOF",
+    "LAST_INSERT_ROWID", "CHANGES", "TOTAL_CHANGES", "RANDOM", "HEX", "ROW_NUMBER", "RANK",
+    "DENSE_RANK", "LAG", "LEAD", "ABS", "ROUND",
+];
+
+pub const MYSQL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "CROSS JOIN",
+    "ON", "AS", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "REGEXP", "IS NULL",
+    "IS NOT NULL", "ORDER BY", "GROUP BY", "HAVING", "LIMIT", "OFFSET", "DISTINCT", "UNION",
+    "UNION ALL", "INSERT INTO", "REPLACE INTO", "VALUES", "ON DUPLICATE KEY UPDATE", "UPDATE",
+    "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE", "CREATE VIEW",
+    "CREATE INDEX", "AUTO_INCREMENT", "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END",
+    "BEGIN", "COMMIT", "ROLLBACK", "USE", "SHOW TABLES", "SHOW DATABASES", "DESCRIBE", "EXPLAIN",
+    "OVER", "PARTITION BY", "ASC", "DESC", "NULL", "TRUE", "FALSE",
+];
+
+pub const MYSQL_FUNCTIONS: &[&str] = &[
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "IFNULL", "COALESCE", "NULLIF", "IF", "CAST", "CONVERT",
+    "NOW", "CURDATE", "CURTIME", "UTC_TIMESTAMP", "DATE_FORMAT", "STR_TO_DATE", "DATE_ADD",
+    "DATE_SUB", "DATEDIFF", "TIMESTAMPDIFF", "CHAR_LENGTH", "LENGTH", "LOWER", "UPPER", "LTRIM",
+    "RTRIM", "TRIM", "SUBSTRING", "LOCATE", "INSTR", "REPLACE", "GROUP_CONCAT", "CONCAT",
+    "CONCAT_WS", "JSON_EXTRACT", "JSON_UNQUOTE", "JSON_OBJECT", "JSON_ARRAY", "JSON_ARRAYAGG",
+    "LAST_INSERT_ID", "ROW_NUMBER", "RANK", "DENSE_RANK", "LAG", "LEAD", "ABS", "ROUND", "CEIL",
+    "FLOOR",
+];
+
+pub const GENERIC_SQL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL OUTER JOIN",
+    "CROSS JOIN", "ON", "AS", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS NULL",
+    "IS NOT NULL", "ORDER BY", "GROUP BY", "HAVING", "DISTINCT", "UNION", "UNION ALL", "EXCEPT",
+    "INTERSECT", "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM", "CREATE TABLE",
+    "ALTER TABLE", "DROP TABLE", "CREATE VIEW", "CREATE INDEX", "WITH", "CASE", "WHEN", "THEN",
+    "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK", "OVER", "PARTITION BY", "ASC", "DESC",
+    "OFFSET", "FETCH FIRST", "ROWS ONLY", "NULL", "TRUE", "FALSE",
+];
+
+pub const GENERIC_SQL_FUNCTIONS: &[&str] = &[
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "CAST", "CURRENT_TIMESTAMP",
+    "CURRENT_DATE", "CURRENT_TIME", "EXTRACT", "CHAR_LENGTH", "LOWER", "UPPER", "TRIM",
+    "SUBSTRING", "POSITION", "REPLACE", "CONCAT", "ROW_NUMBER", "RANK", "DENSE_RANK", "LAG",
+    "LEAD", "ABS", "ROUND", "CEIL", "FLOOR",
 ];
 
 impl EditorLanguage for SqlLanguage {
@@ -75,11 +220,15 @@ impl EditorLanguage for SqlLanguage {
     }
 
     fn keywords(&self) -> &'static [&'static str] {
-        SQL_KEYWORDS
+        self.keywords
     }
 
     fn functions(&self) -> &'static [&'static str] {
-        SQL_FUNCTIONS
+        self.functions
+    }
+
+    fn quote_identifier(&self, identifier: &str) -> String {
+        self.quote_style.quote(identifier)
     }
 }
 
@@ -107,6 +256,7 @@ fn split_semicolon_statements(text: &str, base_offset: usize, out: &mut Vec<Text
     let mut in_single = false;
     let mut in_double = false;
     let mut in_bracket = false;
+    let mut in_backtick = false;
     let mut in_line_comment = false;
     let mut block_comment_depth: usize = 0;
 
@@ -173,6 +323,18 @@ fn split_semicolon_statements(text: &str, base_offset: usize, out: &mut Vec<Text
             continue;
         }
 
+        if in_backtick {
+            if b == b'`' {
+                if next == b'`' {
+                    i += 2;
+                    continue;
+                }
+                in_backtick = false;
+            }
+            i += 1;
+            continue;
+        }
+
         match b {
             b'-' if next == b'-' => {
                 in_line_comment = true;
@@ -192,6 +354,10 @@ fn split_semicolon_statements(text: &str, base_offset: usize, out: &mut Vec<Text
             }
             b'[' => {
                 in_bracket = true;
+                i += 1;
+            }
+            b'`' => {
+                in_backtick = true;
                 i += 1;
             }
             b';' => {
@@ -260,28 +426,6 @@ fn is_go_separator_line(trimmed: &str) -> bool {
 // WinUI CompletionEngine port (clause-, schema-, alias-, and FK/JOIN-aware)
 // ---------------------------------------------------------------------------
 
-/// Completion item kind for SQL editor suggestions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompletionKind {
-    Table,
-    Column,
-    Keyword,
-    Function,
-    Join,
-    Database,
-    Variable,
-    Cte,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompletionCandidate {
-    pub label: String,
-    pub detail: Option<String>,
-    pub insert_text: String,
-    pub filter_text: Option<String>,
-    pub kind: CompletionKind,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClauseScope {
     Table { alias_context: bool },
@@ -317,8 +461,28 @@ impl<'a> TableRef<'a> {
 }
 
 struct RankedCandidate {
-    rank: i32,
+    /// 0 = direct/prefix match (trigger prefix, identifier prefix, keyword prefix),
+    /// 1 = weak/substring match (snippet name substring, mid-identifier match).
+    match_rank: i32,
+    /// Kind priority bucket matching C# `CompletionItem.Rank`:
+    /// 0 = Snippet/Join, 1 = Table/Database/Variable/Cte, 2 = Column, 3 = Function, 4 = Keyword.
+    kind_rank: i32,
+    /// Secondary sort key within the same `(match_rank, kind_rank)`.
+    rank_sort: i32,
     candidate: CompletionCandidate,
+}
+
+fn kind_rank(kind: CompletionKind) -> i32 {
+    match kind {
+        CompletionKind::Snippet | CompletionKind::Join => 0,
+        CompletionKind::Table
+        | CompletionKind::Database
+        | CompletionKind::Variable
+        | CompletionKind::Cte => 1,
+        CompletionKind::Column => 2,
+        CompletionKind::Function => 3,
+        CompletionKind::Keyword => 4,
+    }
 }
 
 /// Clause-, schema-, alias-, and JOIN-aware SQL completion generator (ported from WinUI CompletionEngine).
@@ -326,9 +490,9 @@ pub fn suggest_completions(
     sql: &str,
     byte_offset: usize,
     tables: &[TableSchema],
-    language: &dyn EditorLanguage,
+    language: &(impl EditorLanguage + ?Sized),
 ) -> (usize, Vec<CompletionCandidate>) {
-    suggest_completions_with_context(sql, byte_offset, tables, &[], language, true)
+    suggest_completions_with_snippets(sql, byte_offset, tables, &[], &[], "", language, true)
 }
 
 /// Full SQL completion generator with database list (for `USE`) and explicit-vs-auto trigger handling.
@@ -337,7 +501,31 @@ pub fn suggest_completions_with_context(
     byte_offset: usize,
     tables: &[TableSchema],
     databases: &[DatabaseInfo],
-    language: &dyn EditorLanguage,
+    language: &(impl EditorLanguage + ?Sized),
+    is_explicit: bool,
+) -> (usize, Vec<CompletionCandidate>) {
+    suggest_completions_with_snippets(
+        sql,
+        byte_offset,
+        tables,
+        databases,
+        &[],
+        "",
+        language,
+        is_explicit,
+    )
+}
+
+/// Full SQL completion generator including dialect-filtered SQL snippets and clipboard expansion.
+#[allow(clippy::too_many_arguments)]
+pub fn suggest_completions_with_snippets(
+    sql: &str,
+    byte_offset: usize,
+    tables: &[TableSchema],
+    databases: &[DatabaseInfo],
+    snippets: &[SnippetDef],
+    clipboard: &str,
+    language: &(impl EditorLanguage + ?Sized),
     is_explicit: bool,
 ) -> (usize, Vec<CompletionCandidate>) {
     let caret = clamp_char_boundary(sql, byte_offset);
@@ -397,18 +585,23 @@ pub fn suggest_completions_with_context(
                     .find(|r| r.effective_qualifier().eq_ignore_ascii_case(qual))
                 {
                     if let Some(table) = resolved_ref.table {
-                        add_qualified_table_columns(&mut ranked, table, &word_lower, language, 0);
+                        add_qualified_table_columns(&mut ranked, table, &word_lower, language);
                     } else {
                         for col in &resolved_ref.cte_columns {
-                            if let Some(match_rank) = fuzzy_rank(col, &word_lower) {
+                            if let Some(match_rank) = match_tier(col, &word_lower) {
                                 ranked.push(RankedCandidate {
-                                    rank: match_rank,
+                                    match_rank,
+                                    kind_rank: kind_rank(CompletionKind::Column),
+                                    rank_sort: 0,
                                     candidate: CompletionCandidate {
                                         label: col.clone(),
                                         detail: Some(format!("CTE · {}", resolved_ref.raw_name)),
                                         insert_text: language.quote_identifier(col),
                                         filter_text: Some(col.clone()),
                                         kind: CompletionKind::Column,
+                                        caret_offset: None,
+                                        selection: None,
+                                        documentation: None,
                                     },
                                 });
                             }
@@ -416,7 +609,7 @@ pub fn suggest_completions_with_context(
                     }
                 } else if let Some(table) = tables.iter().find(|t| t.name.eq_ignore_ascii_case(qual))
                 {
-                    add_qualified_table_columns(&mut ranked, table, &word_lower, language, 0);
+                    add_qualified_table_columns(&mut ranked, table, &word_lower, language);
                 } else {
                     // Fallback: maybe qualifier is a schema name (`dbo.<caret>`).
                     add_tables(
@@ -433,12 +626,13 @@ pub fn suggest_completions_with_context(
             }
         }
 
-        return (word_start, finalize_candidates(ranked));
+        return (word_start, finalize_candidates(ranked, 500));
     }
 
-    match scope.scope {
+    let max_items = match scope.scope {
         ClauseScope::Database => {
             add_databases(&mut ranked, databases, &word_lower, language);
+            500
         }
         ClauseScope::Table { alias_context } => {
             add_tables(
@@ -451,47 +645,56 @@ pub fn suggest_completions_with_context(
                 &used_aliases,
                 language,
             );
-            add_keywords(&mut ranked, language.keywords(), &word_lower, 600);
+            add_keywords(&mut ranked, language.keywords(), &word_lower);
+            500
         }
         ClauseScope::Column => {
             if scope.keyword.eq_ignore_ascii_case("ON") {
                 add_join_conditions(&mut ranked, &refs, &word_lower, language);
             }
 
-            add_variables(&mut ranked, &variables, &word_lower, 150);
+            add_variables(&mut ranked, &variables, &word_lower);
 
             if !refs.is_empty() {
-                add_scoped_columns(&mut ranked, &refs, &word_lower, language, 200);
+                add_scoped_columns(&mut ranked, &refs, &word_lower, language);
             } else if let Some(target) = target_table {
                 let is_set = scope.keyword.eq_ignore_ascii_case("SET");
-                add_target_columns(&mut ranked, target, &word_lower, is_set, language, 200);
+                add_target_columns(&mut ranked, target, &word_lower, is_set, language);
             }
 
             // Also offer table/alias qualifiers in column scope so typing `o` can complete `[o]`
+            // (ranked below columns so column prefixes win first).
             for r in &refs {
                 let qual = r.effective_qualifier();
-                if let Some(mr) = fuzzy_rank(qual, &word_lower) {
+                if let Some(match_rank) = match_tier(qual, &word_lower) {
                     ranked.push(RankedCandidate {
-                        rank: 380 + mr,
+                        match_rank,
+                        kind_rank: kind_rank(CompletionKind::Column),
+                        rank_sort: 10,
                         candidate: CompletionCandidate {
                             label: qual.to_string(),
                             detail: Some(format!("Alias · {}", r.display_table_name())),
                             insert_text: language.quote_identifier(qual),
                             filter_text: Some(qual.to_string()),
                             kind: CompletionKind::Table,
+                            caret_offset: None,
+                            selection: None,
+                            documentation: None,
                         },
                     });
                 }
             }
 
-            add_functions(&mut ranked, language.functions(), &word_lower, 450);
-            add_keywords(&mut ranked, language.keywords(), &word_lower, 550);
+            add_functions(&mut ranked, language.functions(), &word_lower);
+            add_keywords(&mut ranked, language.keywords(), &word_lower);
+            200
         }
         ClauseScope::Keyword => {
-            add_keywords(&mut ranked, language.keywords(), &word_lower, 100);
-            add_variables(&mut ranked, &variables, &word_lower, 200);
+            add_snippets(&mut ranked, snippets, &word_lower, clipboard);
+            add_variables(&mut ranked, &variables, &word_lower);
+            add_keywords(&mut ranked, language.keywords(), &word_lower);
             if !refs.is_empty() {
-                add_scoped_columns(&mut ranked, &refs, &word_lower, language, 300);
+                add_scoped_columns(&mut ranked, &refs, &word_lower, language);
             }
             add_tables(
                 &mut ranked,
@@ -503,31 +706,61 @@ pub fn suggest_completions_with_context(
                 &used_aliases,
                 language,
             );
-            add_functions(&mut ranked, language.functions(), &word_lower, 500);
+            add_functions(&mut ranked, language.functions(), &word_lower);
+            60
         }
-    }
+    };
 
-    (word_start, finalize_candidates(ranked))
+    (word_start, finalize_candidates(ranked, max_items))
 }
 
-fn finalize_candidates(mut ranked: Vec<RankedCandidate>) -> Vec<CompletionCandidate> {
+fn finalize_candidates(
+    mut ranked: Vec<RankedCandidate>,
+    max_items: usize,
+) -> Vec<CompletionCandidate> {
     ranked.sort_by(|a, b| {
-        a.rank
-            .cmp(&b.rank)
-            .then_with(|| a.candidate.label.to_ascii_lowercase().cmp(&b.candidate.label.to_ascii_lowercase()))
+        a.match_rank
+            .cmp(&b.match_rank)
+            .then_with(|| a.kind_rank.cmp(&b.kind_rank))
+            .then_with(|| a.rank_sort.cmp(&b.rank_sort))
+            .then_with(|| a.candidate.label.len().cmp(&b.candidate.label.len()))
+            .then_with(|| {
+                a.candidate
+                    .label
+                    .to_ascii_lowercase()
+                    .cmp(&b.candidate.label.to_ascii_lowercase())
+            })
+            .then_with(|| {
+                a.candidate
+                    .detail
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .cmp(
+                        &b.candidate
+                            .detail
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_ascii_lowercase(),
+                    )
+            })
     });
 
     let mut seen = HashSet::new();
-    let mut out = Vec::with_capacity(ranked.len().min(60));
+    let mut out = Vec::with_capacity(ranked.len().min(max_items));
     for item in ranked {
-        let dedup_key = format!(
-            "{:?}::{}",
-            item.candidate.kind,
-            item.candidate.insert_text.to_ascii_lowercase()
-        );
+        let dedup_key = if item.candidate.kind == CompletionKind::Snippet {
+            format!("Snippet::{}", item.candidate.label.to_ascii_lowercase())
+        } else {
+            format!(
+                "{:?}::{}",
+                item.candidate.kind,
+                item.candidate.insert_text.to_ascii_lowercase()
+            )
+        };
         if seen.insert(dedup_key) {
             out.push(item.candidate);
-            if out.len() >= 60 {
+            if out.len() >= max_items {
                 break;
             }
         }
@@ -609,6 +842,7 @@ fn statement_bounds(sql: &str, caret: usize) -> (usize, usize) {
     let mut in_single = false;
     let mut in_double = false;
     let mut in_bracket = false;
+    let mut in_backtick = false;
     let mut in_line_comment = false;
     let mut block_depth = 0usize;
 
@@ -670,6 +904,17 @@ fn statement_bounds(sql: &str, caret: usize) -> (usize, usize) {
             i += 1;
             continue;
         }
+        if in_backtick {
+            if b == b'`' {
+                if next == b'`' {
+                    i += 2;
+                    continue;
+                }
+                in_backtick = false;
+            }
+            i += 1;
+            continue;
+        }
 
         match b {
             b'-' if next == b'-' => {
@@ -690,6 +935,10 @@ fn statement_bounds(sql: &str, caret: usize) -> (usize, usize) {
             }
             b'[' => {
                 in_bracket = true;
+                i += 1;
+            }
+            b'`' => {
+                in_backtick = true;
                 i += 1;
             }
             b';' => {
@@ -965,6 +1214,8 @@ fn detect_scope(before_word: &str) -> ScopeInfo {
                 | "BY"
                 | "DISTINCT"
                 | "LIKE"
+                | "ILIKE"
+                | "RETURNING"
                 | "IN"
                 | "BETWEEN"
                 | "IS"
@@ -982,78 +1233,61 @@ fn detect_scope(before_word: &str) -> ScopeInfo {
         }
     }
 
-    // Otherwise scan backward for the active enclosing clause at the same paren depth
-    let cur_depth = last.depth;
-    for idx in (0..tokens.len()).rev() {
-        let tok = &tokens[idx];
-        if tok.quoted || tok.depth != cur_depth {
-            continue;
-        }
-        match tok.upper.as_str() {
-            "USE" => {
+    // Trailing-dot qualifier: e.g. `FROM dbo.` or `DELETE FROM [dbo].` or `INNER JOIN dbo.`
+    if last.text == "." && tokens.len() >= 3 {
+        let before_qual = &tokens[tokens.len() - 3];
+        if !before_qual.quoted {
+            if matches!(before_qual.upper.as_str(), "FROM" | "JOIN" | "APPLY") {
+                let is_delete_from = before_qual.upper == "FROM"
+                    && tokens.len() >= 4
+                    && !tokens[tokens.len() - 4].quoted
+                    && tokens[tokens.len() - 4].upper == "DELETE";
                 return ScopeInfo {
-                    scope: ClauseScope::Database,
-                    keyword: "USE".into(),
-                    immediately_after_clause: false,
+                    scope: ClauseScope::Table {
+                        alias_context: !is_delete_from,
+                    },
+                    keyword: before_qual.upper.clone(),
+                    immediately_after_clause: true,
                 };
             }
-            "FROM" | "JOIN" | "APPLY" => {
-                // If user already wrote `FROM [dbo].[Orders] AS [o] <word>`, they're moving to the next clause (Keyword).
-                // If only a partial schema/table token is there (e.g. `FROM dbo.`), stay in Table scope.
-                let after = &tokens[idx + 1..];
-                let trailing_dot = after.last().is_some_and(|t| t.text == ".");
-                let is_delete_from = tok.upper == "FROM"
-                    && idx > 0
-                    && !tokens[idx - 1].quoted
-                    && tokens[idx - 1].upper == "DELETE";
-                if trailing_dot || after.is_empty() {
-                    return ScopeInfo {
-                        scope: ClauseScope::Table {
-                            alias_context: !is_delete_from,
-                        },
-                        keyword: tok.upper.clone(),
-                        immediately_after_clause: trailing_dot,
-                    };
-                }
+            if matches!(before_qual.upper.as_str(), "INTO" | "UPDATE" | "TABLE") {
                 return ScopeInfo {
-                    scope: ClauseScope::Keyword,
-                    keyword: tok.upper.clone(),
-                    immediately_after_clause: false,
+                    scope: ClauseScope::Table {
+                        alias_context: false,
+                    },
+                    keyword: before_qual.upper.clone(),
+                    immediately_after_clause: true,
                 };
             }
-            "INTO" | "UPDATE" | "TABLE" => {
-                let after = &tokens[idx + 1..];
-                let trailing_dot = after.last().is_some_and(|t| t.text == ".");
-                if trailing_dot || after.is_empty() {
-                    return ScopeInfo {
-                        scope: ClauseScope::Table {
-                            alias_context: false,
-                        },
-                        keyword: tok.upper.clone(),
-                        immediately_after_clause: trailing_dot,
-                    };
-                }
-                return ScopeInfo {
-                    scope: ClauseScope::Keyword,
-                    keyword: tok.upper.clone(),
-                    immediately_after_clause: false,
-                };
-            }
-            "ON" => {
+            if matches!(
+                before_qual.upper.as_str(),
+                "SELECT"
+                    | "WHERE"
+                    | "ON"
+                    | "AND"
+                    | "OR"
+                    | "SET"
+                    | "HAVING"
+                    | "BY"
+                    | "DISTINCT"
+                    | "LIKE"
+                    | "ILIKE"
+                    | "RETURNING"
+                    | "IN"
+                    | "BETWEEN"
+                    | "IS"
+                    | "NOT"
+                    | "THEN"
+                    | "WHEN"
+                    | "ELSE"
+                    | "CASE"
+            ) {
                 return ScopeInfo {
                     scope: ClauseScope::Column,
-                    keyword: "ON".into(),
-                    immediately_after_clause: false,
+                    keyword: before_qual.upper.clone(),
+                    immediately_after_clause: true,
                 };
             }
-            "SELECT" | "WHERE" | "AND" | "OR" | "SET" | "HAVING" | "BY" | "WHEN" | "THEN" => {
-                return ScopeInfo {
-                    scope: ClauseScope::Column,
-                    keyword: tok.upper.clone(),
-                    immediately_after_clause: false,
-                };
-            }
-            _ => {}
         }
     }
 
@@ -1117,6 +1351,8 @@ fn is_clause_stop_word(upper: &str) -> bool {
             | "OPTION"
             | "FOR"
             | "OFFSET"
+            | "LIMIT"
+            | "RETURNING"
             | "FETCH"
             | "TOP"
             | "GO"
@@ -1131,6 +1367,9 @@ fn find_ctes(stmt: &str) -> Vec<(String, Vec<String>)> {
     while i < tokens.len() {
         if tokens[i].depth == 0 && !tokens[i].quoted && tokens[i].upper == "WITH" {
             i += 1;
+            if i < tokens.len() && !tokens[i].quoted && tokens[i].upper == "RECURSIVE" {
+                i += 1;
+            }
             while i < tokens.len() {
                 if tokens[i].depth != 0 {
                     i += 1;
@@ -1345,35 +1584,45 @@ fn add_tables(
     typed_schema: Option<&str>,
     alias_context: bool,
     used_aliases: &HashSet<String>,
-    language: &dyn EditorLanguage,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     // CTEs first when no schema was typed
     if typed_schema.is_none() {
         for (cte_name, _) in ctes {
-            if let Some(mr) = fuzzy_rank(cte_name, word_lower) {
+            if let Some(match_rank) = match_tier(cte_name, word_lower) {
                 let quoted = language.quote_identifier(cte_name);
                 if alias_context {
                     let alias = generate_unique_alias(cte_name, used_aliases);
                     let quoted_alias = language.quote_identifier(&alias);
                     out.push(RankedCandidate {
-                        rank: mr,
+                        match_rank,
+                        kind_rank: kind_rank(CompletionKind::Cte),
+                        rank_sort: 0,
                         candidate: CompletionCandidate {
                             label: format!("{cte_name} AS {alias}"),
                             detail: Some("CTE".into()),
                             insert_text: format!("{quoted} AS {quoted_alias}"),
                             filter_text: Some(cte_name.clone()),
                             kind: CompletionKind::Cte,
+                            caret_offset: None,
+                            selection: None,
+                            documentation: None,
                         },
                     });
                 } else {
                     out.push(RankedCandidate {
-                        rank: mr,
+                        match_rank,
+                        kind_rank: kind_rank(CompletionKind::Cte),
+                        rank_sort: 0,
                         candidate: CompletionCandidate {
                             label: cte_name.clone(),
                             detail: Some("CTE".into()),
                             insert_text: quoted,
                             filter_text: Some(cte_name.clone()),
                             kind: CompletionKind::Cte,
+                            caret_offset: None,
+                            selection: None,
+                            documentation: None,
                         },
                     });
                 }
@@ -1394,13 +1643,15 @@ fn add_tables(
             format!("{}.{}", table.schema, table.name)
         };
 
-        let match_rank = fuzzy_rank(&table.name, word_lower)
-            .or_else(|| fuzzy_rank(&qualified_plain, word_lower).map(|r| r + 5));
-        let Some(mr) = match_rank else {
+        let (match_rank, schema_tiebreak) = if let Some(mr) = match_tier(&table.name, word_lower) {
+            (mr, 0)
+        } else if let Some(mr) = match_tier(&qualified_plain, word_lower) {
+            (mr.max(1), 2)
+        } else {
             continue;
         };
 
-        // Always bracket schema & table; omit schema only if user already typed `dbo.`
+        // Always quote schema & table; omit schema only if user already typed `dbo.`
         let quoted_table = if typed_schema.is_some() || table.schema.is_empty() {
             language.quote_identifier(&table.name)
         } else {
@@ -1428,36 +1679,51 @@ fn add_tables(
 
             // Primary entry: `[dbo].[Orders] AS [o]`
             out.push(RankedCandidate {
-                rank: 20 + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Table),
+                rank_sort: schema_tiebreak,
                 candidate: CompletionCandidate {
                     label: format!("{display_base} AS {alias}"),
                     detail: Some(format!("{kind_label} · {} cols", table.columns.len())),
                     insert_text: format!("{quoted_table} AS {quoted_alias}"),
                     filter_text: Some(format!("{} {}", table.name, qualified_plain)),
                     kind: CompletionKind::Table,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
 
             // Secondary entry: `[dbo].[Orders]` (no alias)
             out.push(RankedCandidate {
-                rank: 25 + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Table),
+                rank_sort: schema_tiebreak + 1,
                 candidate: CompletionCandidate {
                     label: format!("{display_base} (no alias)"),
                     detail: Some(format!("{kind_label} · no alias")),
                     insert_text: quoted_table,
                     filter_text: Some(format!("{} {}", table.name, qualified_plain)),
                     kind: CompletionKind::Table,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         } else {
             out.push(RankedCandidate {
-                rank: 20 + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Table),
+                rank_sort: schema_tiebreak,
                 candidate: CompletionCandidate {
                     label: display_base,
                     detail: Some(format!("{kind_label} · {} cols", table.columns.len())),
                     insert_text: quoted_table,
                     filter_text: Some(format!("{} {}", table.name, qualified_plain)),
                     kind: CompletionKind::Table,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
@@ -1470,7 +1736,7 @@ fn add_join_conditions(
     out: &mut Vec<RankedCandidate>,
     refs: &[TableRef<'_>],
     word_lower: &str,
-    language: &dyn EditorLanguage,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     if refs.len() < 2 {
         return;
@@ -1615,7 +1881,7 @@ fn add_join_conditions(
         }
     }
 
-    // Highest score first -> lowest rank number first
+    // Highest score first -> lowest rank_sort number first
     suggestions.sort_by(|a, b| b.0.cmp(&a.0));
     let mut seen_expr = HashSet::new();
     for (score, expr, detail) in suggestions {
@@ -1626,13 +1892,18 @@ fn add_join_conditions(
             continue;
         }
         out.push(RankedCandidate {
-            rank: 1000 - score,
+            match_rank: 0,
+            kind_rank: kind_rank(CompletionKind::Join),
+            rank_sort: 1000 - score,
             candidate: CompletionCandidate {
                 label: expr.clone(),
                 detail: Some(detail),
                 insert_text: expr.clone(),
                 filter_text: Some(expr),
                 kind: CompletionKind::Join,
+                caret_offset: None,
+                selection: None,
+                documentation: None,
             },
         });
     }
@@ -1642,11 +1913,10 @@ fn add_qualified_table_columns(
     out: &mut Vec<RankedCandidate>,
     table: &TableSchema,
     word_lower: &str,
-    language: &dyn EditorLanguage,
-    base_rank: i32,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     for col in &table.columns {
-        if let Some(mr) = fuzzy_rank(&col.name, word_lower) {
+        if let Some(match_rank) = match_tier(&col.name, word_lower) {
             let is_pk = table
                 .primary_key
                 .iter()
@@ -1658,13 +1928,18 @@ fn add_qualified_table_columns(
                 (None, false) => table.name.clone(),
             };
             out.push(RankedCandidate {
-                rank: base_rank + mr + if is_pk { 0 } else { 2 },
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Column),
+                rank_sort: if is_pk { 0 } else { 1 },
                 candidate: CompletionCandidate {
                     label: col.name.clone(),
                     detail: Some(detail),
                     insert_text: language.quote_identifier(&col.name),
                     filter_text: Some(col.name.clone()),
                     kind: CompletionKind::Column,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
@@ -1675,8 +1950,7 @@ fn add_scoped_columns(
     out: &mut Vec<RankedCandidate>,
     refs: &[TableRef<'_>],
     word_lower: &str,
-    language: &dyn EditorLanguage,
-    base_rank: i32,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     let multi = refs.len() > 1;
     for r in refs {
@@ -1689,9 +1963,11 @@ fn add_scoped_columns(
                     Some(q) => format!("{q}.{}", col.name),
                     None => col.name.clone(),
                 };
-                let mr = fuzzy_rank(&col.name, word_lower)
-                    .or_else(|| fuzzy_rank(&display, word_lower).map(|r| r + 4));
-                let Some(mr) = mr else {
+                let (match_rank, rank_sort) = if let Some(mr) = match_tier(&col.name, word_lower) {
+                    (mr, 0)
+                } else if let Some(mr) = match_tier(&display, word_lower) {
+                    (mr, 1)
+                } else {
                     continue;
                 };
                 let insert_text = match &quoted_qual {
@@ -1703,13 +1979,18 @@ fn add_scoped_columns(
                     None => table.name.clone(),
                 };
                 out.push(RankedCandidate {
-                    rank: base_rank + mr,
+                    match_rank,
+                    kind_rank: kind_rank(CompletionKind::Column),
+                    rank_sort,
                     candidate: CompletionCandidate {
                         label: display.clone(),
                         detail: Some(detail),
                         insert_text,
                         filter_text: Some(format!("{} {}", col.name, display)),
                         kind: CompletionKind::Column,
+                        caret_offset: None,
+                        selection: None,
+                        documentation: None,
                     },
                 });
             }
@@ -1719,9 +2000,11 @@ fn add_scoped_columns(
                     Some(q) => format!("{q}.{col_name}"),
                     None => col_name.clone(),
                 };
-                let mr = fuzzy_rank(col_name, word_lower)
-                    .or_else(|| fuzzy_rank(&display, word_lower).map(|r| r + 4));
-                let Some(mr) = mr else {
+                let (match_rank, rank_sort) = if let Some(mr) = match_tier(col_name, word_lower) {
+                    (mr, 0)
+                } else if let Some(mr) = match_tier(&display, word_lower) {
+                    (mr, 1)
+                } else {
                     continue;
                 };
                 let insert_text = match &quoted_qual {
@@ -1729,13 +2012,18 @@ fn add_scoped_columns(
                     None => language.quote_identifier(col_name),
                 };
                 out.push(RankedCandidate {
-                    rank: base_rank + mr,
+                    match_rank,
+                    kind_rank: kind_rank(CompletionKind::Column),
+                    rank_sort,
                     candidate: CompletionCandidate {
                         label: display.clone(),
                         detail: Some(format!("CTE · {}", r.raw_name)),
                         insert_text,
                         filter_text: Some(format!("{col_name} {display}")),
                         kind: CompletionKind::Column,
+                        caret_offset: None,
+                        selection: None,
+                        documentation: None,
                     },
                 });
             }
@@ -1748,11 +2036,10 @@ fn add_target_columns(
     table: &TableSchema,
     word_lower: &str,
     append_equals: bool,
-    language: &dyn EditorLanguage,
-    base_rank: i32,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     for col in &table.columns {
-        if let Some(mr) = fuzzy_rank(&col.name, word_lower) {
+        if let Some(match_rank) = match_tier(&col.name, word_lower) {
             let quoted = language.quote_identifier(&col.name);
             let insert_text = if append_equals {
                 format!("{quoted} = ")
@@ -1760,7 +2047,9 @@ fn add_target_columns(
                 quoted
             };
             out.push(RankedCandidate {
-                rank: base_rank + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Column),
+                rank_sort: 0,
                 candidate: CompletionCandidate {
                     label: col.name.clone(),
                     detail: Some(
@@ -1771,6 +2060,9 @@ fn add_target_columns(
                     insert_text,
                     filter_text: Some(col.name.clone()),
                     kind: CompletionKind::Column,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
@@ -1781,104 +2073,162 @@ fn add_databases(
     out: &mut Vec<RankedCandidate>,
     databases: &[DatabaseInfo],
     word_lower: &str,
-    language: &dyn EditorLanguage,
+    language: &(impl EditorLanguage + ?Sized),
 ) {
     for db in databases {
         if !db.is_accessible {
             continue;
         }
-        if let Some(mr) = fuzzy_rank(&db.name, word_lower) {
+        if let Some(match_rank) = match_tier(&db.name, word_lower) {
             out.push(RankedCandidate {
-                rank: 10 + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Database),
+                rank_sort: 0,
                 candidate: CompletionCandidate {
                     label: db.name.clone(),
                     detail: Some("Database".into()),
                     insert_text: language.quote_identifier(&db.name),
                     filter_text: Some(db.name.clone()),
                     kind: CompletionKind::Database,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
     }
 }
 
-fn add_variables(
-    out: &mut Vec<RankedCandidate>,
-    variables: &[String],
-    word_lower: &str,
-    base_rank: i32,
-) {
+fn add_variables(out: &mut Vec<RankedCandidate>, variables: &[String], word_lower: &str) {
     for var in variables {
-        if let Some(mr) = fuzzy_rank(var, word_lower) {
-            out.push(RankedCandidate {
-                rank: base_rank + mr,
-                candidate: CompletionCandidate {
-                    label: var.clone(),
-                    detail: Some("Variable".into()),
-                    insert_text: var.clone(),
-                    filter_text: Some(var.clone()),
-                    kind: CompletionKind::Variable,
-                },
-            });
-        }
+        let stripped = var.trim_start_matches('@');
+        let Some(match_rank) =
+            match_tier(var, word_lower).or_else(|| match_tier(stripped, word_lower))
+        else {
+            continue;
+        };
+        out.push(RankedCandidate {
+            match_rank,
+            kind_rank: kind_rank(CompletionKind::Variable),
+            rank_sort: 0,
+            candidate: CompletionCandidate {
+                label: var.clone(),
+                detail: Some("Variable".into()),
+                insert_text: var.clone(),
+                filter_text: Some(var.clone()),
+                kind: CompletionKind::Variable,
+                caret_offset: None,
+                selection: None,
+                documentation: None,
+            },
+        });
     }
 }
 
-fn add_keywords(
+fn add_snippets(
     out: &mut Vec<RankedCandidate>,
-    keywords: &[&str],
+    snippets: &[SnippetDef],
     word_lower: &str,
-    base_rank: i32,
+    clipboard: &str,
 ) {
-    for kw in keywords {
-        if let Some(mr) = fuzzy_rank(kw, word_lower) {
+    for snippet in snippets {
+        let trigger_lower = snippet.trigger.to_ascii_lowercase();
+        let (match_rank, rank_sort) = if trigger_lower.starts_with(word_lower) {
+            // Direct trigger prefix match -> MatchRank 0, KindRank 0 (Snippet): always leads!
+            (0, 0)
+        } else if !word_lower.is_empty() && snippet.name.to_ascii_lowercase().contains(word_lower) {
+            // Name substring fallback -> MatchRank 1 so direct keyword/table prefixes beat it.
+            (1, 1)
+        } else {
+            continue;
+        };
+
+        let expanded = expand_snippet(&snippet.content, clipboard);
+        let doc = match snippet
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(desc) => format!("{desc}\n\n```sql\n{}\n```", expanded.text),
+            None => format!("```sql\n{}\n```", expanded.text),
+        };
+
+        out.push(RankedCandidate {
+            match_rank,
+            kind_rank: kind_rank(CompletionKind::Snippet),
+            rank_sort,
+            candidate: CompletionCandidate {
+                label: snippet.trigger.clone(),
+                detail: Some(snippet.name.clone()),
+                insert_text: expanded.text,
+                filter_text: Some(format!("{} {}", snippet.trigger, snippet.name)),
+                kind: CompletionKind::Snippet,
+                caret_offset: Some(expanded.caret_offset),
+                selection: expanded.selection,
+                documentation: Some(doc),
+            },
+        });
+    }
+}
+
+fn add_keywords(out: &mut Vec<RankedCandidate>, keywords: &[&str], word_lower: &str) {
+    for (idx, kw) in keywords.iter().enumerate() {
+        if let Some(match_rank) = match_tier(kw, word_lower) {
             out.push(RankedCandidate {
-                rank: base_rank + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Keyword),
+                rank_sort: idx as i32,
                 candidate: CompletionCandidate {
                     label: (*kw).to_string(),
                     detail: Some("Keyword".into()),
                     insert_text: (*kw).to_string(),
                     filter_text: Some((*kw).to_string()),
                     kind: CompletionKind::Keyword,
+                    caret_offset: None,
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
     }
 }
 
-fn add_functions(
-    out: &mut Vec<RankedCandidate>,
-    functions: &[&str],
-    word_lower: &str,
-    base_rank: i32,
-) {
+fn add_functions(out: &mut Vec<RankedCandidate>, functions: &[&str], word_lower: &str) {
     for func in functions {
-        if let Some(mr) = fuzzy_rank(func, word_lower) {
+        if let Some(match_rank) = match_tier(func, word_lower) {
+            let insert_text = format!("{func}()");
+            let caret_offset = insert_text.len() - 1;
             out.push(RankedCandidate {
-                rank: base_rank + mr,
+                match_rank,
+                kind_rank: kind_rank(CompletionKind::Function),
+                rank_sort: 0,
                 candidate: CompletionCandidate {
                     label: (*func).to_string(),
                     detail: Some("Function".into()),
-                    insert_text: format!("{func}()"),
+                    insert_text,
                     filter_text: Some((*func).to_string()),
                     kind: CompletionKind::Function,
+                    caret_offset: Some(caret_offset),
+                    selection: None,
+                    documentation: None,
                 },
             });
         }
     }
 }
 
-fn fuzzy_rank(candidate: &str, query_lower: &str) -> Option<i32> {
+/// Returns `Some(0)` for an empty query or prefix match, `Some(1)` for a substring match,
+/// or `None` when `candidate` does not match `query_lower`.
+fn match_tier(candidate: &str, query_lower: &str) -> Option<i32> {
     if query_lower.is_empty() {
         return Some(0);
     }
     let lower = candidate.to_ascii_lowercase();
-    if lower == query_lower {
+    if lower.starts_with(query_lower) {
         Some(0)
-    } else if lower.starts_with(query_lower) {
-        Some(1)
     } else if lower.contains(query_lower) {
-        Some(10)
+        Some(1)
     } else {
         None
     }
@@ -2177,5 +2527,585 @@ mod tests {
             suggest_completions_with_context(sql, sql.len(), &[], &dbs, &lang, false);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].insert_text, "[larik_prod]");
+    }
+
+    #[test]
+    fn identifier_quote_styles_escape_delimiters() {
+        assert_eq!(IdentifierQuoteStyle::Brackets.quote("a]b"), "[a]]b]");
+        assert_eq!(
+            IdentifierQuoteStyle::DoubleQuotes.quote("a\"b"),
+            "\"a\"\"b\""
+        );
+        assert_eq!(IdentifierQuoteStyle::Backticks.quote("a`b"), "`a``b`");
+    }
+
+    fn postgres_schema() -> Vec<TableSchema> {
+        vec![
+            TableSchema {
+                schema: "public".into(),
+                name: "customers".into(),
+                kind: TableKind::Table,
+                columns: vec![ColumnSchema {
+                    name: "id".into(),
+                    data_type: Some("int4".into()),
+                    nullable: false,
+                }],
+                primary_key: vec!["id".into()],
+                foreign_keys: vec![],
+            },
+            TableSchema {
+                schema: "public".into(),
+                name: "orders".into(),
+                kind: TableKind::Table,
+                columns: vec![
+                    ColumnSchema {
+                        name: "id".into(),
+                        data_type: Some("int4".into()),
+                        nullable: false,
+                    },
+                    ColumnSchema {
+                        name: "customer_id".into(),
+                        data_type: Some("int4".into()),
+                        nullable: false,
+                    },
+                ],
+                primary_key: vec!["id".into()],
+                foreign_keys: vec![ForeignKeySchema {
+                    constraint: "fk_orders_customers".into(),
+                    column: "customer_id".into(),
+                    referenced_schema: Some("public".into()),
+                    referenced_table: "customers".into(),
+                    referenced_column: "id".into(),
+                }],
+            },
+        ]
+    }
+
+    #[test]
+    fn postgres_dialect_completion_uses_double_quotes_and_pg_keywords_functions() {
+        use crate::CompletionRequest;
+
+        let lang = SqlLanguage::postgres();
+        let schema = postgres_schema();
+
+        // Table completion uses double quotes
+        let sql_from = "SELECT * FROM ord";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_from,
+            byte_offset: sql_from.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert_eq!(res.items[0].insert_text, "\"public\".\"orders\" AS \"o\"");
+
+        // JOIN ... ON uses double quotes
+        let sql_join =
+            "SELECT * FROM \"public\".\"customers\" AS \"c\" INNER JOIN \"public\".\"orders\" AS \"o\" ON ";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_join,
+            byte_offset: sql_join.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert_eq!(res.items[0].kind, CompletionKind::Join);
+        assert_eq!(res.items[0].insert_text, "\"o\".\"customer_id\" = \"c\".\"id\"");
+
+        // Dot-qualified alias completion
+        let sql_dot = "SELECT \"o\". FROM \"public\".\"orders\" AS \"o\"";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_dot,
+            byte_offset: "SELECT \"o\".".len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(res.items.iter().any(|i| i.insert_text == "\"customer_id\""));
+
+        // Postgres-specific keywords and functions
+        let sql_kw = "SELECT * FROM \"public\".\"orders\" WHERE \"id\" IL";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_kw,
+            byte_offset: sql_kw.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(
+            res.items
+                .iter()
+                .any(|i| i.kind == CompletionKind::Keyword && i.label == "ILIKE")
+        );
+
+        let sql_fn = "SELECT DATE_T";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_fn,
+            byte_offset: sql_fn.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(
+            res.items
+                .iter()
+                .any(|i| i.kind == CompletionKind::Function && i.label == "DATE_TRUNC")
+        );
+
+        // WITH RECURSIVE CTE column completion
+        let sql_cte =
+            "WITH RECURSIVE tree(node_id) AS (SELECT 1) SELECT \"t\". FROM \"tree\" AS \"t\"";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_cte,
+            byte_offset: "WITH RECURSIVE tree(node_id) AS (SELECT 1) SELECT \"t\".".len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(res.items.iter().any(|i| i.insert_text == "\"node_id\""));
+
+        // INSERT ... RETURNING column completion
+        let sql_ret = "INSERT INTO \"public\".\"orders\" VALUES (1, 2) RETURNING ";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_ret,
+            byte_offset: sql_ret.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(res.items.iter().any(|i| i.insert_text == "\"customer_id\""));
+    }
+
+    #[test]
+    fn sqlite_dialect_omits_empty_schema_and_suggests_sqlite_items() {
+        use crate::CompletionRequest;
+
+        let lang = SqlLanguage::sqlite();
+        let schema = vec![TableSchema {
+            schema: String::new(),
+            name: "orders".into(),
+            kind: TableKind::Table,
+            columns: vec![ColumnSchema {
+                name: "id".into(),
+                data_type: Some("INTEGER".into()),
+                nullable: false,
+            }],
+            primary_key: vec!["id".into()],
+            foreign_keys: vec![],
+        }];
+
+        let sql_from = "SELECT * FROM ord";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_from,
+            byte_offset: sql_from.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert_eq!(res.items[0].insert_text, "\"orders\" AS \"o\"");
+
+        let sql_kw = "PRAG";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_kw,
+            byte_offset: sql_kw.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(
+            res.items
+                .iter()
+                .any(|i| i.kind == CompletionKind::Keyword && i.label == "PRAGMA")
+        );
+
+        let sql_fn = "SELECT STRF";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_fn,
+            byte_offset: sql_fn.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert!(
+            res.items
+                .iter()
+                .any(|i| i.kind == CompletionKind::Function && i.label == "STRFTIME")
+        );
+    }
+
+    #[test]
+    fn mysql_dialect_uses_backticks_and_splits_backtick_semicolons() {
+        use crate::CompletionRequest;
+
+        let lang = SqlLanguage::mysql();
+        let schema = vec![TableSchema {
+            schema: "sales".into(),
+            name: "orders".into(),
+            kind: TableKind::Table,
+            columns: vec![ColumnSchema {
+                name: "order_total".into(),
+                data_type: Some("decimal(10,2)".into()),
+                nullable: false,
+            }],
+            primary_key: vec![],
+            foreign_keys: vec![],
+        }];
+
+        let sql_from = "SELECT * FROM ord";
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: sql_from,
+            byte_offset: sql_from.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert_eq!(res.items[0].insert_text, "`sales`.`orders` AS `o`");
+
+        // Statement splitting respects backticks containing `;` (and escaped ``)
+        let stmts = lang.split_statements("SELECT `a;b` FROM orders; SELECT 2;");
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0].text, "SELECT `a;b` FROM orders");
+        assert_eq!(stmts[1].text, "SELECT 2");
+
+        // Escaped backticks inside identifier don't prematurely end backtick mode
+        let stmts_escaped = lang.split_statements("SELECT `a``;b` FROM orders; SELECT 2;");
+        assert_eq!(stmts_escaped.len(), 2);
+        assert_eq!(stmts_escaped[0].text, "SELECT `a``;b` FROM orders");
+
+        // statement_bounds inside completion also respects backticks containing `;`
+        let multi = "SELECT 1; SELECT `a;b`, ord FROM `sales`.`orders` AS `o`";
+        let caret = "SELECT 1; SELECT `a;b`, ord".len();
+        let res = lang.suggest_completions(&CompletionRequest {
+            text: multi,
+            byte_offset: caret,
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &[],
+            clipboard: "",
+        });
+        assert_eq!(res.items[0].insert_text, "`o`.`order_total`");
+    }
+
+    #[test]
+    fn default_sql_completion_triggers_cover_all_sql_quote_styles() {
+        let lang = SqlLanguage::generic();
+        assert!(lang.is_completion_trigger(0, "."));
+        assert!(lang.is_completion_trigger(0, " "));
+        assert!(lang.is_completion_trigger(0, "["));
+        assert!(lang.is_completion_trigger(0, "\""));
+        assert!(lang.is_completion_trigger(0, "`"));
+        assert!(lang.is_completion_trigger(0, "@"));
+        assert!(lang.is_completion_trigger(0, "a"));
+        assert!(lang.is_completion_trigger(0, "_"));
+        assert!(!lang.is_completion_trigger(0, "("));
+        assert!(!lang.is_completion_trigger(0, ";"));
+    }
+
+    #[test]
+    fn snippet_completion_ranking_expansion_and_explicit_empty_trigger() {
+        use crate::{CompletionRequest, SnippetDef};
+
+        let lang = SqlLanguage::tsql();
+        let schema = sample_schema();
+        let snippets = vec![
+            SnippetDef {
+                trigger: "sel".into(),
+                name: "SELECT *".into(),
+                content: "SELECT * FROM ${cursor}".into(),
+                description: Some("Select all columns from a table".into()),
+                category: Some("Select".into()),
+                dialects: None,
+            },
+            SnippetDef {
+                trigger: "selw".into(),
+                name: "SELECT WHERE".into(),
+                content: "SELECT * FROM ${1:table} WHERE ${cursor}".into(),
+                description: Some("Select with WHERE clause".into()),
+                category: Some("Select".into()),
+                dialects: None,
+            },
+            SnippetDef {
+                trigger: "selj".into(),
+                name: "SELECT JOIN".into(),
+                content: "SELECT ${1:columns}\nFROM ${2:table1} t1\nINNER JOIN ${3:table2} t2 ON t1.${4:id} = t2.${5:id}\nWHERE ${cursor}".into(),
+                description: None,
+                category: Some("Select".into()),
+                dialects: None,
+            },
+            SnippetDef {
+                trigger: "paste".into(),
+                name: "Paste clipboard".into(),
+                content: "${paste}${cursor}".into(),
+                description: None,
+                category: Some("Utility".into()),
+                dialects: None,
+            },
+        ];
+
+        // Typing `sel` returns `sel` snippet ranked first with caret_offset & markdown doc
+        let res_sel = lang.suggest_completions(&CompletionRequest {
+            text: "sel",
+            byte_offset: 3,
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_sel.items[0].kind, CompletionKind::Snippet);
+        assert_eq!(res_sel.items[0].label, "sel");
+        assert_eq!(res_sel.items[0].insert_text, "SELECT * FROM ");
+        assert_eq!(res_sel.items[0].caret_offset, Some("SELECT * FROM ".len()));
+        assert!(
+            res_sel.items[0]
+                .documentation
+                .as_deref()
+                .is_some_and(|d| d.contains("```sql\nSELECT * FROM \n```"))
+        );
+
+        // Typing `selw` returns `SELECT * FROM table WHERE ` with selection on `table` and caret at end
+        let res_selw = lang.suggest_completions(&CompletionRequest {
+            text: "selw",
+            byte_offset: 4,
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_selw.items[0].label, "selw");
+        assert_eq!(res_selw.items[0].insert_text, "SELECT * FROM table WHERE ");
+        assert_eq!(
+            res_selw.items[0].selection,
+            Some(("SELECT * FROM ".len(), "table".len()))
+        );
+        assert_eq!(
+            res_selw.items[0].caret_offset,
+            Some("SELECT * FROM table WHERE ".len())
+        );
+
+        // Typing `wher` ranks keyword WHERE ahead of snippet `selw` (whose name contains "WHERE")
+        let res_wher = lang.suggest_completions(&CompletionRequest {
+            text: "SELECT * FROM dbo.Orders wher",
+            byte_offset: "SELECT * FROM dbo.Orders wher".len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        let where_idx = res_wher
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Keyword && i.label == "WHERE")
+            .expect("WHERE keyword present");
+        let selw_idx = res_wher
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Snippet && i.label == "selw")
+            .expect("selw snippet matched via name fallback");
+        assert!(where_idx < selw_idx, "WHERE ({where_idx}) must beat selw ({selw_idx})");
+
+        // Typing `jo` ranks keyword JOIN ahead of snippet `selj`
+        let res_jo = lang.suggest_completions(&CompletionRequest {
+            text: "SELECT * FROM dbo.Orders jo",
+            byte_offset: "SELECT * FROM dbo.Orders jo".len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        let join_idx = res_jo
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Keyword && i.label == "JOIN")
+            .expect("JOIN keyword present");
+        let selj_idx = res_jo
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Snippet && i.label == "selj")
+            .expect("selj snippet matched via name fallback");
+        assert!(join_idx < selj_idx, "JOIN ({join_idx}) must beat selj ({selj_idx})");
+
+        // Explicit Ctrl+Space with empty prefix returns snippets and keywords
+        let res_empty = lang.suggest_completions(&CompletionRequest {
+            text: "",
+            byte_offset: 0,
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &snippets,
+            clipboard: "42",
+        });
+        assert!(res_empty.items.iter().any(|i| i.kind == CompletionKind::Snippet));
+        assert!(res_empty.items.iter().any(|i| i.kind == CompletionKind::Keyword));
+        let paste_item = res_empty
+            .items
+            .iter()
+            .find(|i| i.label == "paste")
+            .expect("paste snippet returned on empty Ctrl+Space");
+        assert_eq!(paste_item.insert_text, "42");
+    }
+
+    #[test]
+    fn snippets_outrank_tables_and_keywords_matching_csharp_engine() {
+        use crate::{CompletionRequest, SnippetDef};
+
+        let lang = SqlLanguage::tsql();
+        let mut schema = sample_schema();
+        // Add tables that both prefix-match and substring-match `sel`, plus 80 tables containing `s`.
+        schema.push(TableSchema {
+            schema: "dbo".into(),
+            name: "Sellers".into(),
+            kind: TableKind::Table,
+            columns: vec![],
+            primary_key: vec![],
+            foreign_keys: vec![],
+        });
+        schema.push(TableSchema {
+            schema: "dbo".into(),
+            name: "UserSelections".into(),
+            kind: TableKind::Table,
+            columns: vec![],
+            primary_key: vec![],
+            foreign_keys: vec![],
+        });
+        for i in 0..80 {
+            schema.push(TableSchema {
+                schema: "dbo".into(),
+                name: format!("SalesRecord{i:02}"),
+                kind: TableKind::Table,
+                columns: vec![],
+                primary_key: vec![],
+                foreign_keys: vec![],
+            });
+        }
+
+        let snippets = vec![
+            SnippetDef {
+                trigger: "sel".into(),
+                name: "SELECT *".into(),
+                content: "SELECT * FROM ${cursor}".into(),
+                description: None,
+                category: Some("Select".into()),
+                dialects: None,
+            },
+            SnippetDef {
+                trigger: "selw".into(),
+                name: "SELECT WHERE".into(),
+                content: "SELECT * FROM ${1:table} WHERE ${cursor}".into(),
+                description: None,
+                category: Some("Select".into()),
+                dialects: None,
+            },
+            SnippetDef {
+                trigger: "sellj".into(),
+                name: "SELECT LEFT JOIN".into(),
+                content: "SELECT * FROM ${1:t1} LEFT JOIN ${2:t2} ON ${cursor}".into(),
+                description: None,
+                category: Some("Select".into()),
+                dialects: None,
+            },
+        ];
+
+        // 1. Typing `sel`: all matching snippets come BEFORE prefix table `Sellers`,
+        // keyword `SELECT`, and substring table `UserSelections`.
+        let res_sel = lang.suggest_completions(&CompletionRequest {
+            text: "sel",
+            byte_offset: 3,
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_sel.items[0].kind, CompletionKind::Snippet);
+        assert_eq!(res_sel.items[0].label, "sel");
+        assert_eq!(res_sel.items[1].kind, CompletionKind::Snippet);
+        assert_eq!(res_sel.items[1].label, "selw");
+        assert_eq!(res_sel.items[2].kind, CompletionKind::Snippet);
+        assert_eq!(res_sel.items[2].label, "sellj");
+        let sellers_idx = res_sel
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Table && i.label.contains("Sellers"))
+            .expect("Sellers table present");
+        let select_idx = res_sel
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Keyword && i.label == "SELECT")
+            .expect("SELECT keyword present");
+        let user_sel_idx = res_sel
+            .items
+            .iter()
+            .position(|i| i.kind == CompletionKind::Table && i.label.contains("UserSelections"))
+            .expect("UserSelections table present");
+        assert!(2 < sellers_idx, "snippets must outrank prefix table Sellers");
+        assert!(sellers_idx < select_idx, "prefix table outranks keyword SELECT (C# parity)");
+        assert!(select_idx < user_sel_idx, "prefix keyword outranks substring table UserSelections");
+
+        // 2. Typing `s` with 80+ tables starting with `S`: snippets STILL lead at index 0.
+        let res_s = lang.suggest_completions(&CompletionRequest {
+            text: "s",
+            byte_offset: 1,
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_s.items[0].kind, CompletionKind::Snippet);
+        assert_eq!(res_s.items[0].label, "sel");
+
+        // 3. Explicit Ctrl+Space on empty editor: snippets lead ahead of tables.
+        let res_empty = lang.suggest_completions(&CompletionRequest {
+            text: "",
+            byte_offset: 0,
+            tables: &schema,
+            databases: &[],
+            is_explicit: true,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_empty.items[0].kind, CompletionKind::Snippet);
+        assert_eq!(res_empty.items[0].label, "sel");
+
+        // 4. Typing `sel` on a new line after a WHERE clause (without `;`) still ranks `sel` #1.
+        let multi_line = "SELECT * FROM [dbo].[Orders] AS [o] WHERE [o].[id] = 1\nsel";
+        let res_multi = lang.suggest_completions(&CompletionRequest {
+            text: multi_line,
+            byte_offset: multi_line.len(),
+            tables: &schema,
+            databases: &[],
+            is_explicit: false,
+            snippets: &snippets,
+            clipboard: "",
+        });
+        assert_eq!(res_multi.items[0].kind, CompletionKind::Snippet);
+        assert_eq!(res_multi.items[0].label, "sel");
     }
 }

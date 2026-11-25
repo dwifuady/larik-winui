@@ -47,8 +47,25 @@ pub struct StudioPalette {
 }
 
 impl StudioPalette {
+    pub fn resolve_is_dark(mode: ThemePreference, window: Option<&Window>) -> bool {
+        match mode {
+            ThemePreference::Dark => true,
+            ThemePreference::Light => false,
+            ThemePreference::System => window.is_none_or(|w| {
+                matches!(
+                    w.appearance(),
+                    WindowAppearance::Dark | WindowAppearance::VibrantDark
+                )
+            }),
+        }
+    }
+
     pub fn for_mode(mode: ThemePreference) -> Self {
-        Self::build(mode, true)
+        let resolved = match mode {
+            ThemePreference::Light => ThemePreference::Light,
+            ThemePreference::Dark | ThemePreference::System => ThemePreference::Dark,
+        };
+        Self::build(resolved, true)
     }
 
     pub fn for_window(mode: ThemePreference, window: &Window) -> Self {
@@ -56,13 +73,23 @@ impl StudioPalette {
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
-        let app_dark = matches!(mode, ThemePreference::Dark);
-        Self::build(mode, os_dark == app_dark)
+        let effective = match mode {
+            ThemePreference::System => {
+                if os_dark {
+                    ThemePreference::Dark
+                } else {
+                    ThemePreference::Light
+                }
+            }
+            other => other,
+        };
+        let app_dark = matches!(effective, ThemePreference::Dark);
+        Self::build(effective, os_dark == app_dark)
     }
 
     fn build(mode: ThemePreference, native_mica_matches: bool) -> Self {
         match mode {
-            ThemePreference::Dark => Self {
+            ThemePreference::Dark | ThemePreference::System => Self {
                 window_bg: if native_mica_matches {
                     transparent_black()
                 } else {
@@ -203,7 +230,7 @@ const LARIK_LIGHT_HIGHLIGHT_JSON: &str = r##"{
 /// so the surrounding WinUI translucent card lets real Windows 11 Mica shine through.
 pub fn larik_highlight_theme(mode: ThemePreference) -> Arc<HighlightTheme> {
     let json = match mode {
-        ThemePreference::Dark => LARIK_DARK_HIGHLIGHT_JSON,
+        ThemePreference::Dark | ThemePreference::System => LARIK_DARK_HIGHLIGHT_JSON,
         ThemePreference::Light => LARIK_LIGHT_HIGHLIGHT_JSON,
     };
     Arc::new(
@@ -215,15 +242,21 @@ pub fn larik_highlight_theme(mode: ThemePreference) -> Arc<HighlightTheme> {
 /// Apply GPUI Component's theme mode and align all semantic surfaces + base theme tokens
 /// with Windows 11 Mica + Fluent WinUI surfaces.
 pub fn apply_larik_theme(mode: ThemePreference, window: Option<&mut Window>, cx: &mut App) {
-    let gpui_mode = match mode {
-        ThemePreference::Dark => ThemeMode::Dark,
-        ThemePreference::Light => ThemeMode::Light,
+    let is_dark = StudioPalette::resolve_is_dark(mode, window.as_deref());
+    let resolved = if is_dark {
+        ThemePreference::Dark
+    } else {
+        ThemePreference::Light
+    };
+    let gpui_mode = if is_dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
     };
     Theme::change(gpui_mode, window, cx);
 
-    let p = StudioPalette::for_mode(mode);
-    let highlight = larik_highlight_theme(mode);
-    let is_dark = matches!(mode, ThemePreference::Dark);
+    let p = StudioPalette::for_mode(resolved);
+    let highlight = larik_highlight_theme(resolved);
 
     // `Theme::update` automatically re-syncs `gpui-base`'s `BaseTheme` so Editor,
     // Input, Popover, Scrollbar, and DataTable share consistent Fluent surfaces.

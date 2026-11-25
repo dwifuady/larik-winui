@@ -141,6 +141,24 @@ impl DatabaseProvider for SqlServerProvider {
         )
     }
 
+    fn transport_warning(&self, profile: &ConnectionProfile) -> Option<&'static str> {
+        let server = profile.get_non_empty("server").unwrap_or_default();
+        if server.is_empty() || is_local_target(server) {
+            return None;
+        }
+        if !profile.get_bool("encrypt", true) {
+            return Some(
+                "This connection is not encrypted. Credentials and query data travel over the network in plain text.",
+            );
+        }
+        if profile.get_bool("trustServerCertificate", false) {
+            return Some(
+                "This connection trusts any server certificate, so someone on the network could impersonate the server.",
+            );
+        }
+        None
+    }
+
     fn create_connection(&self, profile: ConnectionProfile) -> Box<dyn DatabaseConnection> {
         Box::new(SqlServerConnection {
             profile,
@@ -828,4 +846,50 @@ fn is_local_target(server: &str) -> bool {
 
 fn quote_bracket_identifier(name: &str) -> String {
     format!("[{}]", name.replace(']', "]]"))
+}
+
+#[cfg(test)]
+mod tests {
+    use larik_data::{ConnectionProfile, DatabaseProvider};
+
+    use super::SqlServerProvider;
+
+    #[test]
+    fn transport_warning_only_flags_non_local_unverified_or_unencrypted_targets() {
+        let provider = SqlServerProvider;
+
+        // Localhost with trustServerCertificate = true should not warn.
+        let mut local = ConnectionProfile::new("mssql");
+        local.set("server", "localhost");
+        local.set("encrypt", "true");
+        local.set("trustServerCertificate", "true");
+        assert!(provider.transport_warning(&local).is_none());
+
+        // Remote server with encrypt = true and verified certificate should not warn.
+        let mut remote_secure = ConnectionProfile::new("mssql");
+        remote_secure.set("server", "192.168.0.251");
+        remote_secure.set("encrypt", "true");
+        remote_secure.set("trustServerCertificate", "false");
+        assert!(provider.transport_warning(&remote_secure).is_none());
+
+        // Remote server trusting any server certificate should warn about impersonation.
+        let mut remote_trust = ConnectionProfile::new("mssql");
+        remote_trust.set("server", "192.168.0.251");
+        remote_trust.set("encrypt", "true");
+        remote_trust.set("trustServerCertificate", "true");
+        let warning = provider
+            .transport_warning(&remote_trust)
+            .expect("expected warning for remote trustServerCertificate");
+        assert!(warning.contains("trusts any server certificate"));
+
+        // Remote server with encrypt = false should warn about unencrypted traffic.
+        let mut remote_plain = ConnectionProfile::new("mssql");
+        remote_plain.set("server", "db.example.com");
+        remote_plain.set("encrypt", "false");
+        remote_plain.set("trustServerCertificate", "false");
+        let warning = provider
+            .transport_warning(&remote_plain)
+            .expect("expected warning for remote unencrypted connection");
+        assert!(warning.contains("not encrypted"));
+    }
 }

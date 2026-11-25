@@ -1,8 +1,12 @@
 mod completion;
 mod connection_dialog;
+mod history_page;
 mod results_table;
+mod settings_page;
+mod snippets_page;
 mod studio;
 mod theme;
+mod window_title_bar;
 
 use std::sync::Arc;
 
