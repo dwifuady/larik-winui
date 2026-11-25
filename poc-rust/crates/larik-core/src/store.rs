@@ -55,7 +55,9 @@ impl StudioStore {
 
     fn connect(&self) -> anyhow::Result<Connection> {
         let conn = Connection::open(&self.db_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         Ok(conn)
     }
 
@@ -155,18 +157,41 @@ impl StudioStore {
     }
 
     pub fn save(&self, state: &StudioState, catalog: &ProviderCatalog) -> anyhow::Result<()> {
-        // Persist provider-declared password fields in the secret backend, then strip them from SQLite JSON.
+        self.save_inner(state, catalog, true)
+    }
+
+    /// Persist the sanitized studio JSON snapshot without touching the OS secret backend.
+    /// Used for frequent UI state changes (tab switches, editor edits, layout toggles) where
+    /// workspace passwords have not changed, avoiding slow Windows Credential Manager IPC.
+    pub fn save_snapshot_only(
+        &self,
+        state: &StudioState,
+        catalog: &ProviderCatalog,
+    ) -> anyhow::Result<()> {
+        self.save_inner(state, catalog, false)
+    }
+
+    fn save_inner(
+        &self,
+        state: &StudioState,
+        catalog: &ProviderCatalog,
+        sync_secrets: bool,
+    ) -> anyhow::Result<()> {
+        // Always strip provider-declared password fields from SQLite JSON; only write them to
+        // the OS secret backend when `sync_secrets` is requested.
         let mut sanitized = state.clone();
         for space in &mut sanitized.spaces {
             if let Some(provider) = catalog.find(&space.profile.provider_id) {
                 for key in provider.password_keys() {
-                    let target = secret_target(&space.id, key);
-                    match space.profile.get(key) {
-                        Some(val) if !val.is_empty() => {
-                            self.secrets.set(&target, val)?;
-                        }
-                        _ => {
-                            self.secrets.delete(&target)?;
+                    if sync_secrets {
+                        let target = secret_target(&space.id, key);
+                        match space.profile.get(key) {
+                            Some(val) if !val.is_empty() => {
+                                self.secrets.set(&target, val)?;
+                            }
+                            _ => {
+                                self.secrets.delete(&target)?;
+                            }
                         }
                     }
                     space
@@ -668,6 +693,40 @@ mod tests {
             .delete_space_secrets(&loaded.spaces[0], &catalog)
             .unwrap();
         assert_eq!(secrets.len(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_snapshot_only_strips_passwords_without_touching_secret_backend() {
+        let dir = std::env::temp_dir().join(format!("larik_poc_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("test.db");
+
+        let mut catalog = ProviderCatalog::new();
+        catalog.register(Arc::new(TestSqlProvider));
+
+        let mut state = StudioState::seed_default(&catalog);
+        state.spaces[0].name = "Fast Tab Switch".into();
+        state.spaces[0].profile = catalog.find("test-sql").unwrap().default_profile();
+        state.spaces[0].profile.set("password", "never-in-sqlite");
+
+        let secrets = Arc::new(InMemorySecretBackend::new());
+        let store = StudioStore::open_at_with_secrets(db.clone(), secrets.clone()).unwrap();
+        store.save_snapshot_only(&state, &catalog).unwrap();
+
+        // Must NOT touch the secret backend.
+        assert_eq!(secrets.len(), 0);
+
+        // Must still strip passwords from SQLite payload while saving snapshot state.
+        let conn = Connection::open(&db).unwrap();
+        let raw_payload: String = conn
+            .query_row("SELECT payload FROM studio_snapshot WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(!raw_payload.contains("never-in-sqlite"));
+        assert!(raw_payload.contains("Fast Tab Switch"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

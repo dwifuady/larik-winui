@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
@@ -269,9 +270,9 @@ impl TabRuntime {
     ///   title when `i == 0` and same kind — grid vs messages — so custom names survive re-runs).
     /// - `append == true` (`Ctrl+\`): appends new result tab(s) at the end without removing
     ///   existing result tabs.
-    fn apply_results(&mut self, incoming: Vec<QueryResult>, append: bool) {
+    fn apply_results(&mut self, incoming: Vec<QueryResult>, append: bool) -> Option<ResultTabItem> {
         if incoming.is_empty() {
-            return;
+            return None;
         }
 
         let insert_index = if append || self.results.is_empty() {
@@ -331,14 +332,13 @@ impl TabRuntime {
         self.active_result_id = self.results.get(preferred_idx).map(|r| r.id.clone());
         self.show_messages = false;
         self.results_dismissed = false;
+        replaced
     }
 
-    fn close_result(&mut self, result_id: &str) {
-        let Some(pos) = self.results.iter().position(|r| r.id == result_id) else {
-            return;
-        };
+    fn close_result(&mut self, result_id: &str) -> Option<ResultTabItem> {
+        let pos = self.results.iter().position(|r| r.id == result_id)?;
         let was_active = self.active_result_id.as_deref() == Some(result_id);
-        self.results.remove(pos);
+        let removed = self.results.remove(pos);
         if self.results.is_empty() {
             self.active_result_id = None;
             self.show_messages = false;
@@ -347,6 +347,7 @@ impl TabRuntime {
             let next_pos = pos.min(self.results.len() - 1);
             self.active_result_id = self.results.get(next_pos).map(|r| r.id.clone());
         }
+        Some(removed)
     }
 
     fn reorder_result(&mut self, dragged_id: &str, target_id: &str) -> bool {
@@ -395,20 +396,29 @@ enum SchemaRow {
     },
 }
 
+struct PendingPersist {
+    state: StudioState,
+    sync_secrets: bool,
+}
+
 pub struct StudioView {
     focus_handle: FocusHandle,
     catalog: ProviderCatalog,
-    store: StudioStore,
+    store: Arc<StudioStore>,
+    pending_persist: Arc<Mutex<Option<PendingPersist>>>,
+    persist_in_flight: Arc<AtomicBool>,
     sessions: Arc<SessionManager>,
     state: StudioState,
 
     space_runtime: HashMap<String, SpaceRuntime>,
     tab_runtime: HashMap<String, TabRuntime>,
+    /// Per-result cached `TableState` entities keyed by `ResultTabItem::id` so switching tabs
+    /// or result tabs is O(1) and preserves scroll position, selection, column order, and widths.
+    result_tables: HashMap<String, Entity<TableState<ResultTableDelegate>>>,
 
     editor_state: Entity<EditorState>,
     completion_snapshot: Arc<RwLock<CompletionSnapshot>>,
     pending_post_insert: Arc<RwLock<HashMap<String, PostInsertAction>>>,
-    table_state: Entity<TableState<ResultTableDelegate>>,
     _editor_sub: Subscription,
     _editor_edits_sub: Subscription,
     suppress_editor_sync: bool,
@@ -421,6 +431,7 @@ pub struct StudioView {
     schema_rows: Vec<SchemaRow>,
     schema_matched_tables: usize,
     schema_scroll_handle: UniformListScrollHandle,
+    synced_schema_key: Option<(String, usize, usize)>,
 
     // UI transient controls
     app_icon: Arc<Image>,
@@ -459,6 +470,7 @@ impl StudioView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let store = Arc::new(store);
         let mut state = store.load(&catalog);
         for space in &mut state.spaces {
             space.rebuild_tab_order();
@@ -467,7 +479,7 @@ impl StudioView {
         let _ = store.prune_run_log();
         let auto_archived = state.run_auto_archive(chrono::Utc::now());
         if !auto_archived.is_empty() {
-            let _ = store.save(&state, &catalog);
+            let _ = store.save_snapshot_only(&state, &catalog);
         }
         let snippets = store.load_snippets().unwrap_or_else(|_| {
             builtin_catalog()
@@ -499,13 +511,6 @@ impl StudioView {
             ed
         });
 
-        let table_state = cx.new(|cx| {
-            TableState::new(ResultTableDelegate::empty(), window, cx)
-                .col_resizable(true)
-                .col_movable(true)
-                .sortable(false)
-        });
-
         let _editor_sub = cx.subscribe(&editor_state, |this, entity, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) && !this.suppress_editor_sync {
                 let text = entity.read(cx).value().to_string();
@@ -516,7 +521,7 @@ impl StudioView {
                 {
                     tab.content = text;
                     tab.last_accessed_at = now_rfc3339();
-                    this.persist();
+                    this.persist(cx);
                 }
             }
         });
@@ -595,14 +600,16 @@ impl StudioView {
             focus_handle: cx.focus_handle(),
             catalog,
             store,
+            pending_persist: Arc::new(Mutex::new(None)),
+            persist_in_flight: Arc::new(AtomicBool::new(false)),
             sessions,
             state,
             space_runtime: HashMap::new(),
             tab_runtime: HashMap::new(),
+            result_tables: HashMap::new(),
             editor_state,
             completion_snapshot,
             pending_post_insert,
-            table_state,
             _editor_sub,
             _editor_edits_sub,
             suppress_editor_sync: false,
@@ -613,6 +620,7 @@ impl StudioView {
             schema_rows: Vec::new(),
             schema_matched_tables: 0,
             schema_scroll_handle: UniformListScrollHandle::new(),
+            synced_schema_key: None,
             app_icon,
             managing_workspaces: false,
             managing_settings: false,
@@ -655,8 +663,110 @@ impl StudioView {
         view
     }
 
-    fn persist(&self) {
-        let _ = self.store.save(&self.state, &self.catalog);
+    fn persist(&self, cx: &App) {
+        self.enqueue_persist(false, cx);
+    }
+
+    fn persist_with_secrets(&self, cx: &App) {
+        self.enqueue_persist(true, cx);
+    }
+
+    fn enqueue_persist(&self, sync_secrets: bool, cx: &App) {
+        if let Ok(mut guard) = self.pending_persist.lock() {
+            let merged_secrets =
+                sync_secrets || guard.as_ref().is_some_and(|pending| pending.sync_secrets);
+            *guard = Some(PendingPersist {
+                state: self.state.clone(),
+                sync_secrets: merged_secrets,
+            });
+        }
+        if self
+            .persist_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let store = Arc::clone(&self.store);
+        let catalog = self.catalog.clone();
+        let pending = Arc::clone(&self.pending_persist);
+        let in_flight = Arc::clone(&self.persist_in_flight);
+
+        cx.background_executor()
+            .spawn(async move {
+                loop {
+                    let next = pending.lock().ok().and_then(|mut g| g.take());
+                    if let Some(job) = next {
+                        let _ = if job.sync_secrets {
+                            store.save(&job.state, &catalog)
+                        } else {
+                            store.save_snapshot_only(&job.state, &catalog)
+                        };
+                        continue;
+                    }
+                    in_flight.store(false, Ordering::Release);
+                    let has_more = pending.lock().ok().is_some_and(|g| g.is_some());
+                    if has_more
+                        && in_flight
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                    {
+                        continue;
+                    }
+                    break;
+                }
+            })
+            .detach();
+    }
+
+    fn drop_in_background<T: Send + 'static>(stale: T, cx: &App) {
+        cx.background_executor()
+            .spawn(async move {
+                drop(stale);
+            })
+            .detach();
+    }
+
+    fn evict_result_table(&mut self, result_id: &str, cx: &mut App) {
+        if let Some(table) = self.result_tables.remove(result_id) {
+            let stale = table.update(cx, |table, _| table.delegate_mut().detach_for_drop());
+            Self::drop_in_background(stale, cx);
+        }
+    }
+
+    fn remove_tab_runtime(&mut self, tab_id: &str, cx: &mut App) {
+        if let Some(rt) = self.tab_runtime.remove(tab_id) {
+            for item in &rt.results {
+                self.evict_result_table(&item.id, cx);
+            }
+            Self::drop_in_background(rt, cx);
+        }
+    }
+
+    fn current_schema_key(&self) -> Option<(String, usize, usize)> {
+        let space_id = self.active_space_id()?;
+        let (schema_ptr, db_ptr) = self
+            .space_runtime
+            .get(&space_id)
+            .map(|rt| {
+                (
+                    Arc::as_ptr(&rt.schema) as usize,
+                    Arc::as_ptr(&rt.databases) as usize,
+                )
+            })
+            .unwrap_or((0, 0));
+        Some((space_id, schema_ptr, db_ptr))
+    }
+
+    fn sync_schema_if_changed(&mut self) {
+        let key = self.current_schema_key();
+        if self.synced_schema_key == key {
+            return;
+        }
+        self.synced_schema_key = key;
+        self.refresh_completion_snapshot();
+        self.rebuild_schema_rows();
     }
 
     fn active_space_id(&self) -> Option<String> {
@@ -685,8 +795,7 @@ impl StudioView {
             .active_space()
             .map(|s| (s.id.clone(), s.active_tab_database()))
         else {
-            self.refresh_completion_snapshot();
-            self.rebuild_schema_rows();
+            self.sync_schema_if_changed();
             return;
         };
 
@@ -701,14 +810,12 @@ impl StudioView {
             .get(&space_id)
             .is_some_and(|rt| rt.connection_state() == ConnectionState::Connected);
         if !is_connected {
-            self.refresh_completion_snapshot();
-            self.rebuild_schema_rows();
+            self.sync_schema_if_changed();
             return;
         }
 
         let Some(db_name) = target_db else {
-            self.refresh_completion_snapshot();
-            self.rebuild_schema_rows();
+            self.sync_schema_if_changed();
             return;
         };
 
@@ -723,8 +830,7 @@ impl StudioView {
                     self.expanded_tables.clear();
                 }
             }
-            self.refresh_completion_snapshot();
-            self.rebuild_schema_rows();
+            self.sync_schema_if_changed();
             return;
         }
 
@@ -732,8 +838,8 @@ impl StudioView {
         if let Some(rt) = self.space_runtime.get_mut(&space_id) {
             rt.schema = Arc::default();
         }
-        self.refresh_completion_snapshot();
-        self.rebuild_schema_rows();
+        self.synced_schema_key = None;
+        self.sync_schema_if_changed();
 
         let rx = self
             .sessions
@@ -759,8 +865,8 @@ impl StudioView {
                     }
                     if still_matches {
                         this.expanded_tables.clear();
-                        this.refresh_completion_snapshot();
-                        this.rebuild_schema_rows();
+                        this.synced_schema_key = None;
+                        this.sync_schema_if_changed();
                         cx.notify();
                     }
                 });
@@ -912,27 +1018,45 @@ impl StudioView {
             .map(|t| t.content.clone())
             .unwrap_or_default();
 
-        self.suppress_editor_sync = true;
-        self.editor_state.update(cx, |ed, cx| {
-            ed.set_value(content, window, cx);
-        });
-        self.suppress_editor_sync = false;
-        self.sync_table_from_active_tab(cx);
+        if self.editor_state.read(cx).value().as_ref() != content.as_str() {
+            self.suppress_editor_sync = true;
+            self.editor_state.update(cx, |ed, cx| {
+                ed.set_value(content, window, cx);
+            });
+            self.suppress_editor_sync = false;
+        }
     }
 
-    fn sync_table_from_active_tab(&mut self, cx: &mut Context<Self>) {
-        let active_result: Option<Arc<QueryResult>> = self.active_tab_id().and_then(|tab_id| {
-            let rt = self.tab_runtime.get(&tab_id)?;
-            if rt.show_messages {
-                return None;
+    fn ensure_result_table(
+        &mut self,
+        result_id: &str,
+        result: &Arc<QueryResult>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TableState<ResultTableDelegate>> {
+        if let Some(existing) = self.result_tables.get(result_id).cloned() {
+            let needs_update = !existing.read(cx).delegate().is_same_result(result);
+            if needs_update {
+                let stale = existing.update(cx, |table, cx| {
+                    let stale = table.delegate_mut().detach_for_drop();
+                    table.delegate_mut().set_result(Some(Arc::clone(result)));
+                    table.refresh(cx);
+                    stale
+                });
+                Self::drop_in_background(stale, cx);
             }
-            rt.active_result().map(|item| item.result.clone())
-        });
+            return existing;
+        }
 
-        self.table_state.update(cx, |table, cx| {
-            table.delegate_mut().set_result(active_result);
-            table.refresh(cx);
+        let res_clone = Arc::clone(result);
+        let table = cx.new(|cx| {
+            TableState::new(ResultTableDelegate::from_result(res_clone), window, cx)
+                .col_resizable(true)
+                .col_movable(true)
+                .sortable(false)
         });
+        self.result_tables.insert(result_id.to_string(), table.clone());
+        table
     }
 
     fn ensure_active_space_in_footer_window(&mut self) {
@@ -981,7 +1105,7 @@ impl StudioView {
         if self.history_page.is_some() {
             self.refresh_history_runs(cx);
         }
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1030,7 +1154,7 @@ impl StudioView {
         self.history_page = None;
         self.sync_editor_from_active_tab(window, cx);
         self.sync_database_for_active_tab(cx);
-        self.persist();
+        self.persist_with_secrets(cx);
         self.open_connection_modal(space_id, window, cx);
         cx.notify();
     }
@@ -1246,7 +1370,7 @@ impl StudioView {
         if let Some(space) = self.state.spaces.iter_mut().find(|s| s.id == space_id) {
             space.is_hidden = !space.is_hidden;
             self.ensure_active_space_in_footer_window();
-            self.persist();
+            self.persist(cx);
             cx.notify();
         }
     }
@@ -1261,7 +1385,7 @@ impl StudioView {
         }
         self.state.spaces.swap(pos, target as usize);
         self.ensure_active_space_in_footer_window();
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1281,7 +1405,7 @@ impl StudioView {
         let removed = self.state.spaces.remove(pos);
         let tab_ids: Vec<String> = removed.tabs.iter().map(|t| t.id.clone()).collect();
         for tid in &tab_ids {
-            self.tab_runtime.remove(tid);
+            self.remove_tab_runtime(tid, cx);
         }
         self.sessions.disconnect_space(removed.id.clone(), tab_ids);
         self.space_runtime.remove(&removed.id);
@@ -1306,7 +1430,7 @@ impl StudioView {
 
         self.ensure_active_space_in_footer_window();
         self.modal = None;
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1355,7 +1479,7 @@ impl StudioView {
                                     .active_tab_database()
                                     .or_else(|| Some(db.clone()));
                             }
-                            this.persist();
+                            this.persist(cx);
                         }
 
                         let active_tab_db = this
@@ -1376,8 +1500,8 @@ impl StudioView {
                         if needs_tab_resync {
                             this.sync_database_for_active_tab(cx);
                         } else {
-                            this.refresh_completion_snapshot();
-                            this.rebuild_schema_rows();
+                            this.synced_schema_key = None;
+                            this.sync_schema_if_changed();
                         }
                     }
                     Ok(Err(err)) => {
@@ -1417,8 +1541,8 @@ impl StudioView {
         self.expanded_tables.clear();
         self.db_dropdown_open = false;
         self.close_db_palette(cx);
-        self.refresh_completion_snapshot();
-        self.rebuild_schema_rows();
+        self.synced_schema_key = None;
+        self.sync_schema_if_changed();
         cx.notify();
     }
 
@@ -1438,7 +1562,7 @@ impl StudioView {
         self.rail_context_menu = None;
         self.sync_database_for_active_tab(cx);
         self.editor_state.update(cx, |ed, cx| ed.focus(window, cx));
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1552,7 +1676,7 @@ impl StudioView {
         self.sync_editor_from_active_tab(window, cx);
         self.sync_database_for_active_tab(cx);
         self.editor_state.update(cx, |ed, cx| ed.focus(window, cx));
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1571,7 +1695,7 @@ impl StudioView {
                     if let Some(group) = space.tab_group_mut(&gid) {
                         if !group.is_expanded {
                             group.is_expanded = true;
-                            self.persist();
+                            self.persist(cx);
                             cx.notify();
                         }
                     }
@@ -1600,7 +1724,7 @@ impl StudioView {
         self.cancel_result_rename(cx);
         self.sync_editor_from_active_tab(window, cx);
         self.sync_database_for_active_tab(cx);
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1608,7 +1732,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.toggle_pin_tab(&tab_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1618,7 +1742,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.toggle_group_expanded(&group_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1628,7 +1752,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.toggle_group_pin(&group_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1641,7 +1765,7 @@ impl StudioView {
             .active_space_mut()
             .and_then(|space| space.new_group_from_tab(&tab_id));
         if let Some(group_id) = created_id {
-            self.persist();
+            self.persist(cx);
             self.start_rename_group(group_id, window, cx);
         }
     }
@@ -1656,7 +1780,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.move_tab_to_group(&tab_id, target_group_id.as_deref(), loose_pinned) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1669,7 +1793,7 @@ impl StudioView {
         }
         if let Some(space) = self.state.active_space_mut() {
             if space.ungroup(&group_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1690,7 +1814,7 @@ impl StudioView {
         if !created.is_empty() {
             self.last_grouping_space_id = Some(space_id);
             self.last_grouping_ids = created;
-            self.persist();
+            self.persist(cx);
             cx.notify();
         }
     }
@@ -1704,7 +1828,7 @@ impl StudioView {
         let group_ids = std::mem::take(&mut self.last_grouping_ids);
         if let Some(space) = self.state.spaces.iter_mut().find(|s| s.id == space_id) {
             if space.undo_grouping(&group_ids) {
-                self.persist();
+                self.persist(cx);
             }
         }
         cx.notify();
@@ -1714,7 +1838,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.drop_tab_on_group(dragged_id, group_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1724,7 +1848,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.drop_tab_on_tab(dragged_id, target_id) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1740,7 +1864,7 @@ impl StudioView {
         self.rail_context_menu = None;
         if let Some(space) = self.state.active_space_mut() {
             if space.drop_tab_to_loose(dragged_id, pinned, at_top) {
-                self.persist();
+                self.persist(cx);
                 cx.notify();
             }
         }
@@ -1832,7 +1956,7 @@ impl StudioView {
         };
 
         self.sessions.close_tab_session(removed.id.clone());
-        self.tab_runtime.remove(&removed.id);
+        self.remove_tab_runtime(&removed.id, cx);
         self.cancel_result_rename(cx);
 
         // Non-destructive close: file into archive if it has content.
@@ -1875,7 +1999,7 @@ impl StudioView {
 
         self.sync_editor_from_active_tab(window, cx);
         self.sync_database_for_active_tab(cx);
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1934,7 +2058,7 @@ impl StudioView {
         self.rail_context_menu = None;
         self.sync_editor_from_active_tab(window, cx);
         self.sync_database_for_active_tab(cx);
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1942,7 +2066,7 @@ impl StudioView {
         let prev_len = self.state.archived_tabs.len();
         self.state.archived_tabs.retain(|a| a.id != archived_id);
         if self.state.archived_tabs.len() != prev_len {
-            self.persist();
+            self.persist(cx);
             cx.notify();
         }
     }
@@ -1960,7 +2084,7 @@ impl StudioView {
                 .into(),
             );
         }
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -1989,10 +2113,10 @@ impl StudioView {
             let archived = self.state.run_auto_archive(chrono::Utc::now());
             for id in &archived {
                 self.sessions.close_tab_session(id.clone());
-                self.tab_runtime.remove(id);
+                self.remove_tab_runtime(id, cx);
             }
             if !archived.is_empty() {
-                self.persist();
+                self.persist(cx);
             }
         }
 
@@ -2142,7 +2266,7 @@ impl StudioView {
 
     pub(crate) fn toggle_auto_archive_enabled(&mut self, cx: &mut Context<Self>) {
         self.state.auto_archive_enabled = !self.state.auto_archive_enabled;
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2170,7 +2294,7 @@ impl StudioView {
                 });
             }
         }
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2178,13 +2302,13 @@ impl StudioView {
         let archived = self.state.run_auto_archive(chrono::Utc::now());
         for id in &archived {
             self.sessions.close_tab_session(id.clone());
-            self.tab_runtime.remove(id);
+            self.remove_tab_runtime(id, cx);
         }
         let count = archived.len();
         if count > 0 {
             self.sync_editor_from_active_tab(window, cx);
             self.sync_database_for_active_tab(cx);
-            self.persist();
+            self.persist(cx);
         }
         if let Some(h) = self.history_page.as_mut() {
             h.banner_status = Some(
@@ -2247,7 +2371,7 @@ impl StudioView {
                     .and_then(|s| s.tabs.iter_mut().find(|t| t.id == tab_id))
                 {
                     tab.title = new_title;
-                    self.persist();
+                    self.persist(cx);
                 }
             }
         }
@@ -2307,7 +2431,7 @@ impl StudioView {
             let new_name = input.read(cx).value().to_string();
             if let Some(space) = self.state.active_space_mut() {
                 if space.rename_group(&group_id, &new_name) {
-                    self.persist();
+                    self.persist(cx);
                 }
             }
         }
@@ -2389,7 +2513,6 @@ impl StudioView {
                 rt.active_result_id = Some(result_id);
                 rt.show_messages = false;
             }
-            self.sync_table_from_active_tab(cx);
             cx.notify();
         }
     }
@@ -2403,10 +2526,14 @@ impl StudioView {
             self.cancel_result_rename(cx);
         }
         if let Some(tab_id) = self.active_tab_id() {
-            if let Some(rt) = self.tab_runtime.get_mut(&tab_id) {
-                rt.close_result(&result_id);
+            let removed = self
+                .tab_runtime
+                .get_mut(&tab_id)
+                .and_then(|rt| rt.close_result(&result_id));
+            self.evict_result_table(&result_id, cx);
+            if let Some(removed) = removed {
+                Self::drop_in_background(removed, cx);
             }
-            self.sync_table_from_active_tab(cx);
             cx.notify();
         }
     }
@@ -2446,16 +2573,22 @@ impl StudioView {
             .map(SpaceRuntime::connection_state)
             .unwrap_or(ConnectionState::Disconnected);
         if conn_state != ConnectionState::Connected {
-            let rt = self.tab_runtime.entry(tab.id.clone()).or_default();
-            rt.apply_results(
-                vec![QueryResult::error(
-                    "Workspace is disconnected. Click Connect in the left sidebar first.",
-                    Duration::ZERO,
-                    tab.database.clone(),
-                )],
-                append_result,
-            );
-            self.sync_table_from_active_tab(cx);
+            let replaced = self
+                .tab_runtime
+                .entry(tab.id.clone())
+                .or_default()
+                .apply_results(
+                    vec![QueryResult::error(
+                        "Workspace is disconnected. Click Connect in the left sidebar first.",
+                        Duration::ZERO,
+                        tab.database.clone(),
+                    )],
+                    append_result,
+                );
+            if let Some(old) = replaced {
+                self.evict_result_table(&old.id, cx);
+                Self::drop_in_background(old, cx);
+            }
             cx.notify();
             return;
         }
@@ -2567,7 +2700,11 @@ impl StudioView {
                             truncated.is_some(),
                         ));
 
-                        rt.apply_results(results, append_result);
+                        let replaced = rt.apply_results(results, append_result);
+                        if let Some(old) = replaced {
+                            this.evict_result_table(&old.id, cx);
+                            Self::drop_in_background(old, cx);
+                        }
                     }
                     Ok(Err(err)) => {
                         let err_msg = err.to_string();
@@ -2586,10 +2723,14 @@ impl StudioView {
                             None,
                             false,
                         ));
-                        rt.apply_results(
+                        let replaced = rt.apply_results(
                             vec![QueryResult::error(err_msg, Duration::ZERO, database.clone())],
                             append_result,
                         );
+                        if let Some(old) = replaced {
+                            this.evict_result_table(&old.id, cx);
+                            Self::drop_in_background(old, cx);
+                        }
                     }
                     Err(_) => {
                         rt.last_summary = Some("Cancelled".into());
@@ -2610,9 +2751,6 @@ impl StudioView {
                     }
                 }
 
-                if this.active_tab_id().as_deref() == Some(tab_id.as_str()) {
-                    this.sync_table_from_active_tab(cx);
-                }
                 if this.history_page.is_some() {
                     this.refresh_history_runs(cx);
                 } else {
@@ -2681,7 +2819,7 @@ impl StudioView {
         self.state.rail_open = !self.state.rail_open;
         self.workspace_dropdown_open = false;
         self.db_dropdown_open = false;
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2696,7 +2834,7 @@ impl StudioView {
         }
         self.state.theme = pref;
         apply_larik_theme(self.state.theme, Some(window), cx);
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2712,7 +2850,7 @@ impl StudioView {
     fn toggle_schema_pane(&mut self, cx: &mut Context<Self>) {
         self.state.schema_pane_open = !self.state.schema_pane_open;
         self.rebuild_schema_rows();
-        self.persist();
+        self.persist(cx);
         cx.notify();
     }
 
@@ -2724,7 +2862,24 @@ impl StudioView {
     }
 
     fn copy_active_tsv(&mut self, cx: &mut Context<Self>) {
-        let tsv = self.table_state.read(cx).delegate().to_tsv();
+        let active_item = self.active_tab_id().and_then(|tab_id| {
+            let rt = self.tab_runtime.get(&tab_id)?;
+            let item = rt.active_result()?;
+            Some((item.id.clone(), Arc::clone(&item.result)))
+        });
+        let Some((result_id, result)) = active_item else {
+            return;
+        };
+        let tsv = if let Some(table) = self.result_tables.get(&result_id) {
+            let state = table.read(cx);
+            if state.delegate().is_same_result(&result) {
+                state.delegate().to_tsv()
+            } else {
+                ResultTableDelegate::from_result(result).to_tsv()
+            }
+        } else {
+            ResultTableDelegate::from_result(result).to_tsv()
+        };
         if tsv.is_empty() {
             return;
         }
@@ -2914,9 +3069,23 @@ impl StudioView {
             space.profile = new_profile;
         }
         self.disconnect_space(space_id.clone(), cx);
-        self.persist();
+        self.persist_with_secrets(cx);
         self.connect_space(space_id, cx);
         cx.notify();
+    }
+}
+
+impl Drop for StudioView {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.pending_persist.lock() {
+            if let Some(job) = guard.take() {
+                let _ = if job.sync_secrets {
+                    self.store.save(&job.state, &self.catalog)
+                } else {
+                    self.store.save_snapshot_only(&job.state, &self.catalog)
+                };
+            }
+        }
     }
 }
 
@@ -2928,6 +3097,23 @@ impl Focusable for StudioView {
 
 impl Render for StudioView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_table_state: Option<Entity<TableState<ResultTableDelegate>>> = {
+            let active_grid = self.active_tab_id().and_then(|tab_id| {
+                let rt = self.tab_runtime.get(&tab_id)?;
+                if rt.results_dismissed || rt.show_messages {
+                    return None;
+                }
+                let item = rt.active_result()?;
+                if item.result.is_error || item.result.columns.is_empty() {
+                    return None;
+                }
+                Some((item.id.clone(), Arc::clone(&item.result)))
+            });
+            active_grid.map(|(result_id, result)| {
+                self.ensure_result_table(&result_id, &result, window, cx)
+            })
+        };
+
         let palette = StudioPalette::for_window(self.state.theme, window);
         let active_space = self.state.active_space();
         let active_tab = active_space.and_then(|s| s.active_tab());
@@ -3148,6 +3334,7 @@ impl Render for StudioView {
                                     active_tab,
                                     space_rt,
                                     tab_rt,
+                                    active_table_state.as_ref(),
                                     palette,
                                     cx,
                                 ))
@@ -5834,6 +6021,7 @@ impl StudioView {
         active_tab: Option<&TabState>,
         space_rt: &SpaceRuntime,
         tab_rt: &TabRuntime,
+        active_table_state: Option<&Entity<TableState<ResultTableDelegate>>>,
         palette: StudioPalette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -6057,6 +6245,7 @@ impl StudioView {
                                         self.render_results_pane(
                                             active_tab.map(|t| t.id.as_str()),
                                             tab_rt,
+                                            active_table_state,
                                             space_color,
                                             palette,
                                             cx,
@@ -6104,6 +6293,7 @@ impl StudioView {
         &self,
         tab_id: Option<&str>,
         tab_rt: &TabRuntime,
+        active_table_state: Option<&Entity<TableState<ResultTableDelegate>>>,
         space_color: gpui_kit::Hsla,
         palette: StudioPalette,
         cx: &mut Context<Self>,
@@ -6388,7 +6578,6 @@ impl StudioView {
                                                 {
                                                     rt.show_messages = true;
                                                 }
-                                                this.sync_table_from_active_tab(cx);
                                                 cx.notify();
                                             }
                                         }))
@@ -6568,13 +6757,20 @@ impl StudioView {
                             .text_color(palette.text_secondary)
                             .child(res.message.clone())
                             .into_any_element()
-                    } else {
-                        DataTable::new(&self.table_state)
-                            .small()
-                            .stripe(true)
-                            .bordered(false)
-                            .scroll_bounce(false)
+                    } else if let Some(table_state) = active_table_state {
+                        div()
+                            .id(SharedString::from(format!("res-grid-{}", item.id)))
+                            .size_full()
+                            .child(
+                                DataTable::new(table_state)
+                                    .small()
+                                    .stripe(true)
+                                    .bordered(false)
+                                    .scroll_bounce(false),
+                            )
                             .into_any_element()
+                    } else {
+                        div().size_full().into_any_element()
                     }
                 } else {
                     div().size_full().into_any_element()

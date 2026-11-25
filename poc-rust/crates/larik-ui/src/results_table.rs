@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui_kit::component::table::{Column, ColumnFixed, TableDelegate, TableState};
@@ -13,37 +14,69 @@ use larik_data::QueryResult;
 /// while full original cell values remain intact in `source` for clipboard export and `cell_text`.
 const MAX_CELL_PREVIEW_CHARS: usize = 160;
 
-/// Virtualized `DataTable` delegate rendering a `QueryResult` with zero per-frame string
-/// allocations: display strings and row numbers are pre-converted to `SharedString` once
-/// when a result is attached, and column reordering is O(columns).
+/// Upper bound on cached formatted cell previews per table instance.
+/// Only visible and recently scrolled cells are formatted on demand so attaching a large
+/// result set stays O(columns) instead of O(rows * columns).
+const MAX_CELL_CACHE_ENTRIES: usize = 8_192;
+
+/// Upper bound on cached 1-based row number labels per table instance.
+const MAX_ROW_NUMBER_CACHE_ENTRIES: usize = 2_048;
+
+/// Virtualized `DataTable` delegate rendering a `QueryResult` with O(columns) attachment
+/// and bounded lazy `SharedString` caching: only visible cells are formatted on demand,
+/// repeat frames are O(1) refcount clones, and column reordering is O(columns).
 pub struct ResultTableDelegate {
     source: Option<Arc<QueryResult>>,
     columns: Vec<Column>,
     column_types: Vec<Option<SharedString>>,
     /// Maps visible data column index (`col_ix - 1`) -> original column index in `source`.
     col_order: Vec<usize>,
-    /// Pre-sanitized, preview-capped `SharedString` grid so `render_td` is O(1) refcount clone.
-    display_rows: Vec<Vec<Option<SharedString>>>,
-    /// Pre-formatted row numbers (`"1"`, `"2"`, ...) so gutter `render_td` never allocates.
-    row_numbers: Vec<SharedString>,
+    /// Lazy bounded cache of preview-capped `SharedString` values keyed by `(row_ix, src_col)`.
+    cell_cache: HashMap<(usize, usize), SharedString>,
+    /// Lazy bounded cache of formatted 1-based row numbers keyed by `row_ix`.
+    row_number_cache: HashMap<usize, SharedString>,
 }
 
 fn format_cell_preview(raw: &str) -> SharedString {
-    let needs_clean = raw.contains(['\r', '\n', '\t']);
-    let mut chars = raw.chars();
-    let preview: String = chars.by_ref().take(MAX_CELL_PREVIEW_CHARS).collect();
-    let truncated = chars.next().is_some();
-
-    if !needs_clean && !truncated {
-        return SharedString::from(raw.to_string());
+    match raw {
+        "" => return SharedString::new_static(""),
+        "0" => return SharedString::new_static("0"),
+        "1" => return SharedString::new_static("1"),
+        _ => {}
     }
 
-    let mut out = String::with_capacity(preview.len() + 3);
-    for ch in preview.chars() {
-        match ch {
-            '\r' | '\n' | '\t' => out.push(' '),
-            other => out.push(other),
+    let mut needs_clean = false;
+    let mut char_count = 0usize;
+    let mut cut_byte_idx = raw.len();
+    let mut truncated = false;
+
+    for (byte_idx, ch) in raw.char_indices() {
+        if char_count == MAX_CELL_PREVIEW_CHARS {
+            cut_byte_idx = byte_idx;
+            truncated = true;
+            break;
         }
+        if matches!(ch, '\r' | '\n' | '\t') {
+            needs_clean = true;
+        }
+        char_count += 1;
+    }
+
+    if !needs_clean && !truncated {
+        return SharedString::from(Arc::<str>::from(raw));
+    }
+
+    let slice = &raw[..cut_byte_idx];
+    let mut out = String::with_capacity(slice.len() + if truncated { 3 } else { 0 });
+    if needs_clean {
+        for ch in slice.chars() {
+            match ch {
+                '\r' | '\n' | '\t' => out.push(' '),
+                other => out.push(other),
+            }
+        }
+    } else {
+        out.push_str(slice);
     }
     if truncated {
         out.push('…');
@@ -58,18 +91,55 @@ impl ResultTableDelegate {
             columns: Vec::new(),
             column_types: Vec::new(),
             col_order: Vec::new(),
-            display_rows: Vec::new(),
-            row_numbers: Vec::new(),
+            cell_cache: HashMap::new(),
+            row_number_cache: HashMap::new(),
         }
     }
 
+    pub fn from_result(result: Arc<QueryResult>) -> Self {
+        let mut delegate = Self::empty();
+        delegate.set_result(Some(result));
+        delegate
+    }
+
+    pub fn is_same_result(&self, result: &Arc<QueryResult>) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|existing| Arc::ptr_eq(existing, result))
+    }
+
+    /// Detach owned result data and lazy caches so they can be dropped on a background thread,
+    /// avoiding UI-thread deallocation pauses even if GPUI defers entity cleanup.
+    pub fn detach_for_drop(
+        &mut self,
+    ) -> (
+        Option<Arc<QueryResult>>,
+        HashMap<(usize, usize), SharedString>,
+        HashMap<usize, SharedString>,
+    ) {
+        self.columns.clear();
+        self.column_types.clear();
+        self.col_order.clear();
+        (
+            self.source.take(),
+            std::mem::take(&mut self.cell_cache),
+            std::mem::take(&mut self.row_number_cache),
+        )
+    }
+
     pub fn set_result(&mut self, result: Option<Arc<QueryResult>>) {
+        if let (Some(existing), Some(incoming)) = (self.source.as_ref(), result.as_ref()) {
+            if Arc::ptr_eq(existing, incoming) {
+                return;
+            }
+        }
+
         self.source = None;
         self.columns.clear();
         self.column_types.clear();
         self.col_order.clear();
-        self.display_rows.clear();
-        self.row_numbers.clear();
+        self.cell_cache.clear();
+        self.row_number_cache.clear();
 
         let Some(res) = result else {
             return;
@@ -88,6 +158,8 @@ impl ResultTableDelegate {
             .movable(false)
             .selectable(false);
         gutter.align = TextAlign::Right;
+        self.columns.reserve(res.columns.len() + 1);
+        self.column_types.reserve(res.columns.len() + 1);
         self.columns.push(gutter);
         self.column_types.push(None);
 
@@ -124,21 +196,40 @@ impl ResultTableDelegate {
             self.col_order.push(idx);
         }
 
-        self.row_numbers = (1..=res.rows.len())
-            .map(|n| SharedString::from(n.to_string()))
-            .collect();
-
-        self.display_rows = res
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.as_deref().map(format_cell_preview))
-                    .collect()
-            })
-            .collect();
-
         self.source = Some(res);
+    }
+
+    /// Return the sanitized, preview-capped cell string for `(row_ix, src_col)`, formatting
+    /// and caching lazily on first access.
+    pub fn preview_cell(&mut self, row_ix: usize, src_col: usize) -> Option<SharedString> {
+        if let Some(cached) = self.cell_cache.get(&(row_ix, src_col)) {
+            return Some(cached.clone());
+        }
+        let raw = self
+            .source
+            .as_ref()?
+            .rows
+            .get(row_ix)?
+            .get(src_col)?
+            .as_deref()?;
+        let formatted = format_cell_preview(raw);
+        if self.cell_cache.len() >= MAX_CELL_CACHE_ENTRIES {
+            self.cell_cache.clear();
+        }
+        self.cell_cache.insert((row_ix, src_col), formatted.clone());
+        Some(formatted)
+    }
+
+    fn row_number_label(&mut self, row_ix: usize) -> SharedString {
+        if let Some(cached) = self.row_number_cache.get(&row_ix) {
+            return cached.clone();
+        }
+        let label = SharedString::from((row_ix + 1).to_string());
+        if self.row_number_cache.len() >= MAX_ROW_NUMBER_CACHE_ENTRIES {
+            self.row_number_cache.clear();
+        }
+        self.row_number_cache.insert(row_ix, label.clone());
+        label
     }
 
     /// Format the active grid as tab-separated values for clipboard export (full un-truncated data).
@@ -149,14 +240,19 @@ impl ResultTableDelegate {
         if self.columns.len() <= 1 {
             return String::new();
         }
-        let mut out = String::new();
-        let headers: Vec<&str> = self
-            .columns
-            .iter()
-            .skip(1)
-            .map(|c| c.name.as_ref())
-            .collect();
-        out.push_str(&headers.join("\t"));
+        let estimated = src
+            .rows
+            .len()
+            .saturating_mul(self.col_order.len())
+            .saturating_mul(12)
+            .min(16 * 1024 * 1024);
+        let mut out = String::with_capacity(estimated);
+        for (i, col) in self.columns.iter().skip(1).enumerate() {
+            if i > 0 {
+                out.push('\t');
+            }
+            out.push_str(col.name.as_ref());
+        }
         out.push('\n');
 
         for row in &src.rows {
@@ -165,7 +261,18 @@ impl ResultTableDelegate {
                     out.push('\t');
                 }
                 match row.get(src_col_idx).and_then(|v| v.as_deref()) {
-                    Some(v) => out.push_str(&v.replace(['\t', '\r', '\n'], " ")),
+                    Some(v) => {
+                        if v.contains(['\t', '\r', '\n']) {
+                            for ch in v.chars() {
+                                match ch {
+                                    '\t' | '\r' | '\n' => out.push(' '),
+                                    other => out.push(other),
+                                }
+                            }
+                        } else {
+                            out.push_str(v);
+                        }
+                    }
                     None => out.push_str("NULL"),
                 }
             }
@@ -181,7 +288,7 @@ impl TableDelegate for ResultTableDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.display_rows.len()
+        self.source.as_ref().map_or(0, |s| s.rows.len())
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -274,11 +381,7 @@ impl TableDelegate for ResultTableDelegate {
         let mono = theme.mono_font_family.clone();
 
         if col_ix == 0 {
-            let label = self
-                .row_numbers
-                .get(row_ix)
-                .cloned()
-                .unwrap_or_default();
+            let label = self.row_number_label(row_ix);
             return div()
                 .w_full()
                 .pr_1()
@@ -290,14 +393,10 @@ impl TableDelegate for ResultTableDelegate {
         }
 
         let src_col = self.col_order.get(col_ix - 1).copied().unwrap_or(col_ix - 1);
-        let cell = self
-            .display_rows
-            .get(row_ix)
-            .and_then(|r| r.get(src_col))
-            .and_then(|v| v.as_ref());
+        let cell = self.preview_cell(row_ix, src_col);
 
         // `DataTable::render_cell` already applies `overflow_hidden().whitespace_nowrap()`,
-        // so returning a single flat `div` with a pre-built `SharedString` avoids both
+        // so returning a single flat `div` with a cached `SharedString` avoids both
         // per-frame heap allocations and redundant DirectWrite ellipsis re-shaping.
         match cell {
             Some(text) => div()
@@ -305,7 +404,7 @@ impl TableDelegate for ResultTableDelegate {
                 .text_size(px(12.0))
                 .font_family(mono)
                 .text_color(theme.foreground)
-                .child(text.clone()),
+                .child(text),
             None => div()
                 .w_full()
                 .text_size(px(11.5))
@@ -332,7 +431,7 @@ impl TableDelegate for ResultTableDelegate {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use larik_data::QueryColumn;
 
@@ -361,12 +460,78 @@ mod tests {
         let mut delegate = ResultTableDelegate::empty();
         delegate.set_result(Some(result));
 
-        let preview = delegate.display_rows[0][0].as_ref().unwrap();
+        // Attachment is lazy: nothing is formatted until rendered/queried.
+        assert!(delegate.cell_cache.is_empty());
+        assert!(delegate.row_number_cache.is_empty());
+
+        let preview = delegate.preview_cell(0, 0).unwrap();
         assert_eq!(preview.chars().count(), MAX_CELL_PREVIEW_CHARS + 1);
         assert!(preview.ends_with('…'));
+        assert!(delegate.preview_cell(1, 0).is_none());
+        assert_eq!(delegate.cell_cache.len(), 1);
 
         let tsv = delegate.to_tsv();
         assert!(tsv.contains(&long_val));
         assert!(tsv.contains("NULL"));
+    }
+
+    #[test]
+    fn large_result_attachment_stays_lazy_and_fast() {
+        let rows = 2_699;
+        let cols = 64;
+        let columns: Vec<QueryColumn> = (0..cols)
+            .map(|c| QueryColumn {
+                name: format!("col_{c}"),
+                data_type: Some("nvarchar".into()),
+            })
+            .collect();
+        let data_rows: Vec<Vec<Option<String>>> = (0..rows)
+            .map(|r| {
+                (0..cols)
+                    .map(|c| Some(format!("row_{r}_col_{c}_value")))
+                    .collect()
+            })
+            .collect();
+        let result = Arc::new(QueryResult {
+            statement: None,
+            columns,
+            rows: data_rows,
+            records_affected: Some(rows as i64),
+            message: format!("{rows} rows"),
+            messages: Vec::new(),
+            is_error: false,
+            is_truncated: false,
+            row_limit: Some(5_000),
+            elapsed: Duration::from_millis(10),
+            database: None,
+        });
+
+        let started = Instant::now();
+        let mut delegate = ResultTableDelegate::from_result(Arc::clone(&result));
+        let attach_elapsed = started.elapsed();
+
+        assert!(delegate.is_same_result(&result));
+        assert_eq!(delegate.columns.len(), cols + 1);
+        assert!(delegate.cell_cache.is_empty());
+        assert!(delegate.row_number_cache.is_empty());
+        // Attaching 2699x64 should be O(columns), well under 50ms even in unoptimized debug builds.
+        assert!(
+            attach_elapsed < Duration::from_millis(50),
+            "expected O(columns) attachment, took {attach_elapsed:?}"
+        );
+
+        // Formatting a visible viewport (30 rows x 12 cols) only populates those 360 entries.
+        for r in 0..30 {
+            let _ = delegate.row_number_label(r);
+            for c in 0..12 {
+                assert!(delegate.preview_cell(r, c).is_some());
+            }
+        }
+        assert_eq!(delegate.cell_cache.len(), 360);
+        assert_eq!(delegate.row_number_cache.len(), 30);
+
+        // Re-attaching the exact same Arc<QueryResult> is a no-op and preserves caches.
+        delegate.set_result(Some(Arc::clone(&result)));
+        assert_eq!(delegate.cell_cache.len(), 360);
     }
 }
