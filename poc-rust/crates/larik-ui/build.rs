@@ -10,6 +10,23 @@ fn main() {
         return;
     }
 
+    // Windows defaults to a 1 MB main-thread stack (vs 8 MB on macOS/Linux).
+    // Unoptimized GPUI debug render frames (deep Div/StyleRefinement chains such as
+    // Results -> Preview Pane or Settings -> Snippets Editor) can exceed 1 MB on
+    // the main thread. Reserve a 16 MB virtual stack (committed lazily on demand).
+    const WINDOWS_STACK_RESERVE_BYTES: usize = 16 * 1024 * 1024;
+    match env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        Ok("msvc") => {
+            println!("cargo:rustc-link-arg-bin=larik-ui=/STACK:{WINDOWS_STACK_RESERVE_BYTES}");
+        }
+        Ok("gnu") => {
+            println!(
+                "cargo:rustc-link-arg-bin=larik-ui=-Wl,--stack,{WINDOWS_STACK_RESERVE_BYTES}"
+            );
+        }
+        _ => {}
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ico_path = manifest_dir.join("assets").join("AppIcon.ico");

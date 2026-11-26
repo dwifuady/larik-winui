@@ -5,6 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub mod grid_actions;
 pub mod sql_language;
 
 pub const DEFAULT_MAX_ROWS: usize = 5_000;
@@ -190,6 +191,20 @@ pub struct ColumnSchema {
     pub name: String,
     pub data_type: Option<String>,
     pub nullable: bool,
+    pub is_identity: bool,
+    pub is_computed: bool,
+}
+
+impl ColumnSchema {
+    pub fn simple(name: impl Into<String>, data_type: Option<String>, nullable: bool) -> Self {
+        Self {
+            name: name.into(),
+            data_type,
+            nullable,
+            is_identity: false,
+            is_computed: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -464,6 +479,37 @@ pub trait DatabaseConnection: Send + Sync {
         database: Option<&str>,
         options: &QueryExecutionOptions,
     ) -> anyhow::Result<Vec<QueryResult>>;
+
+    /// Best-effort metadata-only row-count estimate for FK reference lookup mode selection.
+    async fn estimate_row_count(
+        &mut self,
+        _schema: Option<&str>,
+        _table: &str,
+        _database: Option<&str>,
+    ) -> Option<i64> {
+        None
+    }
+
+    /// Execute a DML batch (UPDATE / DELETE) and return total rows affected.
+    async fn execute_dml(
+        &mut self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> anyhow::Result<u64> {
+        let results = self
+            .execute_batch(sql, database, &QueryExecutionOptions::default())
+            .await?;
+        let mut total = 0u64;
+        for res in results {
+            if res.is_error {
+                anyhow::bail!("{}", res.message);
+            }
+            if let Some(n) = res.records_affected.filter(|&v| v > 0) {
+                total = total.saturating_add(n as u64);
+            }
+        }
+        Ok(total)
+    }
 }
 
 /// Pluggable database provider. The shell interacts with all databases solely through this trait.

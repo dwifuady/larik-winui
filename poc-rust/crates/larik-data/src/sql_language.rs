@@ -2357,16 +2357,8 @@ mod tests {
                 name: "Customers".into(),
                 kind: TableKind::Table,
                 columns: vec![
-                    ColumnSchema {
-                        name: "id".into(),
-                        data_type: Some("int".into()),
-                        nullable: false,
-                    },
-                    ColumnSchema {
-                        name: "full_name".into(),
-                        data_type: Some("nvarchar(100)".into()),
-                        nullable: false,
-                    },
+                    ColumnSchema::simple("id", Some("int".into()), false),
+                    ColumnSchema::simple("full_name", Some("nvarchar(100)".into()), false),
                 ],
                 primary_key: vec!["id".into()],
                 foreign_keys: vec![],
@@ -2376,21 +2368,9 @@ mod tests {
                 name: "Orders".into(),
                 kind: TableKind::Table,
                 columns: vec![
-                    ColumnSchema {
-                        name: "id".into(),
-                        data_type: Some("int".into()),
-                        nullable: false,
-                    },
-                    ColumnSchema {
-                        name: "customer_id".into(),
-                        data_type: Some("int".into()),
-                        nullable: false,
-                    },
-                    ColumnSchema {
-                        name: "total_amount".into(),
-                        data_type: Some("decimal(18,2)".into()),
-                        nullable: false,
-                    },
+                    ColumnSchema::simple("id", Some("int".into()), false),
+                    ColumnSchema::simple("customer_id", Some("int".into()), false),
+                    ColumnSchema::simple("total_amount", Some("decimal(18,2)".into()), false),
                 ],
                 primary_key: vec!["id".into()],
                 foreign_keys: vec![ForeignKeySchema {
@@ -2406,16 +2386,8 @@ mod tests {
                 name: "OrderItems".into(),
                 kind: TableKind::Table,
                 columns: vec![
-                    ColumnSchema {
-                        name: "id".into(),
-                        data_type: Some("int".into()),
-                        nullable: false,
-                    },
-                    ColumnSchema {
-                        name: "order_id".into(),
-                        data_type: Some("int".into()),
-                        nullable: false,
-                    },
+                    ColumnSchema::simple("id", Some("int".into()), false),
+                    ColumnSchema::simple("order_id", Some("int".into()), false),
                 ],
                 primary_key: vec!["id".into()],
                 foreign_keys: vec![],
@@ -2545,11 +2517,7 @@ mod tests {
                 schema: "public".into(),
                 name: "customers".into(),
                 kind: TableKind::Table,
-                columns: vec![ColumnSchema {
-                    name: "id".into(),
-                    data_type: Some("int4".into()),
-                    nullable: false,
-                }],
+                columns: vec![ColumnSchema::simple("id", Some("int4".into()), false)],
                 primary_key: vec!["id".into()],
                 foreign_keys: vec![],
             },
@@ -2558,16 +2526,8 @@ mod tests {
                 name: "orders".into(),
                 kind: TableKind::Table,
                 columns: vec![
-                    ColumnSchema {
-                        name: "id".into(),
-                        data_type: Some("int4".into()),
-                        nullable: false,
-                    },
-                    ColumnSchema {
-                        name: "customer_id".into(),
-                        data_type: Some("int4".into()),
-                        nullable: false,
-                    },
+                    ColumnSchema::simple("id", Some("int4".into()), false),
+                    ColumnSchema::simple("customer_id", Some("int4".into()), false),
                 ],
                 primary_key: vec!["id".into()],
                 foreign_keys: vec![ForeignKeySchema {
@@ -2699,11 +2659,7 @@ mod tests {
             schema: String::new(),
             name: "orders".into(),
             kind: TableKind::Table,
-            columns: vec![ColumnSchema {
-                name: "id".into(),
-                data_type: Some("INTEGER".into()),
-                nullable: false,
-            }],
+            columns: vec![ColumnSchema::simple("id", Some("INTEGER".into()), false)],
             primary_key: vec!["id".into()],
             foreign_keys: vec![],
         }];
@@ -2762,11 +2718,11 @@ mod tests {
             schema: "sales".into(),
             name: "orders".into(),
             kind: TableKind::Table,
-            columns: vec![ColumnSchema {
-                name: "order_total".into(),
-                data_type: Some("decimal(10,2)".into()),
-                nullable: false,
-            }],
+            columns: vec![ColumnSchema::simple(
+                "order_total",
+                Some("decimal(10,2)".into()),
+                false,
+            )],
             primary_key: vec![],
             foreign_keys: vec![],
         }];

@@ -379,10 +379,17 @@ impl DatabaseConnection for SqlServerConnection {
             }
         }
 
-        // 2. Columns
-        let cols_sql = "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
-                        FROM INFORMATION_SCHEMA.COLUMNS \
-                        ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION";
+        // 2. Columns (using sys.columns so is_identity / is_computed are available for safe row editing)
+        let cols_sql = "SELECT s.name, o.name, c.name, ty.name, \
+                               CAST(c.is_nullable AS INT), \
+                               CAST(c.is_identity AS INT), \
+                               CAST(c.is_computed AS INT) \
+                        FROM sys.columns c \
+                        INNER JOIN sys.objects o ON c.object_id = o.object_id \
+                        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id \
+                        INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id \
+                        WHERE o.type IN ('U', 'V') \
+                        ORDER BY s.name, o.name, c.column_id";
         if let Ok(stream) = client.simple_query(cols_sql).await {
             if let Ok(rows) = stream.into_first_result().await {
                 for row in rows {
@@ -390,12 +397,16 @@ impl DatabaseConnection for SqlServerConnection {
                     let table = row.get::<&str, _>(1).unwrap_or_default().to_string();
                     let col_name = row.get::<&str, _>(2).unwrap_or_default().to_string();
                     let data_type = row.get::<&str, _>(3).map(str::to_string);
-                    let nullable = row.get::<&str, _>(4).unwrap_or("YES") == "YES";
+                    let nullable = row.get::<i32, _>(4).unwrap_or(1) != 0;
+                    let is_identity = row.get::<i32, _>(5).unwrap_or(0) != 0;
+                    let is_computed = row.get::<i32, _>(6).unwrap_or(0) != 0;
                     if let Some(entry) = map.get_mut(&(schema, table)) {
                         entry.columns.push(ColumnSchema {
                             name: col_name,
                             data_type,
                             nullable,
+                            is_identity,
+                            is_computed,
                         });
                     }
                 }
@@ -517,6 +528,54 @@ impl DatabaseConnection for SqlServerConnection {
         }
 
         Ok(all_results)
+    }
+
+    async fn estimate_row_count(
+        &mut self,
+        schema: Option<&str>,
+        table: &str,
+        database: Option<&str>,
+    ) -> Option<i64> {
+        if self.ensure_database(database).await.is_err() {
+            return None;
+        }
+        let client = self.client.as_mut()?;
+        let qualified = match schema.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => format!(
+                "{}.{}",
+                quote_bracket_identifier(s),
+                quote_bracket_identifier(table)
+            ),
+            None => quote_bracket_identifier(table),
+        };
+        let escaped = qualified.replace('\'', "''");
+        let sql = format!(
+            "SELECT CAST(SUM(p.[rows]) AS BIGINT) FROM sys.partitions AS p \
+             WHERE p.[object_id] = OBJECT_ID(N'{escaped}') AND p.[index_id] IN (0, 1);"
+        );
+        let fut = async {
+            let stream = client.simple_query(sql).await.ok()?;
+            let row = stream.into_row().await.ok()??;
+            row.get::<i64, _>(0)
+        };
+        tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn execute_dml(
+        &mut self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> anyhow::Result<u64> {
+        self.ensure_database(database).await?;
+        let client = self
+            .client
+            .as_mut()
+            .ok_or_else(|| anyhow!("Not connected to SQL Server."))?;
+        let outcome = client.execute(sql, &[]).await?;
+        Ok(outcome.total())
     }
 }
 

@@ -1,5 +1,6 @@
 mod completion;
 mod connection_dialog;
+mod grid_actions_ui;
 mod history_page;
 mod results_table;
 mod settings_page;

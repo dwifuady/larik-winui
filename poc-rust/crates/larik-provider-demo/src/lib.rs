@@ -76,7 +76,7 @@ fn demo_tables() -> Vec<TableSchema> {
             name: "customers".into(),
             kind: TableKind::Table,
             columns: vec![
-                col("id", "int", false),
+                id_col("id", "int"),
                 col("full_name", "nvarchar(120)", false),
                 col("email", "nvarchar(200)", true),
                 col("country", "char(2)", false),
@@ -90,7 +90,7 @@ fn demo_tables() -> Vec<TableSchema> {
             name: "orders".into(),
             kind: TableKind::Table,
             columns: vec![
-                col("id", "int", false),
+                id_col("id", "int"),
                 col("customer_id", "int", false),
                 col("total_amount", "decimal(12,2)", false),
                 col("status", "varchar(32)", false),
@@ -110,7 +110,7 @@ fn demo_tables() -> Vec<TableSchema> {
             name: "order_items".into(),
             kind: TableKind::Table,
             columns: vec![
-                col("id", "int", false),
+                id_col("id", "int"),
                 col("order_id", "int", false),
                 col("product_id", "int", false),
                 col("quantity", "int", false),
@@ -139,7 +139,7 @@ fn demo_tables() -> Vec<TableSchema> {
             name: "products".into(),
             kind: TableKind::Table,
             columns: vec![
-                col("id", "int", false),
+                id_col("id", "int"),
                 col("sku", "varchar(16)", false),
                 col("name", "nvarchar(160)", false),
                 col("price", "decimal(10,2)", false),
@@ -151,11 +151,23 @@ fn demo_tables() -> Vec<TableSchema> {
     ]
 }
 
+fn id_col(name: &str, data_type: &str) -> ColumnSchema {
+    ColumnSchema {
+        name: name.into(),
+        data_type: Some(data_type.into()),
+        nullable: false,
+        is_identity: true,
+        is_computed: false,
+    }
+}
+
 fn col(name: &str, data_type: &str, nullable: bool) -> ColumnSchema {
     ColumnSchema {
         name: name.into(),
         data_type: Some(data_type.into()),
         nullable,
+        is_identity: false,
+        is_computed: false,
     }
 }
 
@@ -234,6 +246,38 @@ impl DatabaseConnection for DemoConnection {
             }
         }
         Ok(results)
+    }
+
+    async fn estimate_row_count(
+        &mut self,
+        _schema: Option<&str>,
+        table: &str,
+        _database: Option<&str>,
+    ) -> Option<i64> {
+        let tables = demo_tables();
+        tables
+            .iter()
+            .any(|t| t.name.eq_ignore_ascii_case(table))
+            .then_some(120)
+    }
+
+    async fn execute_dml(
+        &mut self,
+        sql: &str,
+        _database: Option<&str>,
+    ) -> anyhow::Result<u64> {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Count UPDATE / DELETE statements inside the batch as 1 affected row each in Demo mode.
+        let upper = sql.to_ascii_uppercase();
+        let count = upper
+            .lines()
+            .filter(|line| {
+                let t = line.trim();
+                t.starts_with("UPDATE ") || t.starts_with("DELETE ")
+            })
+            .count()
+            .max(1);
+        Ok(count as u64)
     }
 }
 

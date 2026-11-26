@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use larik_data::grid_actions::{
+    ColumnReference, ReferenceFilter, SqlDialectKind, build_reference_query, find_matched_rows,
+};
 use larik_data::{
     ConnectionProfile, DatabaseConnection, DatabaseInfo, ProviderCatalog, QueryExecutionOptions,
     QueryResult, TableSchema,
@@ -19,6 +22,17 @@ pub struct ConnectOutcome {
     pub initial_database: Option<String>,
 }
 
+/// Outcome of an asynchronous FK reference lookup.
+#[derive(Debug, Clone)]
+pub struct ReferenceLookupOutcome {
+    pub result: QueryResult,
+    pub is_list: bool,
+    pub estimated_rows: Option<i64>,
+    pub matched_rows: Vec<usize>,
+    pub is_truncated: bool,
+    pub sql: String,
+}
+
 /// Manages a dedicated Tokio runtime plus:
 /// - one control connection per workspace (connect state, database list, schema), and
 /// - one dedicated `DatabaseConnection` per query tab (session isolation for temp tables / SET / TXN).
@@ -28,6 +42,7 @@ pub struct SessionManager {
     space_controls: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn DatabaseConnection>>>>>>,
     tab_sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn DatabaseConnection>>>>>>,
     in_flight: Arc<Mutex<HashMap<String, AbortHandle>>>,
+    in_flight_refs: Arc<Mutex<HashMap<String, AbortHandle>>>,
 }
 
 impl SessionManager {
@@ -43,6 +58,7 @@ impl SessionManager {
             space_controls: Arc::new(Mutex::new(HashMap::new())),
             tab_sessions: Arc::new(Mutex::new(HashMap::new())),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
+            in_flight_refs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -258,11 +274,147 @@ impl SessionManager {
     pub fn cancel_tab_query(&self, tab_id: String) {
         let tabs = self.tab_sessions.clone();
         let in_flight = self.in_flight.clone();
+        let in_flight_refs = self.in_flight_refs.clone();
         self.runtime.spawn(async move {
             if let Some(handle) = in_flight.lock().await.remove(&tab_id) {
                 handle.abort();
             }
+            if let Some(handle) = in_flight_refs.lock().await.remove(&tab_id) {
+                handle.abort();
+            }
             tabs.lock().await.remove(&tab_id);
         });
+    }
+
+    /// Execute a DML batch (UPDATE / DELETE) on a tab's dedicated persistent session.
+    pub fn execute_tab_dml(
+        &self,
+        tab_id: String,
+        profile: ConnectionProfile,
+        database: Option<String>,
+        sql: String,
+    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<u64>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let catalog = self.catalog.clone();
+        let tabs = self.tab_sessions.clone();
+
+        self.runtime.spawn(async move {
+            let outcome = async {
+                let existing = tabs.lock().await.get(&tab_id).cloned();
+                let conn_arc = match existing {
+                    Some(c) => c,
+                    None => {
+                        let provider = catalog
+                            .find(&profile.provider_id)
+                            .ok_or_else(|| anyhow!("Unknown provider '{}'.", profile.provider_id))?;
+                        let mut conn = provider.create_connection(profile);
+                        conn.open().await?;
+                        let arc = Arc::new(Mutex::new(conn));
+                        tabs.lock().await.insert(tab_id.clone(), arc.clone());
+                        arc
+                    }
+                };
+                let mut conn = conn_arc.lock().await;
+                conn.execute_dml(&sql, database.as_deref()).await
+            }
+            .await;
+            let _ = tx.send(outcome);
+        });
+
+        rx
+    }
+
+    /// Cancel any in-flight FK reference preview query for `tab_id`.
+    pub fn cancel_reference_lookup(&self, tab_id: String) {
+        let in_flight_refs = self.in_flight_refs.clone();
+        self.runtime.spawn(async move {
+            if let Some(handle) = in_flight_refs.lock().await.remove(&tab_id) {
+                handle.abort();
+            }
+        });
+    }
+
+    /// Estimate referenced table size and execute the FK lookup query on `tab_id`'s session.
+    /// Automatically aborts any prior in-flight reference lookup for the same tab.
+    pub fn lookup_reference_rows(
+        &self,
+        tab_id: String,
+        profile: ConnectionProfile,
+        database: Option<String>,
+        dialect: SqlDialectKind,
+        reference: ColumnReference,
+        filters: Vec<ReferenceFilter>,
+    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<ReferenceLookupOutcome>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let catalog = self.catalog.clone();
+        let tabs = self.tab_sessions.clone();
+        let in_flight_refs = self.in_flight_refs.clone();
+        let tab_key = tab_id.clone();
+
+        let handle = self.runtime.spawn(async move {
+            let outcome = async {
+                let existing = tabs.lock().await.get(&tab_key).cloned();
+                let conn_arc = match existing {
+                    Some(c) => c,
+                    None => {
+                        let provider = catalog
+                            .find(&profile.provider_id)
+                            .ok_or_else(|| anyhow!("Unknown provider '{}'.", profile.provider_id))?;
+                        let mut conn = provider.create_connection(profile);
+                        conn.open().await?;
+                        let arc = Arc::new(Mutex::new(conn));
+                        tabs.lock().await.insert(tab_key.clone(), arc.clone());
+                        arc
+                    }
+                };
+
+                let mut conn = conn_arc.lock().await;
+                let estimated_rows = conn
+                    .estimate_row_count(
+                        reference.target_schema.as_deref(),
+                        &reference.target_table,
+                        database.as_deref(),
+                    )
+                    .await;
+                let plan = build_reference_query(dialect, &reference, &filters, estimated_rows);
+                let opts = QueryExecutionOptions {
+                    max_rows: plan.limit,
+                };
+                let mut results = conn
+                    .execute_batch(&plan.sql, database.as_deref(), &opts)
+                    .await?;
+                let result = results
+                    .drain(..)
+                    .next()
+                    .ok_or_else(|| anyhow!("Reference lookup returned no result set."))?;
+                if result.is_error {
+                    anyhow::bail!("{}", result.message);
+                }
+                let matched_rows = find_matched_rows(&result, &filters);
+                let is_truncated = result.is_truncated || result.rows.len() >= plan.limit;
+                Ok(ReferenceLookupOutcome {
+                    result,
+                    is_list: plan.is_list,
+                    estimated_rows,
+                    matched_rows,
+                    is_truncated,
+                    sql: plan.sql,
+                })
+            }
+            .await;
+
+            in_flight_refs.lock().await.remove(&tab_key);
+            let _ = tx.send(outcome);
+        });
+
+        let abort_handle = handle.abort_handle();
+        let in_flight_map = self.in_flight_refs.clone();
+        self.runtime.spawn(async move {
+            if let Some(prev) = in_flight_map.lock().await.insert(tab_id, abort_handle) {
+                prev.abort();
+            }
+        });
+
+        rx
     }
 }

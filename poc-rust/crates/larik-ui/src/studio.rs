@@ -12,10 +12,10 @@ use gpui_kit::component::input::{
     Editor, EditorState, Enter, IndentInline, Input, InputEditsEvent, InputEvent, InputState,
     ShowCompletions,
 };
-use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::table::{DataTable, TableState};
+use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -64,6 +64,10 @@ use crate::connection_dialog::{
     ConnectionModal, ConnectionModalAction, render_connection_modal, workspace_icon_name,
     workspace_monogram,
 };
+use crate::grid_actions_ui::{
+    ActiveCellEditor, GridContextMenu, GridPreviewState, GridStatusToast, PreviewMode,
+    SaveReviewModal,
+};
 use crate::history_page::{HistoryPageState, HistorySegment, render_history_page};
 use crate::results_table::ResultTableDelegate;
 use crate::settings_page::{SettingsPageState, render_settings_page};
@@ -87,6 +91,19 @@ gpui_kit::actions!(
         OpenHistory,
         DismissModal,
         AcceptCompletionOrIndent,
+        GridCopy,
+        GridCopyWithHeaders,
+        GridSelectAll,
+        GridExtendUp,
+        GridExtendDown,
+        GridExtendLeft,
+        GridExtendRight,
+        GridPreviewCell,
+        GridPreviewReference,
+        GridEditCell,
+        GridToggleDeleteRow,
+        GridUndoEdit,
+        GridEscape,
     ]
 );
 
@@ -106,6 +123,20 @@ pub fn bind_studio_keys(cx: &mut App) {
         KeyBinding::new("escape", DismissModal, Some("StudioModal")),
         KeyBinding::new("tab", AcceptCompletionOrIndent, Some("Input && mode == editor")),
         KeyBinding::new("ctrl-space", ShowCompletions, Some("Input && mode == editor")),
+        // Result grid shortcuts (scoped strictly to DataTable focus context)
+        KeyBinding::new("ctrl-c", GridCopy, Some("DataTable")),
+        KeyBinding::new("ctrl-shift-c", GridCopyWithHeaders, Some("DataTable")),
+        KeyBinding::new("ctrl-a", GridSelectAll, Some("DataTable")),
+        KeyBinding::new("shift-up", GridExtendUp, Some("DataTable")),
+        KeyBinding::new("shift-down", GridExtendDown, Some("DataTable")),
+        KeyBinding::new("shift-left", GridExtendLeft, Some("DataTable")),
+        KeyBinding::new("shift-right", GridExtendRight, Some("DataTable")),
+        KeyBinding::new("space", GridPreviewCell, Some("DataTable")),
+        KeyBinding::new("shift-space", GridPreviewReference, Some("DataTable")),
+        KeyBinding::new("f2", GridEditCell, Some("DataTable")),
+        KeyBinding::new("delete", GridToggleDeleteRow, Some("DataTable")),
+        KeyBinding::new("ctrl-z", GridUndoEdit, Some("DataTable")),
+        KeyBinding::new("escape", GridEscape, Some("DataTable")),
     ]);
 }
 
@@ -167,11 +198,11 @@ struct RailContextMenu {
 }
 
 #[derive(Default, Clone)]
-struct SpaceRuntime {
+pub(crate) struct SpaceRuntime {
     state: Option<ConnectionState>,
     server_version: Option<SharedString>,
     databases: Arc<Vec<DatabaseInfo>>,
-    schema: Arc<Vec<TableSchema>>,
+    pub(crate) schema: Arc<Vec<TableSchema>>,
     schema_cache: HashMap<String, Arc<Vec<TableSchema>>>,
     last_error: Option<SharedString>,
 }
@@ -197,10 +228,10 @@ impl SpaceRuntime {
 }
 
 #[derive(Clone)]
-struct ResultTabItem {
-    id: String,
-    title: String,
-    result: Arc<QueryResult>,
+pub(crate) struct ResultTabItem {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) result: Arc<QueryResult>,
 }
 
 impl ResultTabItem {
@@ -236,17 +267,17 @@ fn is_messages_only_result(result: &QueryResult) -> bool {
 }
 
 #[derive(Default, Clone)]
-struct TabRuntime {
-    running: bool,
-    results: Vec<ResultTabItem>,
-    active_result_id: Option<String>,
-    show_messages: bool,
-    results_dismissed: bool,
-    last_summary: Option<SharedString>,
+pub(crate) struct TabRuntime {
+    pub(crate) running: bool,
+    pub(crate) results: Vec<ResultTabItem>,
+    pub(crate) active_result_id: Option<String>,
+    pub(crate) show_messages: bool,
+    pub(crate) results_dismissed: bool,
+    pub(crate) last_summary: Option<SharedString>,
 }
 
 impl TabRuntime {
-    fn active_result(&self) -> Option<&ResultTabItem> {
+    pub(crate) fn active_result(&self) -> Option<&ResultTabItem> {
         self.active_result_id
             .as_deref()
             .and_then(|id| self.results.iter().find(|r| r.id == id))
@@ -403,18 +434,19 @@ struct PendingPersist {
 
 pub struct StudioView {
     focus_handle: FocusHandle,
-    catalog: ProviderCatalog,
+    pub(crate) catalog: ProviderCatalog,
     store: Arc<StudioStore>,
     pending_persist: Arc<Mutex<Option<PendingPersist>>>,
     persist_in_flight: Arc<AtomicBool>,
-    sessions: Arc<SessionManager>,
-    state: StudioState,
+    pub(crate) sessions: Arc<SessionManager>,
+    pub(crate) state: StudioState,
 
-    space_runtime: HashMap<String, SpaceRuntime>,
-    tab_runtime: HashMap<String, TabRuntime>,
+    pub(crate) space_runtime: HashMap<String, SpaceRuntime>,
+    pub(crate) tab_runtime: HashMap<String, TabRuntime>,
     /// Per-result cached `TableState` entities keyed by `ResultTabItem::id` so switching tabs
     /// or result tabs is O(1) and preserves scroll position, selection, column order, and widths.
-    result_tables: HashMap<String, Entity<TableState<ResultTableDelegate>>>,
+    pub(crate) result_tables: HashMap<String, Entity<TableState<ResultTableDelegate>>>,
+    pub(crate) result_table_subs: HashMap<String, Subscription>,
 
     editor_state: Entity<EditorState>,
     completion_snapshot: Arc<RwLock<CompletionSnapshot>>,
@@ -460,6 +492,14 @@ pub struct StudioView {
     _db_palette_sub: Option<Subscription>,
     modal: Option<ConnectionModal>,
     copied_toast: bool,
+
+    // Result grid interactive state (copy, staged edits/deletes, preview & FK lookup)
+    pub(crate) grid_context_menu: Option<GridContextMenu>,
+    pub(crate) grid_status_toast: Option<GridStatusToast>,
+    pub(crate) cell_editor: Option<ActiveCellEditor>,
+    pub(crate) save_review_modal: Option<SaveReviewModal>,
+    pub(crate) preview_pane: Option<GridPreviewState>,
+    pub(crate) preview_pane_width: f32,
 }
 
 impl StudioView {
@@ -607,6 +647,7 @@ impl StudioView {
             space_runtime: HashMap::new(),
             tab_runtime: HashMap::new(),
             result_tables: HashMap::new(),
+            result_table_subs: HashMap::new(),
             editor_state,
             completion_snapshot,
             pending_post_insert,
@@ -647,6 +688,12 @@ impl StudioView {
             _db_palette_sub: None,
             modal: None,
             copied_toast: false,
+            grid_context_menu: None,
+            grid_status_toast: None,
+            cell_editor: None,
+            save_review_modal: None,
+            preview_pane: None,
+            preview_pane_width: 380.0,
         };
 
         view.ensure_active_space_in_footer_window();
@@ -729,6 +776,28 @@ impl StudioView {
     }
 
     fn evict_result_table(&mut self, result_id: &str, cx: &mut App) {
+        self.result_table_subs.remove(result_id);
+        if self
+            .cell_editor
+            .as_ref()
+            .is_some_and(|e| e.result_id == result_id)
+        {
+            self.cell_editor = None;
+        }
+        if self
+            .grid_context_menu
+            .as_ref()
+            .is_some_and(|m| m.result_id == result_id)
+        {
+            self.grid_context_menu = None;
+        }
+        if self
+            .save_review_modal
+            .as_ref()
+            .is_some_and(|m| m.result_id == result_id)
+        {
+            self.save_review_modal = None;
+        }
         if let Some(table) = self.result_tables.remove(result_id) {
             let stale = table.update(cx, |table, _| table.delegate_mut().detach_for_drop());
             Self::drop_in_background(stale, cx);
@@ -769,18 +838,18 @@ impl StudioView {
         self.rebuild_schema_rows();
     }
 
-    fn active_space_id(&self) -> Option<String> {
+    pub(crate) fn active_space_id(&self) -> Option<String> {
         self.state.active_space().map(|s| s.id.clone())
     }
 
-    fn active_tab_id(&self) -> Option<String> {
+    pub(crate) fn active_tab_id(&self) -> Option<String> {
         self.state
             .active_space()
             .and_then(|s| s.active_tab())
             .map(|t| t.id.clone())
     }
 
-    fn active_tab_database(&self) -> Option<String> {
+    pub(crate) fn active_tab_database(&self) -> Option<String> {
         self.state
             .active_space()
             .and_then(SpaceState::active_tab_database)
@@ -1045,6 +1114,7 @@ impl StudioView {
                 });
                 Self::drop_in_background(stale, cx);
             }
+            self.ensure_table_schema_metadata(&existing, cx);
             return existing;
         }
 
@@ -1054,7 +1124,17 @@ impl StudioView {
                 .col_resizable(true)
                 .col_movable(true)
                 .sortable(false)
+                .cell_selectable(true)
+                .row_selectable(false)
+                .col_selectable(true)
+                .row_header(false)
         });
+        self.ensure_table_schema_metadata(&table, cx);
+        let rid = result_id.to_string();
+        let sub = cx.subscribe_in(&table, window, move |this, entity, event: &TableEvent, window, cx| {
+            this.handle_result_table_event(&rid, entity.clone(), event, window, cx);
+        });
+        self.result_table_subs.insert(result_id.to_string(), sub);
         self.result_tables.insert(result_id.to_string(), table.clone());
         table
     }
@@ -2508,10 +2588,21 @@ impl StudioView {
     }
 
     fn select_result_tab(&mut self, result_id: String, cx: &mut Context<Self>) {
+        self.grid_context_menu = None;
+        if self
+            .cell_editor
+            .as_ref()
+            .is_some_and(|e| e.result_id != result_id)
+        {
+            self.cell_editor = None;
+        }
         if let Some(tab_id) = self.active_tab_id() {
             if let Some(rt) = self.tab_runtime.get_mut(&tab_id) {
                 rt.active_result_id = Some(result_id);
                 rt.show_messages = false;
+            }
+            if self.preview_pane.is_some() {
+                self.refresh_grid_preview(false, cx);
             }
             cx.notify();
         }
@@ -3097,7 +3188,7 @@ impl Focusable for StudioView {
 
 impl Render for StudioView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_table_state: Option<Entity<TableState<ResultTableDelegate>>> = {
+        let active_grid_table: Option<(String, Entity<TableState<ResultTableDelegate>>)> = {
             let active_grid = self.active_tab_id().and_then(|tab_id| {
                 let rt = self.tab_runtime.get(&tab_id)?;
                 if rt.results_dismissed || rt.show_messages {
@@ -3110,11 +3201,18 @@ impl Render for StudioView {
                 Some((item.id.clone(), Arc::clone(&item.result)))
             });
             active_grid.map(|(result_id, result)| {
-                self.ensure_result_table(&result_id, &result, window, cx)
+                let table = self.ensure_result_table(&result_id, &result, window, cx);
+                (result_id, table)
             })
         };
 
         let palette = StudioPalette::for_window(self.state.theme, window);
+        if self.preview_pane.is_some() {
+            if let Some((result_id, table_state)) = active_grid_table.as_ref() {
+                self.sync_preview_value_cache(result_id, table_state, palette, cx);
+            }
+        }
+        let active_table_state = active_grid_table.map(|(_, table)| table);
         let active_space = self.state.active_space();
         let active_tab = active_space.and_then(|s| s.active_tab());
         let default_space_rt = SpaceRuntime::default();
@@ -3127,6 +3225,9 @@ impl Render for StudioView {
             .unwrap_or(&default_tab_rt);
 
         let has_overlay = self.modal.is_some()
+            || self.save_review_modal.is_some()
+            || self.grid_context_menu.is_some()
+            || self.cell_editor.is_some()
             || self.db_palette_open
             || self.renaming_tab_id.is_some()
             || self.renaming_group_id.is_some()
@@ -3229,10 +3330,59 @@ impl Render for StudioView {
                     this.open_history_page(HistorySegment::Runs, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &DismissModal, _, cx| {
+            .on_action(cx.listener(|this, _: &GridCopy, _, cx| {
+                this.copy_grid_selection(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridCopyWithHeaders, _, cx| {
+                this.copy_grid_selection(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridSelectAll, _, cx| {
+                this.select_all_grid(cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridExtendUp, _, cx| {
+                this.extend_grid_selection(-1, 0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridExtendDown, _, cx| {
+                this.extend_grid_selection(1, 0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridExtendLeft, _, cx| {
+                this.extend_grid_selection(0, -1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridExtendRight, _, cx| {
+                this.extend_grid_selection(0, 1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridPreviewCell, _, cx| {
+                this.toggle_grid_preview(PreviewMode::Value, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridPreviewReference, _, cx| {
+                this.toggle_grid_preview(PreviewMode::Reference, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridEditCell, window, cx| {
+                this.begin_focused_cell_edit(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridToggleDeleteRow, _, cx| {
+                this.toggle_delete_selected_rows(cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridUndoEdit, _, cx| {
+                this.undo_grid_edit(cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridEscape, window, cx| {
+                this.handle_grid_escape(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DismissModal, window, cx| {
                 if this.modal.is_some() {
                     this.modal = None;
                     cx.notify();
+                } else if this.save_review_modal.is_some() {
+                    if !this.save_review_modal.as_ref().is_some_and(|m| m.saving) {
+                        this.save_review_modal = None;
+                        cx.notify();
+                    }
+                } else if this.grid_context_menu.is_some() {
+                    this.grid_context_menu = None;
+                    cx.notify();
+                } else if this.cell_editor.is_some() {
+                    this.cancel_cell_edit(window, cx);
                 } else if this.rail_context_menu.is_some() {
                     this.close_rail_context_menu(cx);
                 } else if this.db_palette_open {
@@ -3378,6 +3528,10 @@ impl Render for StudioView {
                             cx,
                         ))
                     })
+                    // Floating Right-Click Context Menu for Result Grid cells/rows
+                    .when_some(self.grid_context_menu.clone(), |el, menu| {
+                        el.child(self.render_grid_context_menu(menu, palette, window, cx))
+                    })
                     // Searchable New-Tab Database Palette Overlay
                     .when(self.db_palette_open, |el| {
                         el.child(self.render_db_palette(
@@ -3388,6 +3542,13 @@ impl Render for StudioView {
                             cx,
                         ))
                     })
+            })
+            // Save Changes SQL Review Modal (for staged grid cell edits & row deletions)
+            .when_some(self.save_review_modal.as_ref(), |el, modal| {
+                let space_color = active_space
+                    .map(|s| parse_hex_color(&s.color))
+                    .unwrap_or(palette.accent);
+                el.child(self.render_save_review_modal(modal, space_color, palette, cx))
             })
             // Provider-Generated Workspace Settings Modal (works from both Studio and Manage Workspaces)
             .when_some(self.modal.as_ref(), |el, modal| {
@@ -6616,6 +6777,28 @@ impl StudioView {
                             .flex_shrink_0()
                             .items_center()
                             .gap_1p5()
+                            .when_some(self.grid_status_toast.as_ref(), |el, toast| {
+                                el.child(
+                                    div()
+                                        .max_w(px(280.0))
+                                        .px_2()
+                                        .py(px(2.0))
+                                        .rounded(px(4.0))
+                                        .bg(if toast.is_error {
+                                            palette.danger.opacity(0.14)
+                                        } else {
+                                            space_color.opacity(0.14)
+                                        })
+                                        .text_size(px(10.5))
+                                        .text_color(if toast.is_error {
+                                            palette.danger
+                                        } else {
+                                            space_color
+                                        })
+                                        .truncate()
+                                        .child(toast.message.clone()),
+                                )
+                            })
                             .when_some(active_result, |el, r| {
                                 let ms = r.elapsed.as_millis();
                                 el.child(
@@ -6646,8 +6829,24 @@ impl StudioView {
                                 )
                             })
                             .when(has_grid, |el| {
+                                let preview_open = self.preview_pane.is_some();
                                 let copied = self.copied_toast;
                                 el.child(
+                                    Button::new("toggle-preview-btn")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Eye)
+                                        .label(if preview_open {
+                                            "Hide preview"
+                                        } else {
+                                            "Preview"
+                                        })
+                                        .tooltip("Preview cell value (Space) / FK reference (Shift+Space)")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_grid_preview(PreviewMode::Value, cx);
+                                        })),
+                                )
+                                .child(
                                     Button::new("copy-tsv-btn")
                                         .ghost()
                                         .xsmall()
@@ -6758,16 +6957,91 @@ impl StudioView {
                             .child(res.message.clone())
                             .into_any_element()
                     } else if let Some(table_state) = active_table_state {
-                        div()
-                            .id(SharedString::from(format!("res-grid-{}", item.id)))
+                        let (edited_count, deleted_count) =
+                            table_state.read(cx).delegate().pending_counts();
+                        let active_editor = self
+                            .cell_editor
+                            .as_ref()
+                            .filter(|ed| ed.result_id == item.id);
+                        v_flex()
+                            .id(SharedString::from(format!("res-grid-wrap-{}", item.id)))
                             .size_full()
+                            .overflow_hidden()
+                            .when_some(active_editor, |col, editor| {
+                                col.child(self.render_cell_editor_bar(
+                                    editor,
+                                    space_color,
+                                    palette,
+                                    cx,
+                                ))
+                            })
                             .child(
-                                DataTable::new(table_state)
-                                    .small()
-                                    .stripe(true)
-                                    .bordered(false)
-                                    .scroll_bounce(false),
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .child({
+                                        let table_el = div()
+                                            .id(SharedString::from(format!("res-grid-{}", item.id)))
+                                            .size_full()
+                                            .overflow_hidden()
+                                            .child(
+                                                DataTable::new(table_state)
+                                                    .small()
+                                                    .stripe(true)
+                                                    .bordered(false)
+                                                    .scroll_bounce(false),
+                                            );
+                                        if let Some(pane) = self.preview_pane.as_ref() {
+                                            let preview_width =
+                                                self.preview_pane_width.clamp(240.0, 760.0);
+                                            let weak = cx.entity().downgrade();
+                                            let preview_el = self.render_grid_preview_pane(
+                                                pane,
+                                                space_color,
+                                                palette,
+                                                cx,
+                                            );
+                                            h_resizable("results-preview-split")
+                                                .on_resize(move |state, _window, cx| {
+                                                    if let Some(&width) =
+                                                        state.read(cx).sizes().get(1)
+                                                    {
+                                                        let next =
+                                                            f32::from(width).clamp(240.0, 760.0);
+                                                        let _ = weak.update(cx, |this, _cx| {
+                                                            this.preview_pane_width = next;
+                                                        });
+                                                    }
+                                                })
+                                                .child(
+                                                    resizable_panel()
+                                                        .size_range(px(280.0)..Pixels::MAX)
+                                                        .child(table_el),
+                                                )
+                                                .child(
+                                                    resizable_panel()
+                                                        .fixed()
+                                                        .size(px(preview_width))
+                                                        .size_range(px(240.0)..px(760.0))
+                                                        .child(preview_el),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            table_el.into_any_element()
+                                        }
+                                    }),
                             )
+                            .when(edited_count > 0 || deleted_count > 0, |col| {
+                                col.child(self.render_grid_change_bar(
+                                    edited_count,
+                                    deleted_count,
+                                    space_color,
+                                    palette,
+                                    cx,
+                                ))
+                            })
                             .into_any_element()
                     } else {
                         div().size_full().into_any_element()
