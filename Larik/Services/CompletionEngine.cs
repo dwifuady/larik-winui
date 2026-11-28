@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -93,58 +94,58 @@ public static partial class CompletionEngine
     ];
 
     /// <summary>Words after which only a table name makes sense.</summary>
-    private static readonly HashSet<string> TableContext = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> TableContext = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "OUTER JOIN",
         "CROSS JOIN", "APPLY", "CROSS APPLY", "OUTER APPLY", "INTO", "UPDATE", "TABLE",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Table positions where a generated alias is part of the suggestion.</summary>
-    private static readonly HashSet<string> AliasContext = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> AliasContext = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "OUTER JOIN",
         "CROSS JOIN", "APPLY", "CROSS APPLY", "OUTER APPLY",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Words after which column names make sense.</summary>
-    private static readonly HashSet<string> ColumnContext = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> ColumnContext = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "SELECT", "WHERE", "ON", "AND", "OR", "SET", "HAVING", "ORDER BY", "GROUP BY", "BY",
         "DISTINCT", "LIKE", "IN", "BETWEEN", "IS", "NOT", "THEN", "WHEN",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Words that follow a table reference but are not aliases.</summary>
-    private static readonly HashSet<string> NotAliases = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> NotAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "WHERE", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "JOIN", "ON", "GROUP",
         "ORDER", "HAVING", "SET", "UNION", "EXCEPT", "INTERSECT", "AS", "WITH", "SELECT",
         "FROM", "AND", "OR", "APPLY", "TABLESAMPLE", "PIVOT", "UNPIVOT", "FOR", "OPTION",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Dialect table-context words, cached per dialect because completion runs while typing.</summary>
-    private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectTableContext = new();
+    private static readonly ConditionalWeakTable<ISqlDialect, FrozenSet<string>> DialectTableContext = new();
 
     /// <summary>The historical routine words, reproduced when a provider exposes no dialect.</summary>
-    private static readonly HashSet<string> RoutineContext = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> RoutineContext = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "EXEC", "EXECUTE", "CALL",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly ConditionalWeakTable<ISqlDialect, HashSet<string>> DialectRoutineContext = new();
+    private static readonly ConditionalWeakTable<ISqlDialect, FrozenSet<string>> DialectRoutineContext = new();
 
-    private static HashSet<string> TableContextFor(ISqlDialect? dialect) =>
+    private static FrozenSet<string> TableContextFor(ISqlDialect? dialect) =>
         dialect is null
             ? TableContext
             : DialectTableContext.GetValue(
                 dialect,
-                value => new HashSet<string>(value.TableContextKeywords, StringComparer.OrdinalIgnoreCase));
+                static value => value.TableContextKeywords.ToFrozenSet(StringComparer.OrdinalIgnoreCase));
 
-    private static HashSet<string> RoutineContextFor(ISqlDialect? dialect) =>
+    private static FrozenSet<string> RoutineContextFor(ISqlDialect? dialect) =>
         dialect is null
             ? RoutineContext
             : DialectRoutineContext.GetValue(
                 dialect,
-                value => new HashSet<string>(value.RoutineContextKeywords, StringComparer.OrdinalIgnoreCase));
+                static value => value.RoutineContextKeywords.ToFrozenSet(StringComparer.OrdinalIgnoreCase));
 
     private const int KeywordLimit = 8;
     private const int SchemaLimit = 500;
@@ -221,16 +222,22 @@ public static partial class CompletionEngine
         var tableContext = TableContextFor(dialect);
         var routineContext = RoutineContextFor(dialect);
 
-        var (wordStart, _, _) = ExtractContext(text, caret);
+        var wordStart = caret;
+        while (wordStart > 0 && IsWordChar(text[wordStart - 1]))
+        {
+            wordStart--;
+        }
+
         var start = StatementStart(text, caret);
-        var before = text[start..Math.Max(start, Math.Min(wordStart, caret))].TrimEnd();
+        var beforeEnd = Math.Max(start, Math.Min(wordStart, caret));
+        var before = text.AsSpan(start, beforeEnd - start).TrimEnd();
         if (before.Length == 0)
         {
             return (CompletionScope.Keyword, null);
         }
 
         // "USE [name" is still typing an identifier; drop the bracket before reading words.
-        if (before.EndsWith('['))
+        if (before[^1] == '[')
         {
             before = before[..^1].TrimEnd();
         }
@@ -241,70 +248,120 @@ public static partial class CompletionEngine
             return (CompletionScope.Column, null);
         }
 
-        var words = before.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length == 0)
+        // Read only the trailing two whitespace-delimited tokens instead of splitting the whole statement.
+        var lastEnd = before.Length;
+        var lastStart = lastEnd;
+        while (lastStart > 0 && !char.IsWhiteSpace(before[lastStart - 1]))
+        {
+            lastStart--;
+        }
+
+        var lastRaw = before.Slice(lastStart, lastEnd - lastStart);
+        if (lastRaw.Length == 0)
         {
             return (CompletionScope.Keyword, null);
         }
 
+        var prevEnd = lastStart;
+        while (prevEnd > 0 && char.IsWhiteSpace(before[prevEnd - 1]))
+        {
+            prevEnd--;
+        }
+
+        var hasPrev = prevEnd > 0;
+        var prevStart = prevEnd;
+        while (prevStart > 0 && !char.IsWhiteSpace(before[prevStart - 1]))
+        {
+            prevStart--;
+        }
+
+        var prevRaw = before.Slice(prevStart, prevEnd - prevStart);
+
         // USE <database> at the start of a batch.
-        if (words.Length == 1 && words[0].Equals("USE", StringComparison.OrdinalIgnoreCase))
+        if (!hasPrev && lastRaw.Equals("USE", StringComparison.OrdinalIgnoreCase))
         {
             return (CompletionScope.Database, "USE");
         }
 
-        var last = words[^1].ToUpperInvariant().TrimEnd('.');
-        var combined = words.Length > 1 ? $"{words[^2]} {last}".ToUpperInvariant() : last;
+        var routineLookup = routineContext.GetAlternateLookup<ReadOnlySpan<char>>();
+        var tableLookup = tableContext.GetAlternateLookup<ReadOnlySpan<char>>();
+        var columnLookup = ColumnContext.GetAlternateLookup<ReadOnlySpan<char>>();
 
         // "FROM dbo.orders", "FROM dbo." and "WHERE a.b" all carry a qualifier in the last token,
         // so the clause is decided by the word before it.
-        if (words.Length > 1 && words[^1].Contains('.'))
+        if (hasPrev && lastRaw.Contains('.'))
         {
-            var previous = words[^2].ToUpperInvariant();
-            if (routineContext.Contains(previous))
+            if (routineLookup.TryGetValue(prevRaw, out var rPrev))
             {
-                return (CompletionScope.Routine, previous);
+                return (CompletionScope.Routine, rPrev);
             }
 
-            if (tableContext.Contains(previous))
+            if (tableLookup.TryGetValue(prevRaw, out var tPrev))
             {
-                return (CompletionScope.Table, previous);
+                return (CompletionScope.Table, tPrev);
             }
 
-            if (ColumnContext.Contains(previous))
+            if (columnLookup.TryGetValue(prevRaw, out var cPrev))
             {
-                return (CompletionScope.Column, previous);
+                return (CompletionScope.Column, cPrev);
             }
         }
 
-        if (routineContext.Contains(combined))
+        var lastTrimmed = lastRaw.TrimEnd('.');
+        if (hasPrev && prevRaw.Length + 1 + lastTrimmed.Length <= 64)
         {
-            return (CompletionScope.Routine, combined);
+            Span<char> combinedBuf = stackalloc char[prevRaw.Length + 1 + lastTrimmed.Length];
+            prevRaw.CopyTo(combinedBuf);
+            combinedBuf[prevRaw.Length] = ' ';
+            lastTrimmed.CopyTo(combinedBuf.Slice(prevRaw.Length + 1));
+            ReadOnlySpan<char> combinedSpan = combinedBuf;
+
+            if (routineLookup.TryGetValue(combinedSpan, out var rComb))
+            {
+                return (CompletionScope.Routine, rComb);
+            }
+
+            if (routineLookup.TryGetValue(lastTrimmed, out var rLast))
+            {
+                return (CompletionScope.Routine, rLast);
+            }
+
+            if (tableLookup.TryGetValue(combinedSpan, out var tComb))
+            {
+                return (CompletionScope.Table, tComb);
+            }
+
+            if (tableLookup.TryGetValue(lastTrimmed, out var tLast))
+            {
+                return (CompletionScope.Table, tLast);
+            }
+
+            if (columnLookup.TryGetValue(combinedSpan, out var cComb))
+            {
+                return (CompletionScope.Column, cComb);
+            }
+
+            if (columnLookup.TryGetValue(lastTrimmed, out var cLast))
+            {
+                return (CompletionScope.Column, cLast);
+            }
+
+            return (CompletionScope.Keyword, null);
         }
 
-        if (routineContext.Contains(last))
+        if (routineLookup.TryGetValue(lastTrimmed, out var rSingle))
         {
-            return (CompletionScope.Routine, last);
+            return (CompletionScope.Routine, rSingle);
         }
 
-        if (tableContext.Contains(combined))
+        if (tableLookup.TryGetValue(lastTrimmed, out var tSingle))
         {
-            return (CompletionScope.Table, combined);
+            return (CompletionScope.Table, tSingle);
         }
 
-        if (tableContext.Contains(last))
+        if (columnLookup.TryGetValue(lastTrimmed, out var cSingle))
         {
-            return (CompletionScope.Table, last);
-        }
-
-        if (ColumnContext.Contains(combined))
-        {
-            return (CompletionScope.Column, combined);
-        }
-
-        if (ColumnContext.Contains(last))
-        {
-            return (CompletionScope.Column, last);
+            return (CompletionScope.Column, cSingle);
         }
 
         return (CompletionScope.Keyword, null);
@@ -336,9 +393,24 @@ public static partial class CompletionEngine
 
         var statement = text[start..StatementEnd(text, caret)];
         var references = new List<TableReference>();
+        var depth = 0;
+        var depthCursor = 0;
         foreach (Match match in TableReferencePattern().Matches(statement))
         {
-            if (DepthAt(statement, match.Index) != 0)
+            while (depthCursor < match.Index)
+            {
+                var ch = statement[depthCursor++];
+                if (ch == '(')
+                {
+                    depth++;
+                }
+                else if (ch == ')')
+                {
+                    if (depth > 0) depth--;
+                }
+            }
+
+            if (depth != 0)
             {
                 continue;
             }
@@ -566,7 +638,7 @@ public static partial class CompletionEngine
 
     public static IReadOnlyList<CompletionItem> Suggest(CompletionRequest request)
     {
-        var needle = request.Word.ToLowerInvariant();
+        var needle = request.Word;
         var results = new List<CompletionItem>();
 
         if (request.Qualifier is not null)
@@ -595,16 +667,19 @@ public static partial class CompletionEngine
             }
             else
             {
-                var mentioned = request.References
-                    .Where(reference => reference.Table is not null)
-                    .Select(reference => reference.Table!)
-                    .Distinct()
-                    .ToList();
+                var mentioned = new List<TableSchema>();
+                for (var i = 0; i < request.References.Count; i++)
+                {
+                    if (request.References[i].Table is { } refTable && !mentioned.Contains(refTable))
+                    {
+                        mentioned.Add(refTable);
+                    }
+                }
 
                 sources = mentioned.Count > 0 ? mentioned : request.Tables;
             }
 
-            AddColumns(results, sources, needle, IdentifierQuoter(request));
+            AddColumns(results, sources, needle, request.Dialect);
             return Finish(results, SchemaLimit);
         }
 
@@ -630,7 +705,7 @@ public static partial class CompletionEngine
             case CompletionScope.Column:
                 if (request.Target is { } target)
                 {
-                    AddTargetColumns(results, target, needle, IdentifierQuoter(request));
+                    AddTargetColumns(results, target, needle, request.Dialect);
                     break;
                 }
 
@@ -659,7 +734,7 @@ public static partial class CompletionEngine
                 AddVariables(results, request.Variables, needle);
                 AddKeywords(results, needle, request.Dialect?.Keywords);
                 AddPlainTables(results, request, needle);
-                AddColumns(results, request.Tables, needle, IdentifierQuoter(request));
+                AddColumns(results, request.Tables, needle, request.Dialect);
                 break;
         }
 
@@ -849,8 +924,15 @@ public static partial class CompletionEngine
         string needle,
         IReadOnlyList<string>? functions)
     {
-        foreach (var function in (functions ?? Functions).Where(function => Matches(function, needle)))
+        var source = functions ?? Functions;
+        for (var i = 0; i < source.Count; i++)
         {
+            var function = source[i];
+            if (!Matches(function, needle))
+            {
+                continue;
+            }
+
             var insert = $"{function}()";
             results.Add(new CompletionItem
             {
@@ -872,50 +954,82 @@ public static partial class CompletionEngine
     private static void AddTables(List<CompletionItem> results, CompletionRequest request, string needle)
     {
         var typedSchema = MatchedSchema(request);
-        Func<string, string>? quote = request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
-        var tables = typedSchema is null
-            ? request.Tables
-            : request.Tables.Where(table => string.Equals(table.Schema, typedSchema, StringComparison.OrdinalIgnoreCase));
+        var dialect = request.Dialect;
+        var tables = request.Tables;
 
         if (request.Keyword is null || !AliasContext.Contains(request.Keyword))
         {
-            foreach (var table in tables.Where(table => Matches(table.Name, needle)))
+            results.EnsureCapacity(results.Count + tables.Count);
+            for (var i = 0; i < tables.Count; i++)
             {
+                var table = tables[i];
+                if (typedSchema is not null && !string.Equals(table.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!Matches(table.Name, needle))
+                {
+                    continue;
+                }
+
                 results.Add(new CompletionItem
                 {
                     Label = table.Name,
                     Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
                     Kind = CompletionKind.Table,
-                    InsertText = TableNameFor(table, quote, typedSchema),
+                    InsertText = TableNameFor(table, dialect, typedSchema),
                 });
             }
 
             return;
         }
 
-        var used = new HashSet<string>(
-            request.References.Where(reference => reference.Alias is not null).Select(reference => reference.Alias!),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var table in tables.Where(table => Matches(table.Name, needle)))
+        HashSet<string>? used = null;
+        for (var i = 0; i < request.References.Count; i++)
         {
+            if (request.References[i].Alias is { } existingAlias)
+            {
+                used ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                used.Add(existingAlias);
+            }
+        }
+
+        results.EnsureCapacity(results.Count + (tables.Count * 2));
+        for (var i = 0; i < tables.Count; i++)
+        {
+            var table = tables[i];
+            if (typedSchema is not null && !string.Equals(table.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!Matches(table.Name, needle))
+            {
+                continue;
+            }
+
             var alias = GenerateUniqueAlias(table.Name, used);
-            var aliasText = quote is null ? alias : quote(alias);
+            var aliasText = dialect is null ? alias : dialect.QuoteIdentifier(alias);
+            var qualifiedName = TableNameFor(table, dialect, typedSchema);
+            var schemaPrefix = SchemaPrefix(table);
+            var kindLabel = ObjectKindLabel(table);
+
             results.Add(new CompletionItem
             {
                 Label = table.Name,
-                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · AS {aliasText}",
+                Detail = $"{schemaPrefix}{kindLabel} · AS {aliasText}",
                 Kind = CompletionKind.Table,
-                InsertText = $"{TableNameFor(table, quote, typedSchema)} AS {aliasText}",
+                InsertText = $"{qualifiedName} AS {aliasText}",
                 RankSort = 0,
             });
 
             results.Add(new CompletionItem
             {
                 Label = $"{table.Name} (no alias)",
-                Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · no alias",
+                Detail = $"{schemaPrefix}{kindLabel} · no alias",
                 Kind = CompletionKind.Table,
-                InsertText = TableNameFor(table, quote, typedSchema),
+                InsertText = qualifiedName,
                 RankSort = 1,
             });
         }
@@ -923,15 +1037,22 @@ public static partial class CompletionEngine
 
     private static void AddPlainTables(List<CompletionItem> results, CompletionRequest request, string needle)
     {
-        Func<string, string>? quote = request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
-        foreach (var table in request.Tables.Where(table => Matches(table.Name, needle)))
+        var dialect = request.Dialect;
+        var tables = request.Tables;
+        for (var i = 0; i < tables.Count; i++)
         {
+            var table = tables[i];
+            if (!Matches(table.Name, needle))
+            {
+                continue;
+            }
+
             results.Add(new CompletionItem
             {
                 Label = table.Name,
                 Detail = $"{SchemaPrefix(table)}{ObjectKindLabel(table)} · {table.Columns.Count} columns",
                 Kind = CompletionKind.Table,
-                InsertText = TableNameFor(table, quote, typedSchema: null),
+                InsertText = TableNameFor(table, dialect, typedSchema: null),
             });
         }
     }
@@ -945,13 +1066,26 @@ public static partial class CompletionEngine
     {
         var typedSchema = MatchedRoutineSchema(request);
         var dialect = request.Dialect;
+        var routines = request.Routines;
 
-        foreach (var routine in request.Routines
-                     .Where(routine => routine.Kind == RoutineKind.Procedure)
-                     .Where(routine => typedSchema is null
-                         || string.Equals(routine.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
-                     .Where(routine => Matches(routine.Name, needle)))
+        for (var i = 0; i < routines.Count; i++)
         {
+            var routine = routines[i];
+            if (routine.Kind != RoutineKind.Procedure)
+            {
+                continue;
+            }
+
+            if (typedSchema is not null && !string.Equals(routine.Schema, typedSchema, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!Matches(routine.Name, needle))
+            {
+                continue;
+            }
+
             var call = dialect is null
                 ? new RoutineCallText(routine.Name)
                 : dialect.RoutineCall(typedSchema is null ? routine.Schema : null, routine.Name, routine.Parameters);
@@ -976,18 +1110,44 @@ public static partial class CompletionEngine
     };
 
     /// <summary>The schema typed before the dot in a table position, when it names a real schema.</summary>
-    private static string? MatchedSchema(CompletionRequest request) =>
-        request.Qualifier is { } qualifier && request.Tables.Any(table =>
-            string.Equals(table.Schema, qualifier, StringComparison.OrdinalIgnoreCase))
-            ? qualifier
-            : null;
+    private static string? MatchedSchema(CompletionRequest request)
+    {
+        if (request.Qualifier is not { } qualifier)
+        {
+            return null;
+        }
+
+        var tables = request.Tables;
+        for (var i = 0; i < tables.Count; i++)
+        {
+            if (string.Equals(tables[i].Schema, qualifier, StringComparison.OrdinalIgnoreCase))
+            {
+                return qualifier;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>The schema typed before the dot in a routine position.</summary>
-    private static string? MatchedRoutineSchema(CompletionRequest request) =>
-        request.Qualifier is { } qualifier && request.Routines.Any(routine =>
-            string.Equals(routine.Schema, qualifier, StringComparison.OrdinalIgnoreCase))
-            ? qualifier
-            : null;
+    private static string? MatchedRoutineSchema(CompletionRequest request)
+    {
+        if (request.Qualifier is not { } qualifier)
+        {
+            return null;
+        }
+
+        var routines = request.Routines;
+        for (var i = 0; i < routines.Count; i++)
+        {
+            if (string.Equals(routines[i].Schema, qualifier, StringComparison.OrdinalIgnoreCase))
+            {
+                return qualifier;
+            }
+        }
+
+        return null;
+    }
 
     private static string SchemaPrefix(TableSchema table) => SchemaPrefix(table.Schema);
 
@@ -998,22 +1158,28 @@ public static partial class CompletionEngine
         string.IsNullOrWhiteSpace(schema) ? string.Empty : $"{schema} · ";
 
     /// <summary><c>[dbo].[Orders]</c>, or just <c>[Orders]</c> when the schema was already typed.</summary>
-    private static string TableNameFor(TableSchema table, Func<string, string>? quote, string? typedSchema)
+    private static string TableNameFor(TableSchema table, ISqlDialect? dialect, string? typedSchema)
     {
-        var name = quote is null ? table.Name : quote(table.Name);
+        var name = dialect is null ? table.Name : dialect.QuoteIdentifier(table.Name);
         if (typedSchema is not null || string.IsNullOrWhiteSpace(table.Schema))
         {
             return name;
         }
 
         var schema = table.Schema!;
-        return quote is null ? $"{schema}.{name}" : $"{quote(schema)}.{name}";
+        return dialect is null ? $"{schema}.{name}" : $"{dialect.QuoteIdentifier(schema)}.{name}";
     }
 
     private static void AddCtes(List<CompletionItem> results, IReadOnlyList<TableSchema> ctes, string needle)
     {
-        foreach (var cte in ctes.Where(cte => Matches(cte.Name, needle)))
+        for (var i = 0; i < ctes.Count; i++)
         {
+            var cte = ctes[i];
+            if (!Matches(cte.Name, needle))
+            {
+                continue;
+            }
+
             results.Add(new CompletionItem
             {
                 Label = cte.Name,
@@ -1028,29 +1194,45 @@ public static partial class CompletionEngine
     /// <summary>Columns of CTEs that the statement has not joined yet (e.g. while typing SELECT).</summary>
     private static void AddCteColumns(List<CompletionItem> results, CompletionRequest request, string needle)
     {
-        var quote = IdentifierQuoter(request);
-
-        var referenced = new HashSet<string>(
-            request.References
-                .Where(reference => reference.Table is not null)
-                .Select(reference => reference.Table!.Name),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var cte in request.Ctes)
+        if (request.Ctes.Count == 0)
         {
-            if (referenced.Contains(cte.Name))
+            return;
+        }
+
+        var dialect = request.Dialect;
+        HashSet<string>? referenced = null;
+        for (var i = 0; i < request.References.Count; i++)
+        {
+            if (request.References[i].Table is { } refTable)
+            {
+                referenced ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                referenced.Add(refTable.Name);
+            }
+        }
+
+        for (var i = 0; i < request.Ctes.Count; i++)
+        {
+            var cte = request.Ctes[i];
+            if (referenced is not null && referenced.Contains(cte.Name))
             {
                 continue;
             }
 
-            foreach (var column in cte.Columns.Where(column => Matches(column, needle)))
+            var columns = cte.Columns;
+            for (var c = 0; c < columns.Count; c++)
             {
+                var column = columns[c];
+                if (!Matches(column, needle))
+                {
+                    continue;
+                }
+
                 results.Add(new CompletionItem
                 {
                     Label = column,
                     Detail = $"CTE · {cte.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = Quote(quote, column),
+                    InsertText = Quote(dialect, column),
                 });
             }
         }
@@ -1059,39 +1241,51 @@ public static partial class CompletionEngine
     /// <summary>Columns of the statement's tables; aliased tables are inserted as <c>alias.column</c>.</summary>
     private static void AddScopedColumns(List<CompletionItem> results, CompletionRequest request, string needle)
     {
-        var quote = IdentifierQuoter(request);
+        var dialect = request.Dialect;
 
         if (request.References.Count == 0)
         {
-            AddColumns(results, request.Tables, needle, quote);
+            AddColumns(results, request.Tables, needle, dialect);
             return;
         }
 
-        foreach (var reference in request.References.DistinctBy(
-                     reference => reference.Alias ?? reference.Name,
-                     StringComparer.OrdinalIgnoreCase))
+        var seenRefs = new HashSet<string>(request.References.Count, StringComparer.OrdinalIgnoreCase);
+        for (var r = 0; r < request.References.Count; r++)
         {
-            if (reference.Table is not { } table)
+            var reference = request.References[r];
+            if (!seenRefs.Add(reference.Alias ?? reference.Name) || reference.Table is not { } table)
             {
                 continue;
             }
 
-            foreach (var column in table.Columns)
+            var alias = reference.Alias;
+            var quotedAlias = string.IsNullOrEmpty(alias) ? null : Quote(dialect, alias);
+            var columns = table.Columns;
+            for (var c = 0; c < columns.Count; c++)
             {
-                var label = reference.Alias is null ? column : $"{reference.Alias}.{column}";
-
-                // Typing the column name should find it even when the alias is prefixed.
-                if (!Matches(column, needle) && !(reference.Alias is not null && Matches(label, needle)))
+                var column = columns[c];
+                string? label = null;
+                if (!Matches(column, needle))
                 {
-                    continue;
+                    if (alias is null)
+                    {
+                        continue;
+                    }
+
+                    label = $"{alias}.{column}";
+                    if (!Matches(label, needle))
+                    {
+                        continue;
+                    }
                 }
 
+                label ??= alias is null ? column : $"{alias}.{column}";
                 results.Add(new CompletionItem
                 {
                     Label = label,
                     Detail = $"{table.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = ColumnInsert(reference.Alias, column, quote),
+                    InsertText = quotedAlias is null ? Quote(dialect, column) : $"{quotedAlias}.{Quote(dialect, column)}",
                 });
             }
         }
@@ -1101,18 +1295,26 @@ public static partial class CompletionEngine
         List<CompletionItem> results,
         IReadOnlyList<TableSchema> tables,
         string needle,
-        Func<string, string>? quote)
+        ISqlDialect? dialect)
     {
-        foreach (var table in tables)
+        for (var t = 0; t < tables.Count; t++)
         {
-            foreach (var column in table.Columns.Where(column => Matches(column, needle)))
+            var table = tables[t];
+            var columns = table.Columns;
+            for (var c = 0; c < columns.Count; c++)
             {
+                var column = columns[c];
+                if (!Matches(column, needle))
+                {
+                    continue;
+                }
+
                 results.Add(new CompletionItem
                 {
                     Label = column,
                     Detail = $"{table.Name}.{column}",
                     Kind = CompletionKind.Column,
-                    InsertText = Quote(quote, column),
+                    InsertText = Quote(dialect, column),
                 });
             }
         }
@@ -1123,11 +1325,18 @@ public static partial class CompletionEngine
         List<CompletionItem> results,
         StatementTarget target,
         string needle,
-        Func<string, string>? quote)
+        ISqlDialect? dialect)
     {
-        foreach (var column in target.Table.Columns.Where(column => Matches(column, needle)))
+        var columns = target.Table.Columns;
+        for (var i = 0; i < columns.Count; i++)
         {
-            var insert = Quote(quote, column);
+            var column = columns[i];
+            if (!Matches(column, needle))
+            {
+                continue;
+            }
+
+            var insert = Quote(dialect, column);
             results.Add(new CompletionItem
             {
                 Label = column,
@@ -1138,29 +1347,22 @@ public static partial class CompletionEngine
         }
     }
 
-    /// <summary>
-    /// Identifier quoting for inserts, owned by the active dialect. Table names already go through
-    /// it; columns use the same seam so a field called <c>Key</c> inserts as <c>[Key]</c> on SQL
-    /// Server instead of producing a statement with a reserved word in it.
-    /// </summary>
-    private static Func<string, string>? IdentifierQuoter(CompletionRequest request) =>
-        request.Dialect is { } dialect ? dialect.QuoteIdentifier : null;
-
-    private static string Quote(Func<string, string>? quote, string name) =>
-        quote is null ? name : quote(name);
+    private static string Quote(ISqlDialect? dialect, string name) =>
+        dialect is null ? name : dialect.QuoteIdentifier(name);
 
     /// <summary><c>alias.column</c> with both parts quoted the way the dialect requires.</summary>
-    private static string ColumnInsert(string? qualifier, string column, Func<string, string>? quote) =>
+    private static string ColumnInsert(string? qualifier, string column, ISqlDialect? dialect) =>
         string.IsNullOrEmpty(qualifier)
-            ? Quote(quote, column)
-            : $"{Quote(quote, qualifier)}.{Quote(quote, column)}";
+            ? Quote(dialect, column)
+            : $"{Quote(dialect, qualifier)}.{Quote(dialect, column)}";
 
     private static void AddVariables(List<CompletionItem> results, IReadOnlyList<string> variables, string needle)
     {
-        foreach (var variable in variables)
+        for (var i = 0; i < variables.Count; i++)
         {
+            var variable = variables[i];
             // The label carries the '@'; match what the user types after it too.
-            if (!Matches(variable, needle) && !Matches(variable.TrimStart('@'), needle))
+            if (!Matches(variable, needle) && !Matches(variable.AsSpan().TrimStart('@'), needle))
             {
                 continue;
             }
@@ -1177,8 +1379,14 @@ public static partial class CompletionEngine
 
     private static void AddDatabases(List<CompletionItem> results, IReadOnlyList<string> databases, string needle)
     {
-        foreach (var database in databases.Where(database => Matches(database, needle)))
+        for (var i = 0; i < databases.Count; i++)
         {
+            var database = databases[i];
+            if (!Matches(database, needle))
+            {
+                continue;
+            }
+
             results.Add(new CompletionItem
             {
                 Label = database,
@@ -1213,11 +1421,19 @@ public static partial class CompletionEngine
             .ToList();
 
         var suggestions = new List<JoinSuggestion>();
-        var quote = IdentifierQuoter(request);
+        var dialect = request.Dialect;
 
         // Join text is a field expression like any other: alias and column carry the dialect's
         // quoting so reserved-word columns survive (<c>[o].[Key] = [s].[Key]</c>).
-        string Qualified(string alias, string column) => ColumnInsert(alias, column, quote);
+        string Qualified(string alias, string column) => ColumnInsert(alias, column, dialect);
+
+        var joinedNormalized = new string[joinedTable.Columns.Count];
+        for (var i = 0; i < joinedTable.Columns.Count; i++)
+        {
+            joinedNormalized[i] = NormalizeName(joinedTable.Columns[i]);
+        }
+
+        var joinedKeys = PreferredKeyColumns(joinedTable);
 
         foreach (var other in prior)
         {
@@ -1251,16 +1467,18 @@ public static partial class CompletionEngine
 
             // joined.customer_id -> other.id
             var otherKeys = PreferredKeyColumns(otherTable);
-            foreach (var column in joinedTable.Columns)
+            for (var c = 0; c < joinedTable.Columns.Count; c++)
             {
-                var stem = ColumnStem(column);
+                var column = joinedTable.Columns[c];
+                var stem = ColumnStemFromNormalized(joinedNormalized[c]);
                 if (stem is null || otherKeys.Count == 0 || !MatchesTableStem(stem, otherTable.Name))
                 {
                     continue;
                 }
 
-                foreach (var key in otherKeys)
+                for (var k = 0; k < otherKeys.Count; k++)
                 {
+                    var key = otherKeys[k];
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {column} = {key}",
                         "Heuristic match",
@@ -1269,18 +1487,27 @@ public static partial class CompletionEngine
                 }
             }
 
-            // Columns with the same name on both sides (id = id, status = status, ...).
-            foreach (var column in joinedTable.Columns)
+            var otherNormalized = new string[otherTable.Columns.Count];
+            for (var i = 0; i < otherTable.Columns.Count; i++)
             {
-                foreach (var otherColumn in otherTable.Columns)
+                otherNormalized[i] = NormalizeName(otherTable.Columns[i]);
+            }
+
+            // Columns with the same name on both sides (id = id, status = status, ...).
+            for (var c = 0; c < joinedTable.Columns.Count; c++)
+            {
+                var normCol = joinedNormalized[c];
+                for (var o = 0; o < otherTable.Columns.Count; o++)
                 {
-                    if (!NormalizeName(column).Equals(NormalizeName(otherColumn), StringComparison.Ordinal))
+                    if (!normCol.Equals(otherNormalized[o], StringComparison.Ordinal))
                     {
                         continue;
                     }
 
-                    var isKey = joinedTable.PrimaryKey.Contains(column, StringComparer.OrdinalIgnoreCase)
-                                || otherTable.PrimaryKey.Contains(otherColumn, StringComparer.OrdinalIgnoreCase);
+                    var column = joinedTable.Columns[c];
+                    var otherColumn = otherTable.Columns[o];
+                    var isKey = ContainsIgnoreCase(joinedTable.PrimaryKey, column)
+                                || ContainsIgnoreCase(otherTable.PrimaryKey, otherColumn);
 
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {column} = {otherColumn}",
@@ -1291,17 +1518,18 @@ public static partial class CompletionEngine
             }
 
             // other.customer_id -> joined.id (the reverse direction).
-            var joinedKeys = PreferredKeyColumns(joinedTable);
-            foreach (var column in otherTable.Columns)
+            for (var o = 0; o < otherTable.Columns.Count; o++)
             {
-                var stem = ColumnStem(column);
+                var column = otherTable.Columns[o];
+                var stem = ColumnStemFromNormalized(otherNormalized[o]);
                 if (stem is null || joinedKeys.Count == 0 || !MatchesTableStem(stem, joinedTable.Name))
                 {
                     continue;
                 }
 
-                foreach (var key in joinedKeys)
+                for (var k = 0; k < joinedKeys.Count; k++)
                 {
+                    var key = joinedKeys[k];
                     suggestions.Add(new JoinSuggestion(
                         $"Join on {key} = {column}",
                         "Heuristic match (reverse)",
@@ -1335,19 +1563,68 @@ public static partial class CompletionEngine
 
     private sealed record JoinSuggestion(string Label, string Detail, string InsertText, int Score);
 
-    private static IReadOnlyList<CompletionItem> Finish(List<CompletionItem> results, int max) =>
-        results
-            .OrderBy(item => item.MatchRank)
-            .ThenBy(item => item.Rank)
-            .ThenBy(item => item.RankSort)
-            .ThenBy(item => item.Label.Length)
-            .ThenBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Detail, StringComparer.OrdinalIgnoreCase)
-            .Take(max)
-            .ToList();
+    private sealed class CompletionItemComparer : IComparer<CompletionItem>
+    {
+        public static CompletionItemComparer Instance { get; } = new();
+
+        public int Compare(CompletionItem? x, CompletionItem? y)
+        {
+            if (ReferenceEquals(x, y)) return 0;
+            if (x is null) return -1;
+            if (y is null) return 1;
+
+            var cmp = x.MatchRank.CompareTo(y.MatchRank);
+            if (cmp != 0) return cmp;
+
+            cmp = x.Rank.CompareTo(y.Rank);
+            if (cmp != 0) return cmp;
+
+            cmp = x.RankSort.CompareTo(y.RankSort);
+            if (cmp != 0) return cmp;
+
+            cmp = x.Label.Length.CompareTo(y.Label.Length);
+            if (cmp != 0) return cmp;
+
+            cmp = string.Compare(x.Label, y.Label, StringComparison.OrdinalIgnoreCase);
+            if (cmp != 0) return cmp;
+
+            return string.Compare(x.Detail, y.Detail, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static IReadOnlyList<CompletionItem> Finish(List<CompletionItem> results, int max)
+    {
+        if (results.Count > 1)
+        {
+            results.Sort(CompletionItemComparer.Instance);
+        }
+
+        if (results.Count > max)
+        {
+            results.RemoveRange(max, results.Count - max);
+        }
+
+        return results;
+    }
 
     private static bool Matches(string candidate, string needle) =>
         needle.Length == 0 || candidate.StartsWith(needle, StringComparison.OrdinalIgnoreCase);
+
+    private static bool Matches(ReadOnlySpan<char> candidate, string needle) =>
+        needle.Length == 0 || candidate.StartsWith(needle, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsIgnoreCase(IReadOnlyList<string> list, string value)
+    {
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (string.Equals(list[i], value, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // ---------------------------------------------------------------- statement parsing
 
@@ -1658,24 +1935,6 @@ public static partial class CompletionEngine
         return -1;
     }
 
-    private static int DepthAt(string text, int index)
-    {
-        var depth = 0;
-        for (var cursor = 0; cursor < index && cursor < text.Length; cursor++)
-        {
-            if (text[cursor] == '(')
-            {
-                depth++;
-            }
-            else if (text[cursor] == ')')
-            {
-                depth = Math.Max(0, depth - 1);
-            }
-        }
-
-        return depth;
-    }
-
     private static TableSchema? ResolveQualifier(
         IReadOnlyList<TableReference> references,
         string qualifier,
@@ -1701,18 +1960,29 @@ public static partial class CompletionEngine
     {
         // A schema-qualified reference must reach the table in that schema. Without a schema (a
         // bare name, a CTE, or an alias lookup) the first name match is the historical behaviour.
-        var matches = tables.Where(table => table.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (schema is not null)
+        TableSchema? firstByName = null;
+        for (var i = 0; i < tables.Count; i++)
         {
-            var scoped = matches.FirstOrDefault(table =>
-                string.Equals(table.Schema, schema, StringComparison.OrdinalIgnoreCase));
-            if (scoped is not null)
+            var table = tables[i];
+            if (!table.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
-                return scoped;
+                continue;
             }
+
+            if (schema is null)
+            {
+                return table;
+            }
+
+            if (string.Equals(table.Schema, schema, StringComparison.OrdinalIgnoreCase))
+            {
+                return table;
+            }
+
+            firstByName ??= table;
         }
 
-        return matches.FirstOrDefault();
+        return firstByName;
     }
 
     /// <summary>Strips schema qualification and quoting: <c>[dbo].[Orders]</c> -> <c>Orders</c>.</summary>
@@ -1747,27 +2017,106 @@ public static partial class CompletionEngine
     /// </summary>
     private static string GenerateTableAlias(string tableName)
     {
-        var capitals = tableName.Where(char.IsUpper).ToArray();
-        if (capitals.Length > 1)
+        var span = tableName.AsSpan();
+        Span<char> buffer = stackalloc char[64];
+        var count = 0;
+
+        for (var i = 0; i < span.Length; i++)
         {
-            return new string(capitals).ToLowerInvariant();
+            var ch = span[i];
+            if (char.IsUpper(ch))
+            {
+                if (count < buffer.Length)
+                {
+                    buffer[count] = char.ToLowerInvariant(ch);
+                }
+
+                count++;
+            }
         }
 
-        var parts = tableName.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 1)
+        if (count > 1)
         {
-            return new string(parts.Select(part => char.ToLowerInvariant(part[0])).ToArray());
+            if (count <= buffer.Length)
+            {
+                return new string(buffer.Slice(0, count));
+            }
+
+            var large = new char[count];
+            var pos = 0;
+            for (var i = 0; i < span.Length; i++)
+            {
+                if (char.IsUpper(span[i]))
+                {
+                    large[pos++] = char.ToLowerInvariant(span[i]);
+                }
+            }
+
+            return new string(large);
         }
 
-        return tableName.Length > 0 ? char.ToLowerInvariant(tableName[0]).ToString() : "t";
+        // snake_case initials (order_items -> oi).
+        count = 0;
+        var atSegmentStart = true;
+        for (var i = 0; i < span.Length; i++)
+        {
+            var ch = span[i];
+            if (ch == '_')
+            {
+                atSegmentStart = true;
+            }
+            else if (atSegmentStart)
+            {
+                if (count < buffer.Length)
+                {
+                    buffer[count] = char.ToLowerInvariant(ch);
+                }
+
+                count++;
+                atSegmentStart = false;
+            }
+        }
+
+        if (count > 1)
+        {
+            if (count <= buffer.Length)
+            {
+                return new string(buffer.Slice(0, count));
+            }
+
+            var large = new char[count];
+            var pos = 0;
+            atSegmentStart = true;
+            for (var i = 0; i < span.Length; i++)
+            {
+                var ch = span[i];
+                if (ch == '_')
+                {
+                    atSegmentStart = true;
+                }
+                else if (atSegmentStart)
+                {
+                    large[pos++] = char.ToLowerInvariant(ch);
+                    atSegmentStart = false;
+                }
+            }
+
+            return new string(large);
+        }
+
+        return span.Length > 0 ? char.ToLowerInvariant(span[0]).ToString() : "t";
     }
 
-    private static string GenerateUniqueAlias(string tableName, ISet<string> usedAliases)
+    private static string GenerateUniqueAlias(string tableName, HashSet<string>? usedAliases)
     {
         var baseAlias = GenerateTableAlias(tableName);
+        if (usedAliases is null || !usedAliases.Contains(baseAlias))
+        {
+            return baseAlias;
+        }
+
         var alias = baseAlias;
         var counter = 1;
-
         while (usedAliases.Contains(alias))
         {
             alias = $"{baseAlias}{counter++}";
@@ -1783,19 +2132,32 @@ public static partial class CompletionEngine
             || string.Equals(key.ReferencedSchema, table.Schema, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Key columns usable as the "one" side of a join: the primary key, else <c>id</c>.</summary>
-    private static IReadOnlyList<string> PreferredKeyColumns(TableSchema table) =>
-        table.PrimaryKey.Count > 0
-            ? table.PrimaryKey
-            : table.Columns.Where(column => column.Equals("id", StringComparison.OrdinalIgnoreCase)).ToList();
+    private static IReadOnlyList<string> PreferredKeyColumns(TableSchema table)
+    {
+        if (table.PrimaryKey.Count > 0)
+        {
+            return table.PrimaryKey;
+        }
+
+        List<string>? ids = null;
+        for (var i = 0; i < table.Columns.Count; i++)
+        {
+            var column = table.Columns[i];
+            if (column.Equals("id", StringComparison.OrdinalIgnoreCase))
+            {
+                ids ??= [];
+                ids.Add(column);
+            }
+        }
+
+        return ids ?? (IReadOnlyList<string>)[];
+    }
 
     /// <summary><c>customer_id</c> -> <c>customer</c>; null when the column is not an id column.</summary>
-    private static string? ColumnStem(string column)
-    {
-        var normalized = NormalizeName(column);
-        return normalized.Length > 2 && normalized.EndsWith("id", StringComparison.Ordinal)
+    private static string? ColumnStemFromNormalized(string normalized) =>
+        normalized.Length > 2 && normalized.EndsWith("id", StringComparison.Ordinal)
             ? normalized[..^2]
             : null;
-    }
 
     /// <summary>True when an <c>xxx_id</c> stem names the table (singular or plural).</summary>
     private static bool MatchesTableStem(string stem, string tableName)
@@ -1806,19 +2168,19 @@ public static partial class CompletionEngine
             return false;
         }
 
-        foreach (var variant in new[] { normalized, Singularize(normalized) })
+        if (StemMatchesVariant(stem, normalized))
         {
-            if (variant.Length > 0 &&
-                (stem == variant ||
-                 stem.EndsWith(variant, StringComparison.Ordinal) ||
-                 variant.EndsWith(stem, StringComparison.Ordinal)))
-            {
-                return true;
-            }
+            return true;
         }
 
-        return false;
+        var singular = Singularize(normalized);
+        return !ReferenceEquals(singular, normalized) && singular.Length > 0 && StemMatchesVariant(stem, singular);
     }
+
+    private static bool StemMatchesVariant(string stem, string variant) =>
+        stem == variant
+        || stem.EndsWith(variant, StringComparison.Ordinal)
+        || variant.EndsWith(stem, StringComparison.Ordinal);
 
     private static string Singularize(string value)
     {
@@ -1842,16 +2204,19 @@ public static partial class CompletionEngine
 
     private static string NormalizeName(string value)
     {
-        var builder = new StringBuilder(value.Length);
-        foreach (var character in value)
+        var span = value.AsSpan();
+        Span<char> buffer = span.Length <= 128 ? stackalloc char[span.Length] : new char[span.Length];
+        var len = 0;
+        for (var i = 0; i < span.Length; i++)
         {
+            var character = span[i];
             if (char.IsLetterOrDigit(character))
             {
-                builder.Append(char.ToLowerInvariant(character));
+                buffer[len++] = char.ToLowerInvariant(character);
             }
         }
 
-        return builder.ToString();
+        return new string(buffer.Slice(0, len));
     }
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '@';

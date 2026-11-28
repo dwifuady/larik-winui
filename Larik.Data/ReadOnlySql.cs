@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace Larik.Data;
 
 /// <summary>
@@ -42,161 +40,145 @@ public static class ReadOnlySql
     {
         ArgumentNullException.ThrowIfNull(rules);
 
-        if (string.IsNullOrWhiteSpace(sql) || !TryStrip(sql, out var stripped))
+        if (string.IsNullOrWhiteSpace(sql))
         {
             return false;
         }
 
+        var span = sql.AsSpan();
+        var length = span.Length;
+        var hasLeadingLookup = rules.LeadingKeywords is HashSet<string> leadingSet
+            && leadingSet.TryGetAlternateLookup<ReadOnlySpan<char>>(out var leadingLookup);
+        var hasDeniedLookup = rules.DeniedKeywords is HashSet<string> deniedSet
+            && deniedSet.TryGetAlternateLookup<ReadOnlySpan<char>>(out var deniedLookup);
+        var deniedPrefixes = rules.DeniedPrefixes;
+
         var units = 0;
-        foreach (var unit in stripped.Split(';'))
+        var unitHasToken = false;
+        var index = 0;
+
+        while (index < length)
         {
-            var tokens = Tokenize(unit);
-            if (tokens.Count == 0)
-            {
-                continue;
-            }
+            var current = span[index];
 
-            units++;
-            if (!rules.LeadingKeywords.Contains(tokens[0]))
+            if (current is '\'' or '"' or '[')
             {
-                return false;
-            }
-
-            foreach (var token in tokens)
-            {
-                if (rules.DeniedKeywords.Contains(token))
+                var closing = current == '[' ? ']' : current;
+                if (!SkipQuoted(span, ref index, closing))
                 {
                     return false;
                 }
 
-                foreach (var prefix in rules.DeniedPrefixes)
+                continue;
+            }
+
+            if (current == '-' && index + 1 < length && span[index + 1] == '-')
+            {
+                var newlineOffset = span.Slice(index + 2).IndexOf('\n');
+                index = newlineOffset < 0 ? length : index + 2 + newlineOffset;
+                continue;
+            }
+
+            if (current == '/' && index + 1 < length && span[index + 1] == '*')
+            {
+                var endOffset = span.Slice(index + 2).IndexOf("*/", StringComparison.Ordinal);
+                if (endOffset < 0)
                 {
-                    if (token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                }
+
+                index = index + 2 + endOffset + 2;
+                continue;
+            }
+
+            if (current == ';')
+            {
+                unitHasToken = false;
+                index++;
+                continue;
+            }
+
+            if (IsWordStart(current))
+            {
+                var start = index++;
+                while (index < length && IsWordPart(span[index]))
+                {
+                    index++;
+                }
+
+                var token = span.Slice(start, index - start);
+                string? fallbackString = null;
+
+                if (!unitHasToken)
+                {
+                    unitHasToken = true;
+                    units++;
+                    var allowedLeading = hasLeadingLookup
+                        ? leadingLookup.Contains(token)
+                        : rules.LeadingKeywords.Contains(fallbackString ??= token.ToString());
+                    if (!allowedLeading)
                     {
                         return false;
                     }
                 }
+
+                var isDenied = hasDeniedLookup
+                    ? deniedLookup.Contains(token)
+                    : rules.DeniedKeywords.Contains(fallbackString ??= token.ToString());
+                if (isDenied)
+                {
+                    return false;
+                }
+
+                for (var p = 0; p < deniedPrefixes.Count; p++)
+                {
+                    if (token.StartsWith(deniedPrefixes[p], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+
+                continue;
             }
+
+            index++;
         }
 
         return units > 0;
     }
 
-    /// <summary>
-    /// Removes literals, comments and quoted identifiers, replacing each with a space so tokens on
-    /// either side cannot fuse into a new keyword. False means the input is malformed (an
-    /// unterminated literal or comment), which is treated as a refusal.
-    /// </summary>
-    private static bool TryStrip(string sql, out string stripped)
-    {
-        var builder = new StringBuilder(sql.Length);
-        var index = 0;
+    private static bool IsWordStart(char value) =>
+        value is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or '_' or '@' or '#'
+        || (value >= 128 && char.IsLetter(value));
 
-        while (index < sql.Length)
-        {
-            var current = sql[index];
-
-            if (current is '\'' or '"' or '[')
-            {
-                var closing = current == '[' ? ']' : current;
-                if (!SkipQuoted(sql, ref index, current, closing))
-                {
-                    stripped = string.Empty;
-                    return false;
-                }
-
-                builder.Append(' ');
-                continue;
-            }
-
-            if (current == '-' && index + 1 < sql.Length && sql[index + 1] == '-')
-            {
-                while (index < sql.Length && sql[index] != '\n')
-                {
-                    index++;
-                }
-
-                builder.Append(' ');
-                continue;
-            }
-
-            if (current == '/' && index + 1 < sql.Length && sql[index + 1] == '*')
-            {
-                var end = sql.IndexOf("*/", index + 2, StringComparison.Ordinal);
-                if (end < 0)
-                {
-                    stripped = string.Empty;
-                    return false;
-                }
-
-                index = end + 2;
-                builder.Append(' ');
-                continue;
-            }
-
-            builder.Append(current);
-            index++;
-        }
-
-        stripped = builder.ToString();
-        return true;
-    }
+    private static bool IsWordPart(char value) =>
+        value is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '@' or '#' or '$'
+        || (value >= 128 && char.IsLetterOrDigit(value));
 
     /// <summary>Skips one quoted run, honouring the doubled-closer escape (<c>''</c>, <c>]]</c>).</summary>
-    private static bool SkipQuoted(string sql, ref int index, char opening, char closing)
+    private static bool SkipQuoted(ReadOnlySpan<char> sql, ref int index, char closing)
     {
         index++;
         while (index < sql.Length)
         {
-            if (sql[index] == closing)
+            var offset = sql.Slice(index).IndexOf(closing);
+            if (offset < 0)
             {
-                // A doubled closer is an escaped character, not the end of the run.
-                if (index + 1 < sql.Length && sql[index + 1] == closing)
-                {
-                    index += 2;
-                    continue;
-                }
-
-                index++;
-                return true;
+                return false;
             }
 
-            index++;
-        }
-
-        return false;
-    }
-
-    private static List<string> Tokenize(string text)
-    {
-        var tokens = new List<string>(8);
-        var index = 0;
-
-        while (index < text.Length)
-        {
-            var current = text[index];
-            var isWordStart = char.IsLetter(current) || current is '_' or '@' or '#';
-            if (!isWordStart)
+            index += offset;
+            // A doubled closer is an escaped character, not the end of the run.
+            if (index + 1 < sql.Length && sql[index + 1] == closing)
             {
-                index++;
+                index += 2;
                 continue;
             }
 
-            var start = index;
-            while (index < text.Length)
-            {
-                var next = text[index];
-                if (!char.IsLetterOrDigit(next) && next is not ('_' or '@' or '#' or '$'))
-                {
-                    break;
-                }
-
-                index++;
-            }
-
-            tokens.Add(text[start..index]);
+            index++;
+            return true;
         }
 
-        return tokens;
+        return false;
     }
 }

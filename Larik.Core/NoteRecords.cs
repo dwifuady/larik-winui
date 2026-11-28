@@ -299,13 +299,24 @@ public static class NoteAnchoring
         }
 
         var end = Math.Clamp(offset, 0, text.Length);
+        var span = text.AsSpan(0, end);
         var line = 1;
-        for (var index = 0; index < end; index++)
+        var index = 0;
+        while (index < end)
         {
-            if (text[index] == '\n' || (text[index] == '\r' && (index + 1 >= text.Length || text[index + 1] != '\n')))
+            var next = span.Slice(index).IndexOfAny('\n', '\r');
+            if (next < 0)
+            {
+                break;
+            }
+
+            index += next;
+            if (span[index] == '\n' || index + 1 >= text.Length || text[index + 1] != '\n')
             {
                 line++;
             }
+
+            index++;
         }
 
         return line;
@@ -315,19 +326,14 @@ public static class NoteAnchoring
     public static (int Start, int Length) LineSpanAt(string? text, int offset)
     {
         text ??= string.Empty;
-        var caret = Math.Clamp(offset, 0, text.Length);
+        var span = text.AsSpan();
+        var caret = Math.Clamp(offset, 0, span.Length);
 
-        var start = caret;
-        while (start > 0 && text[start - 1] != '\n' && text[start - 1] != '\r')
-        {
-            start--;
-        }
+        var prevBreak = span.Slice(0, caret).LastIndexOfAny('\n', '\r');
+        var start = prevBreak < 0 ? 0 : prevBreak + 1;
 
-        var end = caret;
-        while (end < text.Length && text[end] != '\n' && text[end] != '\r')
-        {
-            end++;
-        }
+        var nextBreak = span.Slice(caret).IndexOfAny('\n', '\r');
+        var end = nextBreak < 0 ? span.Length : caret + nextBreak;
 
         return (start, end - start);
     }
@@ -383,27 +389,34 @@ public static class NoteAnchoring
         return score;
     }
 
-    private static int CommonPrefix(string left, string right)
-    {
-        var limit = Math.Min(left.Length, right.Length);
-        var index = 0;
-        while (index < limit && left[index] == right[index])
-        {
-            index++;
-        }
-
-        return index;
-    }
+    private static int CommonPrefix(string left, string right) =>
+        left.AsSpan().CommonPrefixLength(right);
 
     private static int CommonSuffix(string left, string right, int prefix)
     {
         var limit = Math.Min(left.Length, right.Length) - prefix;
-        var index = 0;
-        while (index < limit && left[^(index + 1)] == right[^(index + 1)])
+        if (limit <= 0)
         {
-            index++;
+            return 0;
         }
 
-        return index;
+        var leftTail = left.AsSpan(left.Length - limit, limit);
+        var rightTail = right.AsSpan(right.Length - limit, limit);
+        var matched = 0;
+
+        // Compare 64-char blocks with SIMD SequenceEqual from the end before scanning the remainder.
+        const int block = 64;
+        while (limit - matched >= block
+            && leftTail.Slice(limit - matched - block, block).SequenceEqual(rightTail.Slice(limit - matched - block, block)))
+        {
+            matched += block;
+        }
+
+        while (matched < limit && leftTail[limit - 1 - matched] == rightTail[limit - 1 - matched])
+        {
+            matched++;
+        }
+
+        return matched;
     }
 }

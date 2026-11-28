@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Collections.Frozen;
+
 namespace Larik.Data;
 
 /// <summary>
@@ -70,6 +73,19 @@ public sealed class SqlLanguageOptions
 /// </summary>
 public abstract class SqlLanguage : IEditorLanguage
 {
+    [Flags]
+    private enum AsciiKind : byte
+    {
+        None = 0,
+        Whitespace = 1 << 0,
+        Digit = 1 << 1,
+        IdentStart = 1 << 2,
+        IdentPart = 1 << 3,
+        VariablePrefix = 1 << 4,
+        StringQuote = 1 << 5,
+        QuotedIdentQuote = 1 << 6,
+    }
+
     private readonly SqlLanguageOptions _options;
     private readonly HashSet<char> _identifierStarts;
     private readonly HashSet<char> _identifierParts;
@@ -77,8 +93,34 @@ public abstract class SqlLanguage : IEditorLanguage
     private readonly HashSet<char> _stringQuotes;
     private readonly HashSet<char> _quotedIdentifierQuotes;
 
-    // Span lookup keeps keyword classification allocation-free on the typing path.
-    private readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> _keywordLookup;
+    // 128-entry ASCII classification table keeps per-character checks branch-light and avoids
+    // HashSet<char>.Contains lookups on the hot typing/splitting paths.
+    private readonly byte[] _ascii = new byte[128];
+
+    // Cached fast-path prefix fields so the lexer avoids iterating LineCommentPrefixes on every char.
+    private readonly string[] _lineCommentPrefixes;
+    private readonly char _lineCommentFirstChar;
+    private readonly bool _singleLineCommentPrefix;
+    private readonly string _blockCommentOpen;
+    private readonly string _blockCommentClose;
+    private readonly char _blockCommentFirstChar;
+    private readonly string? _batchSeparator;
+    private readonly char _batchSepFirstUpper;
+    private readonly char _batchSepFirstLower;
+    private readonly bool _bracketIdentifiers;
+    private readonly bool _unicodeStringPrefix;
+    private readonly bool _escapeStringPrefix;
+    private readonly bool _dollarQuotedStrings;
+    private readonly bool _nestedBlockComments;
+    private readonly bool _splitOnSemicolon;
+
+    // SIMD-accelerated trigger sets for Split / SplitBatches so ordinary SQL characters are skipped
+    // in bulk instead of inspecting every character through a chain of branches.
+    private readonly SearchValues<char> _splitTriggers;
+    private readonly SearchValues<char> _batchSplitTriggers;
+
+    // FrozenSet + span alternate lookup keeps keyword classification fast and allocation-free.
+    private readonly FrozenSet<string>.AlternateLookup<ReadOnlySpan<char>> _keywordLookup;
 
     protected SqlLanguage(SqlLanguageOptions options)
     {
@@ -89,7 +131,61 @@ public abstract class SqlLanguage : IEditorLanguage
         _stringQuotes = new HashSet<char>(options.StringQuotes);
         _quotedIdentifierQuotes = new HashSet<char>(options.QuotedIdentifierQuotes);
 
-        var keywords = new HashSet<string>(options.TokenKeywords, StringComparer.OrdinalIgnoreCase);
+        _lineCommentPrefixes = options.LineCommentPrefixes;
+        _singleLineCommentPrefix = _lineCommentPrefixes.Length == 1 && _lineCommentPrefixes[0].Length > 0;
+        _lineCommentFirstChar = _singleLineCommentPrefix ? _lineCommentPrefixes[0][0] : '\0';
+        _blockCommentOpen = options.BlockCommentOpen;
+        _blockCommentClose = options.BlockCommentClose;
+        _blockCommentFirstChar = _blockCommentOpen.Length > 0 ? _blockCommentOpen[0] : '\0';
+        _batchSeparator = options.BatchSeparator is { Length: > 0 } sep ? sep : null;
+        _batchSepFirstUpper = _batchSeparator is not null ? char.ToUpperInvariant(_batchSeparator[0]) : '\0';
+        _batchSepFirstLower = _batchSeparator is not null ? char.ToLowerInvariant(_batchSeparator[0]) : '\0';
+        _bracketIdentifiers = options.BracketIdentifiers;
+        _unicodeStringPrefix = options.UnicodeStringPrefix;
+        _escapeStringPrefix = options.EscapeStringPrefix;
+        _dollarQuotedStrings = options.DollarQuotedStrings;
+        _nestedBlockComments = options.NestedBlockComments;
+        _splitOnSemicolon = options.SplitOnSemicolon;
+
+        for (var i = 0; i < 128; i++)
+        {
+            var c = (char)i;
+            var flags = AsciiKind.None;
+            if (char.IsWhiteSpace(c)) flags |= AsciiKind.Whitespace;
+            if (c is >= '0' and <= '9') flags |= AsciiKind.Digit | AsciiKind.IdentPart;
+            if (c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or '_') flags |= AsciiKind.IdentStart | AsciiKind.IdentPart;
+            if (_identifierStarts.Contains(c)) flags |= AsciiKind.IdentStart;
+            if (_identifierParts.Contains(c)) flags |= AsciiKind.IdentPart;
+            if (_variablePrefixes.Contains(c)) flags |= AsciiKind.VariablePrefix;
+            if (_stringQuotes.Contains(c)) flags |= AsciiKind.StringQuote;
+            if (_quotedIdentifierQuotes.Contains(c)) flags |= AsciiKind.QuotedIdentQuote;
+            _ascii[i] = (byte)flags;
+        }
+
+        var triggerChars = new HashSet<char>();
+        foreach (var c in options.StringQuotes) triggerChars.Add(c);
+        foreach (var c in options.QuotedIdentifierQuotes) triggerChars.Add(c);
+        if (_escapeStringPrefix) triggerChars.Add('\'');
+        if (_dollarQuotedStrings) triggerChars.Add('$');
+        if (_bracketIdentifiers) triggerChars.Add('[');
+        foreach (var prefix in _lineCommentPrefixes)
+        {
+            if (prefix.Length > 0) triggerChars.Add(prefix[0]);
+        }
+
+        if (_blockCommentOpen.Length > 0) triggerChars.Add(_blockCommentOpen[0]);
+        if (_batchSeparator is not null)
+        {
+            triggerChars.Add(_batchSepFirstUpper);
+            triggerChars.Add(_batchSepFirstLower);
+        }
+
+        _batchSplitTriggers = SearchValues.Create([.. triggerChars]);
+
+        if (_splitOnSemicolon) triggerChars.Add(';');
+        _splitTriggers = SearchValues.Create([.. triggerChars]);
+
+        var keywords = options.TokenKeywords.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
         _keywordLookup = keywords.GetAlternateLookup<ReadOnlySpan<char>>();
     }
 
@@ -102,108 +198,128 @@ public abstract class SqlLanguage : IEditorLanguage
             return [];
         }
 
-        var tokens = new List<QueryToken>();
+        var span = text.AsSpan();
+        var ascii = _ascii;
+        // Pre-size to avoid repeated List<QueryToken> growth/memmove on large SQL scripts.
+        var tokens = new List<QueryToken>(Math.Clamp(span.Length / 10, 16, 65_536));
         var index = 0;
+        var length = span.Length;
 
-        while (index < text.Length)
+        while (index < length)
         {
-            var current = text[index];
+            var current = span[index];
+            var flags = current < 128 ? (AsciiKind)ascii[current] : AsciiKind.None;
 
-            if (char.IsWhiteSpace(current))
+            if ((flags & AsciiKind.Whitespace) != 0 || (current >= 128 && char.IsWhiteSpace(current)))
             {
                 index++;
                 continue;
             }
 
-            if (StartsWithAny(text, index, _options.LineCommentPrefixes))
+            if (StartsWithLineComment(span, index, current))
             {
                 var start = index;
-                index = SkipLineComment(text, index);
+                index = SkipLineComment(span, index);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.Comment));
                 continue;
             }
 
-            if (_options.BlockCommentOpen.Length > 0
-                && text.AsSpan(index).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
+            if (current == _blockCommentFirstChar
+                && _blockCommentOpen.Length > 0
+                && span.Slice(index).StartsWith(_blockCommentOpen, StringComparison.Ordinal))
             {
                 var start = index;
-                index = SkipBlockComment(text, index);
+                index = SkipBlockComment(span, index);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.Comment));
                 continue;
             }
 
             // N'...' is a Unicode string. The N is part of the literal, not an identifier.
-            if (_options.UnicodeStringPrefix
+            if (_unicodeStringPrefix
                 && (current == 'N' || current == 'n')
-                && index + 1 < text.Length
-                && text[index + 1] == '\'')
+                && index + 1 < length
+                && span[index + 1] == '\'')
             {
                 var start = index;
-                index = SkipQuoted(text, index + 1, '\'');
+                index = SkipQuoted(span, index + 1, '\'');
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.String));
                 continue;
             }
 
             // E'...' is a PostgreSQL escape string: backslash escapes the next character.
-            if (_options.EscapeStringPrefix
+            if (_escapeStringPrefix
                 && (current == 'E' || current == 'e')
-                && index + 1 < text.Length
-                && text[index + 1] == '\'')
+                && index + 1 < length
+                && span[index + 1] == '\'')
             {
                 var start = index;
-                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
+                index = SkipQuoted(span, index + 1, '\'', backslashEscapes: true);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.String));
                 continue;
             }
 
-            if (_stringQuotes.Contains(current))
+            if ((flags & AsciiKind.StringQuote) != 0 || (current >= 128 && _stringQuotes.Contains(current)))
             {
                 var start = index;
-                index = SkipQuoted(text, index, current);
+                index = SkipQuoted(span, index, current);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.String));
                 continue;
             }
 
             // "x" is an identifier in PostgreSQL, but a string in the historical T-SQL scanner.
-            if (_quotedIdentifierQuotes.Contains(current))
+            if ((flags & AsciiKind.QuotedIdentQuote) != 0 || (current >= 128 && _quotedIdentifierQuotes.Contains(current)))
             {
-                index = SkipQuoted(text, index, current);
+                index = SkipQuoted(span, index, current);
                 continue;
             }
 
             // $tag$ ... $tag$ dollar quoting. Must come before identifiers so the body is one token.
-            if (_options.DollarQuotedStrings
+            if (_dollarQuotedStrings
                 && current == '$'
-                && TrySkipDollarQuoted(text, index, out var dollarEnd))
+                && TrySkipDollarQuoted(span, index, out var dollarEnd))
             {
                 tokens.Add(new QueryToken(index, dollarEnd - index, QueryTokenKind.String));
                 index = dollarEnd;
                 continue;
             }
 
-            if (_options.BracketIdentifiers && current == '[')
+            if (_bracketIdentifiers && current == '[')
             {
                 // Bracketed identifiers keep the editor's default colour.
-                index = SkipBracket(text, index);
+                index = SkipBracket(span, index);
                 continue;
             }
 
-            if (char.IsDigit(current))
+            if ((flags & AsciiKind.Digit) != 0 || (current >= 128 && char.IsDigit(current)))
             {
                 var start = index;
-                index = SkipNumber(text, index);
+                index = SkipNumber(span, index);
                 tokens.Add(new QueryToken(start, index - start, QueryTokenKind.Number));
                 continue;
             }
 
-            if (IsIdentifierStart(current))
+            if ((flags & AsciiKind.IdentStart) != 0 || (current >= 128 && IsIdentifierStartNonAscii(current)))
             {
                 var start = index;
-                var variable = _variablePrefixes.Contains(current);
+                var variable = (flags & AsciiKind.VariablePrefix) != 0
+                    || (current >= 128 && _variablePrefixes.Contains(current));
 
                 index++;
-                while (index < text.Length && IsIdentifierPart(text[index]))
+                while (index < length)
                 {
+                    var ch = span[index];
+                    if (ch < 128)
+                    {
+                        if (((AsciiKind)ascii[ch] & AsciiKind.IdentPart) == 0)
+                        {
+                            break;
+                        }
+                    }
+                    else if (!IsIdentifierPartNonAscii(ch))
+                    {
+                        break;
+                    }
+
                     index++;
                 }
 
@@ -213,11 +329,11 @@ public abstract class SqlLanguage : IEditorLanguage
                     continue;
                 }
 
-                if (_keywordLookup.Contains(text.AsSpan(start, index - start)))
+                if (_keywordLookup.Contains(span.Slice(start, index - start)))
                 {
                     tokens.Add(new QueryToken(start, index - start, QueryTokenKind.Keyword));
                 }
-                else if (NextNonWhitespace(text, index) == '(')
+                else if (NextNonWhitespace(span, index) == '(')
                 {
                     tokens.Add(new QueryToken(start, index - start, QueryTokenKind.Function));
                 }
@@ -238,94 +354,108 @@ public abstract class SqlLanguage : IEditorLanguage
             return [];
         }
 
+        var span = text.AsSpan();
+        var length = span.Length;
+        var ascii = _ascii;
+        var triggers = _splitTriggers;
         var statements = new List<StatementSpan>();
         var statementStart = 0;
+        var scanStart = 0;
         var index = 0;
 
-        void Emit(int end)
+        while (index < length)
         {
-            var (start, length) = EditorLanguageHelpers.Trim(text, statementStart, end);
-            if (length > 0 && HasCode(text, start, length))
+            var nextOffset = span.Slice(index).IndexOfAny(triggers);
+            if (nextOffset < 0)
             {
-                statements.Add(new StatementSpan(start, length));
-            }
-        }
-
-        while (index < text.Length)
-        {
-            var current = text[index];
-
-            if (_options.EscapeStringPrefix
-                && (current == 'E' || current == 'e')
-                && index + 1 < text.Length
-                && text[index + 1] == '\'')
-            {
-                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
-                continue;
+                break;
             }
 
-            if (_stringQuotes.Contains(current))
-            {
-                index = SkipQuoted(text, index, current);
-                continue;
-            }
+            index += nextOffset;
+            var current = span[index];
 
-            if (_quotedIdentifierQuotes.Contains(current))
+            if (current == ';' && _splitOnSemicolon)
             {
-                index = SkipQuoted(text, index, current);
-                continue;
-            }
-
-            if (_options.DollarQuotedStrings
-                && current == '$'
-                && TrySkipDollarQuoted(text, index, out var dollarEnd))
-            {
-                index = dollarEnd;
-                continue;
-            }
-
-            if (_options.BracketIdentifiers && current == '[')
-            {
-                index = SkipBracket(text, index);
-                continue;
-            }
-
-            if (_options.LineCommentPrefixes.Length > 0
-                && StartsWithAny(text, index, _options.LineCommentPrefixes))
-            {
-                index = SkipLineComment(text, index);
-                continue;
-            }
-
-            if (_options.BlockCommentOpen.Length > 0
-                && text.AsSpan(index).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
-            {
-                index = SkipBlockComment(text, index);
-                continue;
-            }
-
-            if (current == ';' && _options.SplitOnSemicolon)
-            {
-                Emit(index + 1);
+                EmitStatement(statements, text, statementStart, index + 1);
                 statementStart = index + 1;
                 index++;
+                scanStart = index;
                 continue;
             }
 
-            if (_options.BatchSeparator is { Length: > 0 } separator
-                && IsBatchSeparatorStart(text, index)
-                && MatchesBatchSeparator(text, index, separator, out var separatorEnd))
+            if (_escapeStringPrefix
+                && current == '\''
+                && index > scanStart
+                && (span[index - 1] == 'E' || span[index - 1] == 'e'))
             {
-                Emit(index);
+                index = SkipQuoted(span, index, '\'', backslashEscapes: true);
+                scanStart = index;
+                continue;
+            }
+
+            var flags = current < 128 ? (AsciiKind)ascii[current] : AsciiKind.None;
+            if ((flags & AsciiKind.StringQuote) != 0 || (current >= 128 && _stringQuotes.Contains(current)))
+            {
+                index = SkipQuoted(span, index, current);
+                scanStart = index;
+                continue;
+            }
+
+            if ((flags & AsciiKind.QuotedIdentQuote) != 0 || (current >= 128 && _quotedIdentifierQuotes.Contains(current)))
+            {
+                index = SkipQuoted(span, index, current);
+                scanStart = index;
+                continue;
+            }
+
+            if (_dollarQuotedStrings
+                && current == '$'
+                && TrySkipDollarQuoted(span, index, out var dollarEnd))
+            {
+                index = dollarEnd;
+                scanStart = index;
+                continue;
+            }
+
+            if (_bracketIdentifiers && current == '[')
+            {
+                index = SkipBracket(span, index);
+                scanStart = index;
+                continue;
+            }
+
+            if (StartsWithLineComment(span, index, current))
+            {
+                index = SkipLineComment(span, index);
+                scanStart = index;
+                continue;
+            }
+
+            if (current == _blockCommentFirstChar
+                && _blockCommentOpen.Length > 0
+                && span.Slice(index).StartsWith(_blockCommentOpen, StringComparison.Ordinal))
+            {
+                index = SkipBlockComment(span, index);
+                scanStart = index;
+                continue;
+            }
+
+            if (_batchSeparator is not null
+                && (current == _batchSepFirstUpper || current == _batchSepFirstLower)
+                && IsBatchSeparatorStart(span, index)
+                && MatchesBatchSeparator(span, index, _batchSeparator, out var separatorEnd))
+            {
+                EmitStatement(statements, text, statementStart, index);
                 statementStart = separatorEnd;
                 index = separatorEnd;
+                scanStart = index;
                 continue;
             }
 
             index++;
         }
 
-        Emit(text.Length);
+        EmitStatement(statements, text, statementStart, length);
         return statements;
     }
 
@@ -342,95 +472,117 @@ public abstract class SqlLanguage : IEditorLanguage
             return [];
         }
 
-        if (_options.BatchSeparator is not { Length: > 0 } separator)
+        if (_batchSeparator is not { } separator)
         {
             // Comment-only text is not a batch: there is nothing to send to the server.
-            var (start, length) = EditorLanguageHelpers.Trim(text, 0, text.Length);
-            return length > 0 && HasCode(text, start, length)
-                ? [new StatementSpan(start, length)]
+            var (start, trimLength) = EditorLanguageHelpers.Trim(text, 0, text.Length);
+            return trimLength > 0 && HasCode(text.AsSpan(), start, trimLength)
+                ? [new StatementSpan(start, trimLength)]
                 : [];
         }
 
+        var span = text.AsSpan();
+        var length = span.Length;
+        var ascii = _ascii;
+        var triggers = _batchSplitTriggers;
         var batches = new List<StatementSpan>();
         var batchStart = 0;
+        var scanStart = 0;
         var index = 0;
 
-        void Add(int end)
+        while (index < length)
         {
-            var (start, length) = EditorLanguageHelpers.Trim(text, batchStart, end);
-            if (length > 0 && HasCode(text, start, length))
+            var nextOffset = span.Slice(index).IndexOfAny(triggers);
+            if (nextOffset < 0)
             {
-                batches.Add(new StatementSpan(start, length));
+                break;
             }
-        }
 
-        while (index < text.Length)
-        {
-            var current = text[index];
+            index += nextOffset;
+            var current = span[index];
 
-            if (_options.EscapeStringPrefix
-                && (current == 'E' || current == 'e')
-                && index + 1 < text.Length
-                && text[index + 1] == '\'')
+            if (_escapeStringPrefix
+                && current == '\''
+                && index > scanStart
+                && (span[index - 1] == 'E' || span[index - 1] == 'e'))
             {
-                index = SkipQuoted(text, index + 1, '\'', backslashEscapes: true);
+                index = SkipQuoted(span, index, '\'', backslashEscapes: true);
+                scanStart = index;
                 continue;
             }
 
-            if (_stringQuotes.Contains(current))
+            var flags = current < 128 ? (AsciiKind)ascii[current] : AsciiKind.None;
+            if ((flags & AsciiKind.StringQuote) != 0 || (current >= 128 && _stringQuotes.Contains(current)))
             {
-                index = SkipQuoted(text, index, current);
+                index = SkipQuoted(span, index, current);
+                scanStart = index;
                 continue;
             }
 
-            if (_quotedIdentifierQuotes.Contains(current))
+            if ((flags & AsciiKind.QuotedIdentQuote) != 0 || (current >= 128 && _quotedIdentifierQuotes.Contains(current)))
             {
-                index = SkipQuoted(text, index, current);
+                index = SkipQuoted(span, index, current);
+                scanStart = index;
                 continue;
             }
 
-            if (_options.DollarQuotedStrings
+            if (_dollarQuotedStrings
                 && current == '$'
-                && TrySkipDollarQuoted(text, index, out var dollarEnd))
+                && TrySkipDollarQuoted(span, index, out var dollarEnd))
             {
                 index = dollarEnd;
+                scanStart = index;
                 continue;
             }
 
-            if (_options.BracketIdentifiers && current == '[')
+            if (_bracketIdentifiers && current == '[')
             {
-                index = SkipBracket(text, index);
+                index = SkipBracket(span, index);
+                scanStart = index;
                 continue;
             }
 
-            if (StartsWithAny(text, index, _options.LineCommentPrefixes))
+            if (StartsWithLineComment(span, index, current))
             {
-                index = SkipLineComment(text, index);
+                index = SkipLineComment(span, index);
+                scanStart = index;
                 continue;
             }
 
-            if (_options.BlockCommentOpen.Length > 0
-                && text.AsSpan(index).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
+            if (current == _blockCommentFirstChar
+                && _blockCommentOpen.Length > 0
+                && span.Slice(index).StartsWith(_blockCommentOpen, StringComparison.Ordinal))
             {
-                index = SkipBlockComment(text, index);
+                index = SkipBlockComment(span, index);
+                scanStart = index;
                 continue;
             }
 
-            if ((current == 'G' || current == 'g')
-                && IsBatchSeparatorStart(text, index)
-                && MatchesBatchSeparator(text, index, separator, out var separatorEnd))
+            if ((current == _batchSepFirstUpper || current == _batchSepFirstLower)
+                && IsBatchSeparatorStart(span, index)
+                && MatchesBatchSeparator(span, index, separator, out var separatorEnd))
             {
-                Add(index);
+                EmitStatement(batches, text, batchStart, index);
                 batchStart = separatorEnd;
                 index = separatorEnd;
+                scanStart = index;
                 continue;
             }
 
             index++;
         }
 
-        Add(text.Length);
+        EmitStatement(batches, text, batchStart, length);
         return batches;
+    }
+
+    private void EmitStatement(List<StatementSpan> target, string text, int statementStart, int end)
+    {
+        var (start, length) = EditorLanguageHelpers.Trim(text, statementStart, end);
+        if (length > 0 && HasCode(text.AsSpan(), start, length))
+        {
+            target.Add(new StatementSpan(start, length));
+        }
     }
 
     /// <summary>
@@ -448,7 +600,7 @@ public abstract class SqlLanguage : IEditorLanguage
         if (statements.Count == 0)
         {
             var (start, length) = EditorLanguageHelpers.Trim(text, 0, text.Length);
-            return HasCode(text, start, length) ? new StatementSpan(start, length) : default;
+            return HasCode(text.AsSpan(), start, length) ? new StatementSpan(start, length) : default;
         }
 
         var caret = Math.Clamp(caretOffset, 0, text.Length);
@@ -476,34 +628,59 @@ public abstract class SqlLanguage : IEditorLanguage
         return statements[^1];
     }
 
-    private bool IsIdentifierStart(char value) =>
-        char.IsLetter(value) || value == '_' || _identifierStarts.Contains(value);
+    private bool IsIdentifierStartNonAscii(char value) =>
+        char.IsLetter(value) || _identifierStarts.Contains(value);
+
+    private bool IsIdentifierPartNonAscii(char value) =>
+        char.IsLetterOrDigit(value) || _identifierParts.Contains(value);
 
     private bool IsIdentifierPart(char value) =>
-        char.IsLetterOrDigit(value) || value == '_' || _identifierParts.Contains(value);
+        value < 128
+            ? ((AsciiKind)_ascii[value] & AsciiKind.IdentPart) != 0
+            : IsIdentifierPartNonAscii(value);
+
+    private bool StartsWithLineComment(ReadOnlySpan<char> text, int index, char current)
+    {
+        if (_singleLineCommentPrefix)
+        {
+            if (current != _lineCommentFirstChar)
+            {
+                return false;
+            }
+
+            var prefix = _lineCommentPrefixes[0];
+            return prefix.Length == 2
+                ? index + 1 < text.Length && text[index + 1] == prefix[1]
+                : text.Slice(index).StartsWith(prefix, StringComparison.Ordinal);
+        }
+
+        return StartsWithAny(text, index, _lineCommentPrefixes);
+    }
 
     /// <summary>False for a span that is only whitespace and comments: there is nothing to run.</summary>
-    private bool HasCode(string text, int start, int length)
+    private bool HasCode(ReadOnlySpan<char> text, int start, int length)
     {
         var end = start + length;
         var index = start;
 
         while (index < end)
         {
-            if (char.IsWhiteSpace(text[index]))
+            var current = text[index];
+            if (char.IsWhiteSpace(current))
             {
                 index++;
                 continue;
             }
 
-            if (StartsWithAny(text, index, _options.LineCommentPrefixes))
+            if (StartsWithLineComment(text, index, current))
             {
                 index = SkipLineComment(text, index);
                 continue;
             }
 
-            if (_options.BlockCommentOpen.Length > 0
-                && text.AsSpan(index).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
+            if (current == _blockCommentFirstChar
+                && _blockCommentOpen.Length > 0
+                && text.Slice(index).StartsWith(_blockCommentOpen, StringComparison.Ordinal))
             {
                 index = SkipBlockComment(text, index);
                 continue;
@@ -515,13 +692,13 @@ public abstract class SqlLanguage : IEditorLanguage
         return false;
     }
 
-    private static bool StartsWithAny(string text, int index, string[] prefixes)
+    private static bool StartsWithAny(ReadOnlySpan<char> text, int index, string[] prefixes)
     {
         foreach (var prefix in prefixes)
         {
             if (prefix.Length > 0
                 && index + prefix.Length <= text.Length
-                && text.AsSpan(index).StartsWith(prefix, StringComparison.Ordinal))
+                && text.Slice(index).StartsWith(prefix, StringComparison.Ordinal))
             {
                 return true;
             }
@@ -530,22 +707,52 @@ public abstract class SqlLanguage : IEditorLanguage
         return false;
     }
 
-    private static int SkipQuoted(string text, int index, char quote, bool backslashEscapes = false)
+    private static int SkipQuoted(ReadOnlySpan<char> text, int index, char quote, bool backslashEscapes = false)
     {
         index++;
-        while (index < text.Length)
+        if (!backslashEscapes)
         {
-            if (backslashEscapes && text[index] == '\\' && index + 1 < text.Length)
+            while (index < text.Length)
             {
-                // PostgreSQL E'...' strings treat a backslash as an escape character.
-                index += 2;
-                continue;
+                var offset = text.Slice(index).IndexOf(quote);
+                if (offset < 0)
+                {
+                    return text.Length;
+                }
+
+                index += offset;
+                // SQL escapes a quote by doubling it.
+                if (index + 1 < text.Length && text[index + 1] == quote)
+                {
+                    index += 2;
+                    continue;
+                }
+
+                return index + 1;
             }
 
-            if (text[index] != quote)
+            return text.Length;
+        }
+
+        while (index < text.Length)
+        {
+            var offset = text.Slice(index).IndexOfAny(quote, '\\');
+            if (offset < 0)
             {
-                index++;
-                continue;
+                return text.Length;
+            }
+
+            index += offset;
+            if (text[index] == '\\')
+            {
+                // PostgreSQL E'...' strings treat a backslash as an escape character.
+                if (index + 1 < text.Length)
+                {
+                    index += 2;
+                    continue;
+                }
+
+                return text.Length;
             }
 
             // SQL escapes a quote by doubling it.
@@ -567,7 +774,7 @@ public abstract class SqlLanguage : IEditorLanguage
     /// <c>a$b</c> identifiers keep their ordinary meaning. Unterminated input consumes the rest,
     /// mirroring how every other unterminated literal behaves.
     /// </summary>
-    private bool TrySkipDollarQuoted(string text, int index, out int end)
+    private bool TrySkipDollarQuoted(ReadOnlySpan<char> text, int index, out int end)
     {
         end = index;
 
@@ -591,8 +798,8 @@ public abstract class SqlLanguage : IEditorLanguage
         // $$ immediately closes the tag.
         if (text[cursor] == '$')
         {
-            var close = text.IndexOf("$$", cursor + 1, StringComparison.Ordinal);
-            end = close < 0 ? text.Length : close + 2;
+            var closeOffset = text.Slice(cursor + 1).IndexOf("$$", StringComparison.Ordinal);
+            end = closeOffset < 0 ? text.Length : cursor + 1 + closeOffset + 2;
             return true;
         }
 
@@ -614,20 +821,21 @@ public abstract class SqlLanguage : IEditorLanguage
 
         // Delimiter is $tag$: find the next identical one without allocating a substring.
         var tagLength = cursor - tagStart;
-        var tag = text.AsSpan(tagStart, tagLength);
+        var tag = text.Slice(tagStart, tagLength);
         var search = cursor + 1;
 
         while (search < text.Length)
         {
-            var next = text.IndexOf('$', search);
-            if (next < 0)
+            var nextOffset = text.Slice(search).IndexOf('$');
+            if (nextOffset < 0)
             {
                 break;
             }
 
+            var next = search + nextOffset;
             if (next + tagLength + 1 < text.Length
                 && text[next + tagLength + 1] == '$'
-                && text.AsSpan(next + 1, tagLength).SequenceEqual(tag))
+                && text.Slice(next + 1, tagLength).SequenceEqual(tag))
             {
                 end = next + tagLength + 2;
                 return true;
@@ -640,17 +848,18 @@ public abstract class SqlLanguage : IEditorLanguage
         return true;
     }
 
-    private static int SkipBracket(string text, int index)
+    private static int SkipBracket(ReadOnlySpan<char> text, int index)
     {
         index++;
         while (index < text.Length)
         {
-            if (text[index] != ']')
+            var offset = text.Slice(index).IndexOf(']');
+            if (offset < 0)
             {
-                index++;
-                continue;
+                return text.Length;
             }
 
+            index += offset;
             if (index + 1 < text.Length && text[index + 1] == ']')
             {
                 index += 2;
@@ -663,45 +872,51 @@ public abstract class SqlLanguage : IEditorLanguage
         return text.Length;
     }
 
-    private static int SkipLineComment(string text, int index)
+    private static int SkipLineComment(ReadOnlySpan<char> text, int index)
     {
-        while (index < text.Length && text[index] is not ('\n' or '\r'))
-        {
-            index++;
-        }
-
-        return index;
+        var offset = text.Slice(index).IndexOfAny('\n', '\r');
+        return offset < 0 ? text.Length : index + offset;
     }
 
-    private int SkipBlockComment(string text, int index)
+    private int SkipBlockComment(ReadOnlySpan<char> text, int index)
     {
-        if (_options.BlockCommentClose.Length == 0)
+        if (_blockCommentClose.Length == 0)
         {
             return text.Length;
         }
 
-        if (!_options.NestedBlockComments)
+        if (!_nestedBlockComments)
         {
-            var close = text.IndexOf(_options.BlockCommentClose, index + _options.BlockCommentOpen.Length, StringComparison.Ordinal);
-            return close < 0 ? text.Length : close + _options.BlockCommentClose.Length;
+            var searchStart = index + _blockCommentOpen.Length;
+            var closeOffset = text.Slice(searchStart).IndexOf(_blockCommentClose, StringComparison.Ordinal);
+            return closeOffset < 0 ? text.Length : searchStart + closeOffset + _blockCommentClose.Length;
         }
 
         // PostgreSQL allows block comments to nest, so count depth instead of stopping at the first */.
         var depth = 1;
-        var cursor = index + _options.BlockCommentOpen.Length;
+        var cursor = index + _blockCommentOpen.Length;
+        var openFirst = _blockCommentOpen[0];
+        var closeFirst = _blockCommentClose[0];
         while (cursor < text.Length)
         {
-            if (text.AsSpan(cursor).StartsWith(_options.BlockCommentOpen, StringComparison.Ordinal))
+            var offset = text.Slice(cursor).IndexOfAny(openFirst, closeFirst);
+            if (offset < 0)
+            {
+                return text.Length;
+            }
+
+            cursor += offset;
+            if (text.Slice(cursor).StartsWith(_blockCommentOpen, StringComparison.Ordinal))
             {
                 depth++;
-                cursor += _options.BlockCommentOpen.Length;
+                cursor += _blockCommentOpen.Length;
                 continue;
             }
 
-            if (text.AsSpan(cursor).StartsWith(_options.BlockCommentClose, StringComparison.Ordinal))
+            if (text.Slice(cursor).StartsWith(_blockCommentClose, StringComparison.Ordinal))
             {
                 depth--;
-                cursor += _options.BlockCommentClose.Length;
+                cursor += _blockCommentClose.Length;
                 if (depth == 0)
                 {
                     return cursor;
@@ -716,7 +931,7 @@ public abstract class SqlLanguage : IEditorLanguage
         return text.Length;
     }
 
-    private static int SkipNumber(string text, int index)
+    private static int SkipNumber(ReadOnlySpan<char> text, int index)
     {
         while (index < text.Length && (char.IsDigit(text[index]) || text[index] == '.'))
         {
@@ -740,7 +955,7 @@ public abstract class SqlLanguage : IEditorLanguage
         return index;
     }
 
-    private static char NextNonWhitespace(string text, int index)
+    private static char NextNonWhitespace(ReadOnlySpan<char> text, int index)
     {
         while (index < text.Length && char.IsWhiteSpace(text[index]))
         {
@@ -754,7 +969,7 @@ public abstract class SqlLanguage : IEditorLanguage
     /// True when only whitespace precedes <paramref name="index"/> on its line, so an indented
     /// <c>GO</c> still separates batches (SSMS accepts indentation before the separator).
     /// </summary>
-    private static bool IsBatchSeparatorStart(string text, int index)
+    private static bool IsBatchSeparatorStart(ReadOnlySpan<char> text, int index)
     {
         var cursor = index - 1;
         while (cursor >= 0 && text[cursor] is not ('\n' or '\r'))
@@ -770,11 +985,11 @@ public abstract class SqlLanguage : IEditorLanguage
         return true;
     }
 
-    private static bool MatchesBatchSeparator(string text, int index, string separator, out int end)
+    private static bool MatchesBatchSeparator(ReadOnlySpan<char> text, int index, string separator, out int end)
     {
         end = index;
         if (index + separator.Length > text.Length
-            || !text.AsSpan(index, separator.Length).Equals(separator, StringComparison.OrdinalIgnoreCase))
+            || !text.Slice(index, separator.Length).Equals(separator, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

@@ -57,17 +57,18 @@ public static class CellSyntaxTokenizer
 
     private static List<CellSyntaxToken> TokenizeJson(string text, int limit)
     {
-        var tokens = new List<CellSyntaxToken>();
+        var span = text.AsSpan(0, limit);
+        var tokens = new List<CellSyntaxToken>(Math.Clamp(limit / 8, 16, 4096));
         var index = 0;
 
         while (index < limit)
         {
-            var current = text[index];
+            var current = span[index];
 
             if (current == '"')
             {
-                var end = ScanQuoted(text, index, limit, '"', escapes: true);
-                var kind = IsFollowedByColon(text, end, limit)
+                var end = ScanQuoted(span, index, '"', escapes: true);
+                var kind = IsFollowedByColon(span, end)
                     ? CellSyntaxTokenKind.Property
                     : CellSyntaxTokenKind.String;
                 tokens.Add(new CellSyntaxToken(index, end - index, kind));
@@ -77,7 +78,7 @@ public static class CellSyntaxTokenizer
 
             if (current == '-' || char.IsAsciiDigit(current))
             {
-                var end = ScanNumber(text, index, limit);
+                var end = ScanNumber(span, index);
                 tokens.Add(new CellSyntaxToken(index, end - index, CellSyntaxTokenKind.Number));
                 index = end;
                 continue;
@@ -86,7 +87,7 @@ public static class CellSyntaxTokenizer
             if (char.IsAsciiLetter(current))
             {
                 var start = index;
-                while (index < limit && char.IsAsciiLetter(text[index]))
+                while (index < limit && char.IsAsciiLetter(span[index]))
                 {
                     index++;
                 }
@@ -106,10 +107,10 @@ public static class CellSyntaxTokenizer
         return tokens;
     }
 
-    private static int ScanNumber(string text, int start, int limit)
+    private static int ScanNumber(ReadOnlySpan<char> text, int start)
     {
         var index = start + 1;
-        while (index < limit && (char.IsAsciiDigit(text[index]) || text[index] is '.' or 'e' or 'E' or '+' or '-'))
+        while (index < text.Length && (char.IsAsciiDigit(text[index]) || text[index] is '.' or 'e' or 'E' or '+' or '-'))
         {
             index++;
         }
@@ -117,59 +118,60 @@ public static class CellSyntaxTokenizer
         return index;
     }
 
-    private static bool IsFollowedByColon(string text, int index, int limit)
+    private static bool IsFollowedByColon(ReadOnlySpan<char> text, int index)
     {
-        while (index < limit && char.IsWhiteSpace(text[index]))
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
         {
             index++;
         }
 
-        return index < limit && text[index] == ':';
+        return index < text.Length && text[index] == ':';
     }
 
     private static List<CellSyntaxToken> TokenizeXml(string text, int limit)
     {
-        var tokens = new List<CellSyntaxToken>();
+        var span = text.AsSpan(0, limit);
+        var tokens = new List<CellSyntaxToken>(Math.Clamp(limit / 8, 16, 4096));
         var index = 0;
 
         while (index < limit)
         {
-            var marker = Find(text, index, limit, '<');
-            if (marker < 0)
+            var markerOffset = span.Slice(index).IndexOf('<');
+            if (markerOffset < 0)
             {
                 break;
             }
 
-            index = marker;
+            index += markerOffset;
 
-            if (Matches(text, index, limit, "<!--"))
+            if (span.Slice(index).StartsWith("<!--", StringComparison.Ordinal))
             {
-                var end = Find(text, index + 4, limit, "-->");
-                end = end < 0 ? limit : Math.Min(end + 3, limit);
+                var endOffset = span.Slice(index + 4).IndexOf("-->", StringComparison.Ordinal);
+                var end = endOffset < 0 ? limit : Math.Min(index + 4 + endOffset + 3, limit);
                 tokens.Add(new CellSyntaxToken(index, end - index, CellSyntaxTokenKind.Comment));
                 index = end;
                 continue;
             }
 
-            if (Matches(text, index, limit, "<![CDATA["))
+            if (span.Slice(index).StartsWith("<![CDATA[", StringComparison.Ordinal))
             {
-                var end = Find(text, index + 9, limit, "]]>");
-                end = end < 0 ? limit : Math.Min(end + 3, limit);
+                var endOffset = span.Slice(index + 9).IndexOf("]]>", StringComparison.Ordinal);
+                var end = endOffset < 0 ? limit : Math.Min(index + 9 + endOffset + 3, limit);
                 tokens.Add(new CellSyntaxToken(index, end - index, CellSyntaxTokenKind.String));
                 index = end;
                 continue;
             }
 
-            if (Matches(text, index, limit, "<!") || Matches(text, index, limit, "<?"))
+            if (index + 1 < limit && span[index + 1] is '!' or '?')
             {
-                var end = Find(text, index + 2, limit, '>');
-                end = end < 0 ? limit : end + 1;
+                var endOffset = span.Slice(index + 2).IndexOf('>');
+                var end = endOffset < 0 ? limit : index + 2 + endOffset + 1;
                 tokens.Add(new CellSyntaxToken(index, end - index, CellSyntaxTokenKind.Declaration));
                 index = end;
                 continue;
             }
 
-            index = ScanTag(text, index, limit, tokens);
+            index = ScanTag(span, index, tokens);
         }
 
         return tokens;
@@ -179,8 +181,9 @@ public static class CellSyntaxTokenizer
     /// Emits the punctuation, element name, attribute names and quoted attribute values of one tag.
     /// Returns the index just past the closing <c>&gt;</c>, so a malformed tag cannot loop forever.
     /// </summary>
-    private static int ScanTag(string text, int start, int limit, List<CellSyntaxToken> tokens)
+    private static int ScanTag(ReadOnlySpan<char> text, int start, List<CellSyntaxToken> tokens)
     {
+        var limit = text.Length;
         var cursor = start;
         tokens.Add(new CellSyntaxToken(cursor++, 1, CellSyntaxTokenKind.Punctuation));
 
@@ -224,7 +227,7 @@ public static class CellSyntaxTokenizer
             if (current is '"' or '\'')
             {
                 var startQuote = cursor;
-                cursor = ScanQuoted(text, cursor, limit, current, escapes: false);
+                cursor = ScanQuoted(text, cursor, current, escapes: false);
                 tokens.Add(new CellSyntaxToken(startQuote, cursor - startQuote, CellSyntaxTokenKind.String));
                 continue;
             }
@@ -251,54 +254,33 @@ public static class CellSyntaxTokenizer
         return cursor;
     }
 
-    private static int ScanQuoted(string text, int start, int limit, char quote, bool escapes)
+    private static int ScanQuoted(ReadOnlySpan<char> text, int start, char quote, bool escapes)
     {
         var index = start + 1;
-        while (index < limit)
+        if (!escapes)
         {
-            if (escapes && text[index] == '\\')
+            var closeOffset = text.Slice(index).IndexOf(quote);
+            return closeOffset < 0 ? text.Length : index + closeOffset + 1;
+        }
+
+        while (index < text.Length)
+        {
+            var offset = text.Slice(index).IndexOfAny(quote, '\\');
+            if (offset < 0)
+            {
+                return text.Length;
+            }
+
+            index += offset;
+            if (text[index] == '\\')
             {
                 index += 2;
                 continue;
             }
 
-            if (text[index] == quote)
-            {
-                return index + 1;
-            }
-
-            index++;
+            return index + 1;
         }
 
-        return limit;
+        return text.Length;
     }
-
-    private static int Find(string text, int start, int limit, char value)
-    {
-        for (var index = start; index < limit; index++)
-        {
-            if (text[index] == value)
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static int Find(string text, int start, int limit, string value)
-    {
-        for (var index = start; index + value.Length <= limit; index++)
-        {
-            if (text.AsSpan(index, value.Length).SequenceEqual(value))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static bool Matches(string text, int start, int limit, string value) =>
-        start + value.Length <= limit && text.AsSpan(start, value.Length).SequenceEqual(value);
 }
