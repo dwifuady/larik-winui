@@ -628,36 +628,49 @@ public sealed partial class StudioStore : IVirtualReferenceStore
 
     private static StudioState Read(SqliteConnection connection)
     {
+        var appState = ReadAllState(connection);
+        appState.TryGetValue("active_space_id", out var activeSpaceId);
+        appState.TryGetValue("query_counter", out var queryCounterRaw);
+        appState.TryGetValue("auto_archive_enabled", out var autoArchiveEnabledRaw);
+        appState.TryGetValue("auto_archive_days", out var autoArchiveDaysRaw);
+        appState.TryGetValue("notes_pane_open", out var notesPaneOpenRaw);
+        appState.TryGetValue("window_bounds", out var windowBoundsRaw);
+        appState.TryGetValue("results_pane_height", out var resultsPaneHeightRaw);
+        appState.TryGetValue("cell_preview_width", out var cellPreviewWidthRaw);
+        appState.TryGetValue("theme", out var themeRaw);
+        appState.TryGetValue("check_for_updates", out var checkForUpdatesRaw);
+
         var state = new StudioState
         {
-            ActiveSpaceId = ReadState(connection, "active_space_id"),
+            ActiveSpaceId = activeSpaceId,
             QueryCounter = int.TryParse(
-                ReadState(connection, "query_counter"),
+                queryCounterRaw,
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out var counter)
                 ? counter
                 : 0,
-            AutoArchiveEnabled = !bool.TryParse(ReadState(connection, "auto_archive_enabled"), out var enabled)
+            AutoArchiveEnabled = !bool.TryParse(autoArchiveEnabledRaw, out var enabled)
                 || enabled,
             AutoArchiveDays = int.TryParse(
-                ReadState(connection, "auto_archive_days"),
+                autoArchiveDaysRaw,
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out var days)
                 ? days
                 : 30,
-            NotesPaneOpen = bool.TryParse(ReadState(connection, "notes_pane_open"), out var notesPaneOpen)
+            NotesPaneOpen = bool.TryParse(notesPaneOpenRaw, out var notesPaneOpen)
                 && notesPaneOpen,
-            WindowBounds = ReadWindowBounds(connection),
-            ResultsPaneHeight = ReadDouble(connection, "results_pane_height"),
-            CellPreviewWidth = ReadDouble(connection, "cell_preview_width"),
-            Theme = ReadState(connection, "theme") ?? "system",
-            CheckForUpdates = !bool.TryParse(ReadState(connection, "check_for_updates"), out var checkForUpdates)
+            WindowBounds = ParseWindowBounds(windowBoundsRaw),
+            ResultsPaneHeight = ParseDouble(resultsPaneHeightRaw),
+            CellPreviewWidth = ParseDouble(cellPreviewWidthRaw),
+            Theme = themeRaw ?? "system",
+            CheckForUpdates = !bool.TryParse(checkForUpdatesRaw, out var checkForUpdates)
                 || checkForUpdates,
         };
 
         var spaces = new List<SpaceState>();
+        var spacesById = new Dictionary<string, SpaceState>(StringComparer.Ordinal);
         using (var command = connection.CreateCommand())
         {
             command.CommandText =
@@ -670,7 +683,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                spaces.Add(new SpaceState
+                var space = new SpaceState
                 {
                     Id = reader.GetString(0),
                     Name = reader.GetString(1),
@@ -680,15 +693,18 @@ public sealed partial class StudioStore : IVirtualReferenceStore
                     ActiveTabId = reader.IsDBNull(5) ? null : reader.GetString(5),
                     Icon = reader.GetString(6) is { Length: > 0 } icon ? icon : null,
                     Hidden = reader.GetInt64(7) != 0,
-                });
+                    Profile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                };
+                spaces.Add(space);
+                spacesById[space.Id] = space;
             }
         }
 
-        foreach (var space in spaces)
+        if (spaces.Count > 0)
         {
-            space.Profile = ReadProfile(connection, space.Id);
-            space.Groups = ReadGroups(connection, space.Id);
-            space.Tabs = ReadTabs(connection, space.Id);
+            ReadAllProfiles(connection, spacesById);
+            ReadAllGroups(connection, spacesById);
+            ReadAllTabs(connection, spacesById);
         }
 
         state.Spaces = spaces;
@@ -699,8 +715,7 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         {
             state.ActiveSpaceId = null;
         }
-        else if (string.IsNullOrEmpty(state.ActiveSpaceId) ||
-                 spaces.All(space => !string.Equals(space.Id, state.ActiveSpaceId, StringComparison.Ordinal)))
+        else if (string.IsNullOrEmpty(state.ActiveSpaceId) || !spacesById.ContainsKey(state.ActiveSpaceId))
         {
             state.ActiveSpaceId = spaces[0].Id;
         }
@@ -709,85 +724,98 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         return state;
     }
 
-    private static Dictionary<string, string> ReadProfile(SqliteConnection connection, string spaceId)
+    private static Dictionary<string, string> ReadAllState(SqliteConnection connection)
     {
-        var profile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var values = new Dictionary<string, string>(16, StringComparer.Ordinal);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT key, value FROM space_settings WHERE space_id = $id;";
-        command.Parameters.AddWithValue("$id", spaceId);
+        command.CommandText = "SELECT key, value FROM app_state;";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            values[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        return values;
+    }
+
+    private static void ReadAllProfiles(SqliteConnection connection, Dictionary<string, SpaceState> spacesById)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT space_id, key, value FROM space_settings;";
 
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            profile[reader.GetString(0)] = reader.GetString(1);
+            if (spacesById.TryGetValue(reader.GetString(0), out var space))
+            {
+                space.Profile[reader.GetString(1)] = reader.GetString(2);
+            }
         }
-
-        return profile;
     }
 
-    private static List<TabGroupState> ReadGroups(SqliteConnection connection, string spaceId)
+    private static void ReadAllGroups(SqliteConnection connection, Dictionary<string, SpaceState> spacesById)
     {
-        var groups = new List<TabGroupState>();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, name, COALESCE(color, ''), COALESCE(pinned, 0), COALESCE(expanded, 1),
+            SELECT space_id, id, name, COALESCE(color, ''), COALESCE(pinned, 0), COALESCE(expanded, 1),
                    COALESCE(database, '')
             FROM tab_groups
-            WHERE space_id = $id
             ORDER BY sort_order;
             """;
-        command.Parameters.AddWithValue("$id", spaceId);
 
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            groups.Add(new TabGroupState
+            if (!spacesById.TryGetValue(reader.GetString(0), out var space))
             {
-                Id = reader.GetString(0),
-                Name = reader.GetString(1),
-                Color = reader.GetString(2),
-                Pinned = reader.GetInt64(3) != 0,
-                Expanded = reader.GetInt64(4) != 0,
-                Database = reader.GetString(5) is { Length: > 0 } database ? database : null,
+                continue;
+            }
+
+            space.Groups.Add(new TabGroupState
+            {
+                Id = reader.GetString(1),
+                Name = reader.GetString(2),
+                Color = reader.GetString(3),
+                Pinned = reader.GetInt64(4) != 0,
+                Expanded = reader.GetInt64(5) != 0,
+                Database = reader.GetString(6) is { Length: > 0 } database ? database : null,
             });
         }
-
-        return groups;
     }
 
-    private static List<TabState> ReadTabs(SqliteConnection connection, string spaceId)
+    private static void ReadAllTabs(SqliteConnection connection, Dictionary<string, SpaceState> spacesById)
     {
-        var tabs = new List<TabState>();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, title, COALESCE(database, ''), COALESCE(content, ''),
+            SELECT space_id, id, title, COALESCE(database, ''), COALESCE(content, ''),
                    COALESCE(pinned, 0), COALESCE(last_accessed_at, ''), COALESCE(group_id, '')
             FROM tabs
-            WHERE space_id = $id
             ORDER BY sort_order;
             """;
-        command.Parameters.AddWithValue("$id", spaceId);
 
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            tabs.Add(new TabState
+            if (!spacesById.TryGetValue(reader.GetString(0), out var space))
             {
-                Id = reader.GetString(0),
-                Title = reader.GetString(1),
-                Database = reader.GetString(2),
-                Content = reader.GetString(3),
-                Pinned = reader.GetInt64(4) != 0,
+                continue;
+            }
+
+            space.Tabs.Add(new TabState
+            {
+                Id = reader.GetString(1),
+                Title = reader.GetString(2),
+                Database = reader.GetString(3),
+                Content = reader.GetString(4),
+                Pinned = reader.GetInt64(5) != 0,
                 // A tab saved before the inactivity clock existed counts as used now, so the
                 // first launch after the upgrade does not sweep the whole workspace.
-                LastAccessedAt = ParseTimestamp(reader.GetString(5)),
-                GroupId = reader.GetString(6) is { Length: > 0 } groupId ? groupId : null,
+                LastAccessedAt = ParseTimestamp(reader.GetString(6)),
+                GroupId = reader.GetString(7) is { Length: > 0 } groupId ? groupId : null,
             });
         }
-
-        return tabs;
     }
 
     private static List<ArchivedTabState> ReadArchivedTabs(SqliteConnection connection)
@@ -837,81 +865,246 @@ public sealed partial class StudioStore : IVirtualReferenceStore
 
     private static void Write(SqliteConnection connection, SqliteTransaction transaction, StudioState state)
     {
-        var spaceIds = new HashSet<string>(StringComparer.Ordinal);
+        var spaceIds = new HashSet<string>(state.Spaces.Count, StringComparer.Ordinal);
         var spaceOrder = 0;
 
+        // Reuse one prepared command per statement type across the whole transaction instead of
+        // re-preparing SQLite statements on every row.
+        using var upsertSpace = connection.CreateCommand();
+        upsertSpace.Transaction = transaction;
+        upsertSpace.CommandText =
+            """
+            INSERT INTO spaces (id, name, color, icon, hidden, provider_id, active_database, last_active_tab_id, sort_order)
+            VALUES ($id, $name, $color, $icon, $hidden, $provider, $database, $tab, $sort)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                color = excluded.color,
+                icon = excluded.icon,
+                hidden = excluded.hidden,
+                provider_id = excluded.provider_id,
+                active_database = excluded.active_database,
+                last_active_tab_id = excluded.last_active_tab_id,
+                sort_order = excluded.sort_order,
+                updated_at = datetime('now');
+            """;
+        var sId = upsertSpace.Parameters.Add("$id", SqliteType.Text);
+        var sName = upsertSpace.Parameters.Add("$name", SqliteType.Text);
+        var sColor = upsertSpace.Parameters.Add("$color", SqliteType.Text);
+        var sIcon = upsertSpace.Parameters.Add("$icon", SqliteType.Text);
+        var sHidden = upsertSpace.Parameters.Add("$hidden", SqliteType.Integer);
+        var sProvider = upsertSpace.Parameters.Add("$provider", SqliteType.Text);
+        var sDatabase = upsertSpace.Parameters.Add("$database", SqliteType.Text);
+        var sTab = upsertSpace.Parameters.Add("$tab", SqliteType.Text);
+        var sSort = upsertSpace.Parameters.Add("$sort", SqliteType.Integer);
+
+        using var deleteProfile = connection.CreateCommand();
+        deleteProfile.Transaction = transaction;
+        deleteProfile.CommandText = "DELETE FROM space_settings WHERE space_id = $id;";
+        var dpId = deleteProfile.Parameters.Add("$id", SqliteType.Text);
+
+        using var insertProfile = connection.CreateCommand();
+        insertProfile.Transaction = transaction;
+        insertProfile.CommandText = "INSERT INTO space_settings (space_id, key, value) VALUES ($id, $key, $value);";
+        var ipId = insertProfile.Parameters.Add("$id", SqliteType.Text);
+        var ipKey = insertProfile.Parameters.Add("$key", SqliteType.Text);
+        var ipValue = insertProfile.Parameters.Add("$value", SqliteType.Text);
+
+        using var deleteGroups = connection.CreateCommand();
+        deleteGroups.Transaction = transaction;
+        deleteGroups.CommandText = "DELETE FROM tab_groups WHERE space_id = $id;";
+        var dgId = deleteGroups.Parameters.Add("$id", SqliteType.Text);
+
+        using var upsertGroup = connection.CreateCommand();
+        upsertGroup.Transaction = transaction;
+        upsertGroup.CommandText =
+            """
+            INSERT INTO tab_groups (id, space_id, name, color, pinned, expanded, database, sort_order)
+            VALUES ($id, $space, $name, $color, $pinned, $expanded, $database, $sort)
+            ON CONFLICT(id) DO UPDATE SET
+                space_id = excluded.space_id,
+                name = excluded.name,
+                color = excluded.color,
+                pinned = excluded.pinned,
+                expanded = excluded.expanded,
+                database = excluded.database,
+                sort_order = excluded.sort_order;
+            """;
+        var gId = upsertGroup.Parameters.Add("$id", SqliteType.Text);
+        var gSpace = upsertGroup.Parameters.Add("$space", SqliteType.Text);
+        var gName = upsertGroup.Parameters.Add("$name", SqliteType.Text);
+        var gColor = upsertGroup.Parameters.Add("$color", SqliteType.Text);
+        var gPinned = upsertGroup.Parameters.Add("$pinned", SqliteType.Integer);
+        var gExpanded = upsertGroup.Parameters.Add("$expanded", SqliteType.Integer);
+        var gDatabase = upsertGroup.Parameters.Add("$database", SqliteType.Text);
+        var gSort = upsertGroup.Parameters.Add("$sort", SqliteType.Integer);
+
+        using var upsertTab = connection.CreateCommand();
+        upsertTab.Transaction = transaction;
+        upsertTab.CommandText =
+            """
+            INSERT INTO tabs (id, space_id, title, database, content, pinned, last_accessed_at, group_id, sort_order)
+            VALUES ($id, $space, $title, $database, $content, $pinned, $accessed, $group, $sort)
+            ON CONFLICT(id) DO UPDATE SET
+                space_id = excluded.space_id,
+                title = excluded.title,
+                database = excluded.database,
+                content = excluded.content,
+                pinned = excluded.pinned,
+                last_accessed_at = excluded.last_accessed_at,
+                group_id = excluded.group_id,
+                sort_order = excluded.sort_order,
+                updated_at = datetime('now');
+            """;
+        var tId = upsertTab.Parameters.Add("$id", SqliteType.Text);
+        var tSpace = upsertTab.Parameters.Add("$space", SqliteType.Text);
+        var tTitle = upsertTab.Parameters.Add("$title", SqliteType.Text);
+        var tDatabase = upsertTab.Parameters.Add("$database", SqliteType.Text);
+        var tContent = upsertTab.Parameters.Add("$content", SqliteType.Text);
+        var tPinned = upsertTab.Parameters.Add("$pinned", SqliteType.Integer);
+        var tAccessed = upsertTab.Parameters.Add("$accessed", SqliteType.Text);
+        var tGroup = upsertTab.Parameters.Add("$group", SqliteType.Text);
+        var tSort = upsertTab.Parameters.Add("$sort", SqliteType.Integer);
+
+        using var selectSpaceTabIds = connection.CreateCommand();
+        selectSpaceTabIds.Transaction = transaction;
+        selectSpaceTabIds.CommandText = "SELECT id FROM tabs WHERE space_id = $id;";
+        var stSpaceId = selectSpaceTabIds.Parameters.Add("$id", SqliteType.Text);
+
+        var tabIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var space in state.Spaces)
         {
             spaceIds.Add(space.Id);
-            Execute(
-                connection,
-                transaction,
-                """
-                INSERT INTO spaces (id, name, color, icon, hidden, provider_id, active_database, last_active_tab_id, sort_order)
-                VALUES ($id, $name, $color, $icon, $hidden, $provider, $database, $tab, $sort)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    color = excluded.color,
-                    icon = excluded.icon,
-                    hidden = excluded.hidden,
-                    provider_id = excluded.provider_id,
-                    active_database = excluded.active_database,
-                    last_active_tab_id = excluded.last_active_tab_id,
-                    sort_order = excluded.sort_order,
-                    updated_at = datetime('now');
-                """,
-                ("$id", space.Id),
-                ("$name", space.Name),
-                ("$color", space.Color),
-                ("$icon", space.Icon),
-                ("$hidden", space.Hidden ? 1 : 0),
-                ("$provider", space.ProviderId),
-                ("$database", space.ActiveDatabase),
-                ("$tab", space.ActiveTabId),
-                ("$sort", spaceOrder++));
+            sId.Value = space.Id;
+            sName.Value = space.Name;
+            sColor.Value = space.Color;
+            sIcon.Value = (object?)space.Icon ?? DBNull.Value;
+            sHidden.Value = space.Hidden ? 1 : 0;
+            sProvider.Value = space.ProviderId;
+            sDatabase.Value = (object?)space.ActiveDatabase ?? DBNull.Value;
+            sTab.Value = (object?)space.ActiveTabId ?? DBNull.Value;
+            sSort.Value = spaceOrder++;
+            upsertSpace.ExecuteNonQuery();
 
-            WriteProfile(connection, transaction, space);
-            WriteGroups(connection, transaction, space);
-            WriteTabs(connection, transaction, space);
+            dpId.Value = space.Id;
+            deleteProfile.ExecuteNonQuery();
+            foreach (var pair in space.Profile)
+            {
+                ipId.Value = space.Id;
+                ipKey.Value = pair.Key;
+                ipValue.Value = pair.Value;
+                insertProfile.ExecuteNonQuery();
+            }
+
+            // Groups are small and few; replacing the space's set keeps ordering and deletions in one
+            // statement pair instead of tracking a diff.
+            dgId.Value = space.Id;
+            deleteGroups.ExecuteNonQuery();
+            var groupOrder = 0;
+            foreach (var group in space.Groups)
+            {
+                gId.Value = group.Id;
+                gSpace.Value = space.Id;
+                gName.Value = group.Name;
+                gColor.Value = group.Color;
+                gPinned.Value = group.Pinned ? 1 : 0;
+                gExpanded.Value = group.Expanded ? 1 : 0;
+                gDatabase.Value = (object?)group.Database ?? DBNull.Value;
+                gSort.Value = groupOrder++;
+                upsertGroup.ExecuteNonQuery();
+            }
+
+            tabIds.Clear();
+            var tabOrder = 0;
+            foreach (var tab in space.Tabs)
+            {
+                tabIds.Add(tab.Id);
+                tId.Value = tab.Id;
+                tSpace.Value = space.Id;
+                tTitle.Value = tab.Title;
+                tDatabase.Value = tab.Database;
+                tContent.Value = tab.Content;
+                tPinned.Value = tab.Pinned ? 1 : 0;
+                tAccessed.Value = (tab.LastAccessedAt ?? DateTimeOffset.UtcNow).ToString("o", CultureInfo.InvariantCulture);
+                tGroup.Value = (object?)tab.GroupId ?? DBNull.Value;
+                tSort.Value = tabOrder++;
+                upsertTab.ExecuteNonQuery();
+            }
+
+            stSpaceId.Value = space.Id;
+            List<string>? tabsToDelete = null;
+            using (var reader = selectSpaceTabIds.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var id = reader.GetString(0);
+                    if (!tabIds.Contains(id))
+                    {
+                        tabsToDelete ??= [];
+                        tabsToDelete.Add(id);
+                    }
+                }
+            }
+
+            if (tabsToDelete is not null)
+            {
+                using var deleteTab = connection.CreateCommand();
+                deleteTab.Transaction = transaction;
+                deleteTab.CommandText = "DELETE FROM tabs WHERE id = $id;";
+                var dtId = deleteTab.Parameters.Add("$id", SqliteType.Text);
+                foreach (var id in tabsToDelete)
+                {
+                    dtId.Value = id;
+                    deleteTab.ExecuteNonQuery();
+                }
+            }
         }
 
         var storedSpaces = SelectIds(connection, transaction, "SELECT id FROM spaces;");
-        foreach (var id in storedSpaces.Where(id => !spaceIds.Contains(id)))
+        foreach (var id in storedSpaces)
         {
-            Execute(connection, transaction, "DELETE FROM spaces WHERE id = $id;", ("$id", id));
+            if (!spaceIds.Contains(id))
+            {
+                Execute(connection, transaction, "DELETE FROM spaces WHERE id = $id;", ("$id", id));
+            }
         }
 
-        SetState(connection, transaction, "active_space_id", state.ActiveSpaceId ?? string.Empty);
-        SetState(connection, transaction, "query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
-        SetState(connection, transaction, "auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
-        SetState(connection, transaction, "auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
-        SetState(connection, transaction, "notes_pane_open", state.NotesPaneOpen ? "true" : "false");
-        SetState(connection, transaction, "theme", AppThemeText.ToStorage(AppThemeText.Parse(state.Theme)));
-        SetState(connection, transaction, "check_for_updates", state.CheckForUpdates ? "true" : "false");
+        using var upsertState = connection.CreateCommand();
+        upsertState.Transaction = transaction;
+        upsertState.CommandText =
+            """
+            INSERT INTO app_state (key, value) VALUES ($key, $value)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now');
+            """;
+        var stKey = upsertState.Parameters.Add("$key", SqliteType.Text);
+        var stValue = upsertState.Parameters.Add("$value", SqliteType.Text);
+
+        void SetAppState(string key, string value)
+        {
+            stKey.Value = key;
+            stValue.Value = value;
+            upsertState.ExecuteNonQuery();
+        }
+
+        SetAppState("active_space_id", state.ActiveSpaceId ?? string.Empty);
+        SetAppState("query_counter", state.QueryCounter.ToString(CultureInfo.InvariantCulture));
+        SetAppState("auto_archive_enabled", state.AutoArchiveEnabled ? "true" : "false");
+        SetAppState("auto_archive_days", state.AutoArchiveDays.ToString(CultureInfo.InvariantCulture));
+        SetAppState("notes_pane_open", state.NotesPaneOpen ? "true" : "false");
+        SetAppState("theme", AppThemeText.ToStorage(AppThemeText.Parse(state.Theme)));
+        SetAppState("check_for_updates", state.CheckForUpdates ? "true" : "false");
         if (state.ResultsPaneHeight is { } resultsHeight)
         {
-            SetState(
-                connection,
-                transaction,
-                "results_pane_height",
-                resultsHeight.ToString("R", CultureInfo.InvariantCulture));
+            SetAppState("results_pane_height", resultsHeight.ToString("R", CultureInfo.InvariantCulture));
         }
 
         if (state.CellPreviewWidth is { } previewWidth)
         {
-            SetState(
-                connection,
-                transaction,
-                "cell_preview_width",
-                previewWidth.ToString("R", CultureInfo.InvariantCulture));
+            SetAppState("cell_preview_width", previewWidth.ToString("R", CultureInfo.InvariantCulture));
         }
+
         if (state.WindowBounds is { } bounds)
         {
-            SetState(
-                connection,
-                transaction,
-                "window_bounds",
-                JsonSerializer.Serialize(bounds, StudioJsonContext.Default.WindowBoundsState));
+            SetAppState("window_bounds", JsonSerializer.Serialize(bounds, StudioJsonContext.Default.WindowBoundsState));
         }
 
         WriteArchivedTabs(connection, transaction, state.ArchivedTabs);
@@ -928,143 +1121,81 @@ public sealed partial class StudioStore : IVirtualReferenceStore
             """);
     }
 
-    private static void WriteProfile(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
-    {
-        Execute(connection, transaction, "DELETE FROM space_settings WHERE space_id = $id;", ("$id", space.Id));
-        foreach (var pair in space.Profile)
-        {
-            Execute(
-                connection,
-                transaction,
-                "INSERT INTO space_settings (space_id, key, value) VALUES ($id, $key, $value);",
-                ("$id", space.Id),
-                ("$key", pair.Key),
-                ("$value", pair.Value));
-        }
-    }
-
-    private static void WriteGroups(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
-    {
-        // Groups are small and few; replacing the space's set keeps ordering and deletions in one
-        // statement pair instead of tracking a diff.
-        Execute(connection, transaction, "DELETE FROM tab_groups WHERE space_id = $id;", ("$id", space.Id));
-
-        var order = 0;
-        foreach (var group in space.Groups)
-        {
-            Execute(
-                connection,
-                transaction,
-                """
-                INSERT INTO tab_groups (id, space_id, name, color, pinned, expanded, database, sort_order)
-                VALUES ($id, $space, $name, $color, $pinned, $expanded, $database, $sort)
-                ON CONFLICT(id) DO UPDATE SET
-                    space_id = excluded.space_id,
-                    name = excluded.name,
-                    color = excluded.color,
-                    pinned = excluded.pinned,
-                    expanded = excluded.expanded,
-                    database = excluded.database,
-                    sort_order = excluded.sort_order;
-                """,
-                ("$id", group.Id),
-                ("$space", space.Id),
-                ("$name", group.Name),
-                ("$color", group.Color),
-                ("$pinned", group.Pinned ? 1 : 0),
-                ("$expanded", group.Expanded ? 1 : 0),
-                ("$database", group.Database),
-                ("$sort", order++));
-        }
-    }
-
-    private static void WriteTabs(SqliteConnection connection, SqliteTransaction transaction, SpaceState space)
-    {
-        var tabIds = new HashSet<string>(StringComparer.Ordinal);
-        var tabOrder = 0;
-
-        foreach (var tab in space.Tabs)
-        {
-            tabIds.Add(tab.Id);
-            Execute(
-                connection,
-                transaction,
-                """
-                INSERT INTO tabs (id, space_id, title, database, content, pinned, last_accessed_at, group_id, sort_order)
-                VALUES ($id, $space, $title, $database, $content, $pinned, $accessed, $group, $sort)
-                ON CONFLICT(id) DO UPDATE SET
-                    space_id = excluded.space_id,
-                    title = excluded.title,
-                    database = excluded.database,
-                    content = excluded.content,
-                    pinned = excluded.pinned,
-                    last_accessed_at = excluded.last_accessed_at,
-                    group_id = excluded.group_id,
-                    sort_order = excluded.sort_order,
-                    updated_at = datetime('now');
-                """,
-                ("$id", tab.Id),
-                ("$space", space.Id),
-                ("$title", tab.Title),
-                ("$database", tab.Database),
-                ("$content", tab.Content),
-                ("$pinned", tab.Pinned ? 1 : 0),
-                ("$accessed", (tab.LastAccessedAt ?? DateTimeOffset.UtcNow).ToString("o", CultureInfo.InvariantCulture)),
-                ("$group", tab.GroupId),
-                ("$sort", tabOrder++));
-        }
-
-        var storedTabs = SelectIds(connection, transaction, "SELECT id FROM tabs WHERE space_id = $id;", space.Id);
-        foreach (var id in storedTabs.Where(id => !tabIds.Contains(id)))
-        {
-            Execute(connection, transaction, "DELETE FROM tabs WHERE id = $id;", ("$id", id));
-        }
-    }
-
     private static void WriteArchivedTabs(
         SqliteConnection connection,
         SqliteTransaction transaction,
         List<ArchivedTabState> tabs)
     {
-        var tabIds = new HashSet<string>(StringComparer.Ordinal);
+        var tabIds = new HashSet<string>(tabs.Count, StringComparer.Ordinal);
+
+        using var upsert = connection.CreateCommand();
+        upsert.Transaction = transaction;
+        upsert.CommandText =
+            """
+            INSERT INTO archived_tabs (id, space_id, space_name, color, title, database, content, pinned, archived_at, group_name)
+            VALUES ($id, $space, $space_name, $color, $title, $database, $content, $pinned, $archived, $group)
+            ON CONFLICT(id) DO UPDATE SET
+                space_id = excluded.space_id,
+                space_name = excluded.space_name,
+                color = excluded.color,
+                title = excluded.title,
+                database = excluded.database,
+                content = excluded.content,
+                pinned = excluded.pinned,
+                archived_at = excluded.archived_at,
+                group_name = excluded.group_name;
+            """;
+        var aId = upsert.Parameters.Add("$id", SqliteType.Text);
+        var aSpace = upsert.Parameters.Add("$space", SqliteType.Text);
+        var aSpaceName = upsert.Parameters.Add("$space_name", SqliteType.Text);
+        var aColor = upsert.Parameters.Add("$color", SqliteType.Text);
+        var aTitle = upsert.Parameters.Add("$title", SqliteType.Text);
+        var aDatabase = upsert.Parameters.Add("$database", SqliteType.Text);
+        var aContent = upsert.Parameters.Add("$content", SqliteType.Text);
+        var aPinned = upsert.Parameters.Add("$pinned", SqliteType.Integer);
+        var aArchived = upsert.Parameters.Add("$archived", SqliteType.Text);
+        var aGroup = upsert.Parameters.Add("$group", SqliteType.Text);
 
         foreach (var tab in tabs)
         {
             tabIds.Add(tab.Id);
-            Execute(
-                connection,
-                transaction,
-                """
-                INSERT INTO archived_tabs (id, space_id, space_name, color, title, database, content, pinned, archived_at, group_name)
-                VALUES ($id, $space, $space_name, $color, $title, $database, $content, $pinned, $archived, $group)
-                ON CONFLICT(id) DO UPDATE SET
-                    space_id = excluded.space_id,
-                    space_name = excluded.space_name,
-                    color = excluded.color,
-                    title = excluded.title,
-                    database = excluded.database,
-                    content = excluded.content,
-                    pinned = excluded.pinned,
-                    archived_at = excluded.archived_at,
-                    group_name = excluded.group_name;
-                """,
-                ("$id", tab.Id),
-                ("$space", tab.SpaceId),
-                ("$space_name", tab.SpaceName),
-                ("$color", tab.Color),
-                ("$title", tab.Title),
-                ("$database", tab.Database),
-                ("$content", tab.Content),
-                ("$pinned", tab.Pinned ? 1 : 0),
-                ("$archived", tab.ArchivedAt.ToString("o", CultureInfo.InvariantCulture)),
-                ("$group", tab.GroupName));
+            aId.Value = tab.Id;
+            aSpace.Value = tab.SpaceId;
+            aSpaceName.Value = tab.SpaceName;
+            aColor.Value = tab.Color;
+            aTitle.Value = tab.Title;
+            aDatabase.Value = tab.Database;
+            aContent.Value = tab.Content;
+            aPinned.Value = tab.Pinned ? 1 : 0;
+            aArchived.Value = tab.ArchivedAt.ToString("o", CultureInfo.InvariantCulture);
+            aGroup.Value = (object?)tab.GroupName ?? DBNull.Value;
+            upsert.ExecuteNonQuery();
         }
 
         var storedTabs = SelectIds(connection, transaction, "SELECT id FROM archived_tabs;");
-        foreach (var id in storedTabs.Where(id => !tabIds.Contains(id)))
+        foreach (var id in storedTabs)
         {
-            Execute(connection, transaction, "DELETE FROM archived_tabs WHERE id = $id;", ("$id", id));
+            if (!tabIds.Contains(id))
+            {
+                Execute(connection, transaction, "DELETE FROM archived_tabs WHERE id = $id;", ("$id", id));
+            }
         }
+    }
+
+    private static Dictionary<string, string> ReadProfile(SqliteConnection connection, string spaceId)
+    {
+        var profile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT key, value FROM space_settings WHERE space_id = $id;";
+        command.Parameters.AddWithValue("$id", spaceId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            profile[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        return profile;
     }
 
     private static void SetState(SqliteConnection connection, SqliteTransaction? transaction, string key, string value) =>
@@ -1086,18 +1217,17 @@ public sealed partial class StudioStore : IVirtualReferenceStore
         return command.ExecuteScalar() as string;
     }
 
-    private static double? ReadDouble(SqliteConnection connection, string key) =>
+    private static double? ParseDouble(string? raw) =>
         double.TryParse(
-            ReadState(connection, key),
+            raw,
             NumberStyles.Float,
             CultureInfo.InvariantCulture,
             out var value)
             ? value
             : null;
 
-    private static WindowBoundsState? ReadWindowBounds(SqliteConnection connection)
+    private static WindowBoundsState? ParseWindowBounds(string? raw)
     {
-        var raw = ReadState(connection, "window_bounds");
         if (string.IsNullOrWhiteSpace(raw))
         {
             return null;
